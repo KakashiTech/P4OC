@@ -1,5 +1,6 @@
 package dev.blazelight.p4oc.data.remote.mapper
 
+import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.data.remote.dto.*
 import dev.blazelight.p4oc.domain.model.*
 import kotlinx.serialization.SerialName
@@ -743,7 +744,7 @@ class EventMapper constructor(
             else -> null
         }
     } catch (e: Exception) {
-        android.util.Log.e("EventMapper", "Failed to map event type=${dto.type}: ${e.message}", e)
+        AppLog.e("EventMapper", "Failed to map event type=${dto.type}: ${e.message}", e)
         null
     }
 }

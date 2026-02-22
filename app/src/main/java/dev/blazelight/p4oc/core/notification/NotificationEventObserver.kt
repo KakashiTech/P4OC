@@ -1,6 +1,6 @@
 package dev.blazelight.p4oc.core.notification
 
-import android.util.Log
+import dev.blazelight.p4oc.core.log.AppLog
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -64,7 +64,7 @@ class NotificationEventObserver constructor(
     private fun handleEventInBackground(event: OpenCodeEvent) {
         when (event) {
             is OpenCodeEvent.PermissionRequested -> {
-                Log.d(TAG, "Permission requested in background: ${event.permission.title}")
+                AppLog.d(TAG, "Permission requested in background: ${event.permission.title}")
                 notificationHelper.showPermissionNotification(
                     sessionId = event.permission.sessionID,
                     title = event.permission.title
@@ -72,7 +72,7 @@ class NotificationEventObserver constructor(
             }
             is OpenCodeEvent.QuestionAsked -> {
                 val firstQuestion = event.request.questions.firstOrNull()?.question ?: "AI has a question"
-                Log.d(TAG, "Question asked in background: $firstQuestion")
+                AppLog.d(TAG, "Question asked in background: $firstQuestion")
                 notificationHelper.showQuestionNotification(
                     sessionId = event.request.sessionID,
                     question = firstQuestion

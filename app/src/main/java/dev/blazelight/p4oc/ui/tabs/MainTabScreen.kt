@@ -1,6 +1,6 @@
 package dev.blazelight.p4oc.ui.tabs
 
-import android.util.Log
+import dev.blazelight.p4oc.core.log.AppLog
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -191,7 +191,7 @@ fun MainTabScreen(
                                 if (api != null) {
                                     val result = safeApiCall { api.deletePtySession(ptyId) }
                                     if (result is ApiResult.Error) {
-                                        Log.e(TAG, "Failed to delete PTY $ptyId: ${result.message}")
+                                        AppLog.e(TAG, "Failed to delete PTY $ptyId: ${result.message}")
                                     }
                                 }
                             }
@@ -253,7 +253,7 @@ fun MainTabScreen(
                         onNewTerminalTab = {
                             coroutineScope.launch {
                                 val api = connectionManager.getApi() ?: run {
-                                    Log.e(TAG, "Cannot create terminal: not connected")
+                                    AppLog.e(TAG, "Cannot create terminal: not connected")
                                     snackbarHostState.showSnackbar("Not connected to server")
                                     return@launch
                                 }
@@ -264,7 +264,7 @@ fun MainTabScreen(
                                         pendingTabQueue.add(Screen.Terminal.createRoute(ptyId))
                                     }
                                     is ApiResult.Error -> {
-                                        Log.e(TAG, "Failed to create PTY: ${result.message}")
+                                        AppLog.e(TAG, "Failed to create PTY: ${result.message}")
                                         snackbarHostState.showSnackbar("Failed to create terminal: ${result.message}")
                                     }
                                 }

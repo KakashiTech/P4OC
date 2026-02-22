@@ -1,7 +1,7 @@
 package dev.blazelight.p4oc.ui.screens.terminal
 
 import android.content.Context
-import android.util.Log
+import dev.blazelight.p4oc.core.log.AppLog
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -67,13 +67,13 @@ class TerminalViewModel constructor(
         val height = view.height
         
         if (width <= 0 || height <= 0) {
-            Log.w(TAG, "View not measured yet, skipping resize")
+            AppLog.w(TAG, "View not measured yet, skipping resize")
             return
         }
         
         val renderer = view.mRenderer
         if (renderer == null) {
-            Log.w(TAG, "Renderer not initialized, skipping resize")
+            AppLog.w(TAG, "Renderer not initialized, skipping resize")
             return
         }
         
@@ -82,7 +82,7 @@ class TerminalViewModel constructor(
         val charLineSpacing = renderer.getFontLineSpacing()
         
         if (charWidth <= 0 || charLineSpacing <= 0) {
-            Log.w(TAG, "Invalid character dimensions, skipping resize")
+            AppLog.w(TAG, "Invalid character dimensions, skipping resize")
             return
         }
         
@@ -98,7 +98,7 @@ class TerminalViewModel constructor(
         lastKnownCols = cols
         lastKnownRows = rows
         
-        Log.d(TAG, "Resizing terminal: ${cols}x${rows} (view: ${width}x${height}px, char: ${charWidth}x${charLineSpacing})")
+        AppLog.d(TAG, "Resizing terminal: ${cols}x${rows} (view: ${width}x${height}px, char: ${charWidth}x${charLineSpacing})")
         
         // Resize the local emulator
         emulator?.resize(cols, rows)
@@ -145,7 +145,7 @@ class TerminalViewModel constructor(
                     }
                 }
                 is ApiResult.Error -> {
-                    Log.e(TAG, "Failed to fetch PTY details: ${result.message}")
+                    AppLog.e(TAG, "Failed to fetch PTY details: ${result.message}")
                 }
             }
         }
@@ -158,13 +158,13 @@ class TerminalViewModel constructor(
             context = context,
             onTextChanged = { /* View invalidated directly via postInvalidate */ },
             onTitleChanged = { title ->
-                Log.d(TAG, "Session title changed: $title")
+                AppLog.d(TAG, "Session title changed: $title")
             },
             onSessionFinished = {
-                Log.d(TAG, "Terminal session finished")
+                AppLog.d(TAG, "Terminal session finished")
             },
             onBellCallback = {
-                Log.d(TAG, "Terminal bell")
+                AppLog.d(TAG, "Terminal bell")
             },
             onPasteRequest = { text ->
                 sendInput(text)
@@ -174,10 +174,10 @@ class TerminalViewModel constructor(
         terminalOutput = WebSocketTerminalOutput(
             webSocket = ptyWebSocket,
             onTitleChanged = { _, newTitle ->
-                Log.d(TAG, "Terminal title changed: $newTitle")
+                AppLog.d(TAG, "Terminal title changed: $newTitle")
             },
             onBell = {
-                Log.d(TAG, "Terminal bell")
+                AppLog.d(TAG, "Terminal bell")
             }
         )
 
@@ -213,11 +213,11 @@ class TerminalViewModel constructor(
             ptyWebSocket.connectionState.collect { connectionState ->
                 when (connectionState) {
                     is PtyWebSocketClient.ConnectionState.Connected -> {
-                        Log.d(TAG, "WebSocket connected to ${connectionState.ptyId}")
+                        AppLog.d(TAG, "WebSocket connected to ${connectionState.ptyId}")
                         _uiState.update { it.copy(isConnected = true, isConnecting = false) }
                     }
                     is PtyWebSocketClient.ConnectionState.Error -> {
-                        Log.e(TAG, "WebSocket error: ${connectionState.message}")
+                        AppLog.e(TAG, "WebSocket error: ${connectionState.message}")
                         _uiState.update { it.copy(
                             error = "Connection error: ${connectionState.message}",
                             isConnected = false,
@@ -225,11 +225,11 @@ class TerminalViewModel constructor(
                         ) }
                     }
                     is PtyWebSocketClient.ConnectionState.Disconnected -> {
-                        Log.d(TAG, "WebSocket disconnected")
+                        AppLog.d(TAG, "WebSocket disconnected")
                         _uiState.update { it.copy(isConnected = false, isConnecting = false) }
                     }
                     is PtyWebSocketClient.ConnectionState.Connecting -> {
-                        Log.d(TAG, "WebSocket connecting...")
+                        AppLog.d(TAG, "WebSocket connecting...")
                         _uiState.update { it.copy(isConnecting = true) }
                     }
                 }

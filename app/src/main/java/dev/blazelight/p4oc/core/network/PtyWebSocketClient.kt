@@ -1,6 +1,6 @@
 package dev.blazelight.p4oc.core.network
 
-import android.util.Log
+import dev.blazelight.p4oc.core.log.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -71,13 +71,13 @@ class PtyWebSocketClient constructor(
             }
 
             if (currentWebSocket != null && currentPtyId == ptyId) {
-                Log.d(TAG, "Already connected to $ptyId")
+                AppLog.d(TAG, "Already connected to $ptyId")
                 return
             }
 
             val connection = connectionManager.connection.value
             if (connection == null) {
-                Log.e(TAG, "Cannot connect: No active connection")
+                AppLog.e(TAG, "Cannot connect: No active connection")
                 _connectionState.value = ConnectionState.Error("Not connected to server")
                 return
             }
@@ -92,7 +92,7 @@ class PtyWebSocketClient constructor(
                 .replace("https://", "wss://")
                 .trimEnd('/') + "/pty/$ptyId/connect"
 
-            Log.d(TAG, "Connecting to WebSocket: $wsUrl")
+            AppLog.d(TAG, "Connecting to WebSocket: $wsUrl")
 
             val requestBuilder = Request.Builder().url(wsUrl)
             val config = connection.config
@@ -103,24 +103,24 @@ class PtyWebSocketClient constructor(
 
             currentWebSocket = wsOkHttpClient.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    Log.d(TAG, "WebSocket connected to $ptyId")
+                    AppLog.d(TAG, "WebSocket connected to $ptyId")
                     _connectionState.value = ConnectionState.Connected(ptyId)
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    Log.v(TAG, "Received: ${text.take(100)}${if (text.length > 100) "..." else ""}")
+                    AppLog.v(TAG, "Received: ${text.take(100)}${if (text.length > 100) "..." else ""}")
                     scope.launch {
                         _output.emit(text)
                     }
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                    Log.d(TAG, "WebSocket closing: $code $reason")
+                    AppLog.d(TAG, "WebSocket closing: $code $reason")
                     webSocket.close(1000, null)
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    Log.d(TAG, "WebSocket closed: $code $reason")
+                    AppLog.d(TAG, "WebSocket closed: $code $reason")
                     synchronized(connectionLock) {
                         _connectionState.value = ConnectionState.Disconnected
                         currentWebSocket = null
@@ -129,7 +129,7 @@ class PtyWebSocketClient constructor(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.e(TAG, "WebSocket error: ${t.message}", t)
+                    AppLog.e(TAG, "WebSocket error: ${t.message}", t)
                     synchronized(connectionLock) {
                         _connectionState.value = ConnectionState.Error(t.message ?: "Unknown error")
                         currentWebSocket = null
@@ -143,16 +143,16 @@ class PtyWebSocketClient constructor(
     fun send(data: String): Boolean {
         val ws = currentWebSocket
         if (ws == null) {
-            Log.w(TAG, "Cannot send: WebSocket not connected")
+            AppLog.w(TAG, "Cannot send: WebSocket not connected")
             return false
         }
-        Log.v(TAG, "Sending: ${data.take(50)}${if (data.length > 50) "..." else ""}")
+        AppLog.v(TAG, "Sending: ${data.take(50)}${if (data.length > 50) "..." else ""}")
         return ws.send(data)
     }
 
     fun disconnect() {
         synchronized(connectionLock) {
-            Log.d(TAG, "Disconnecting from $currentPtyId")
+            AppLog.d(TAG, "Disconnecting from $currentPtyId")
             currentWebSocket?.close(1000, "User disconnected")
             currentWebSocket = null
             currentPtyId = null

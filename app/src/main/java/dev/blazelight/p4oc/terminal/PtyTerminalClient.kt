@@ -3,7 +3,7 @@ package dev.blazelight.p4oc.terminal
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.util.Log
+import dev.blazelight.p4oc.core.log.AppLog
 import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
@@ -64,10 +64,9 @@ class PtyTerminalClient(
                 }
             }
         } catch (e: SecurityException) {
-            // Android 10+ restricts clipboard access when app is not in focus
-            Log.w("PtyTerminalClient", "Clipboard access denied - app may not be in focus", e)
+            AppLog.w("PtyTerminalClient", "Clipboard access denied - app may not be in focus", e)
         } catch (e: Exception) {
-            Log.e("PtyTerminalClient", "Failed to paste from clipboard", e)
+            AppLog.e("PtyTerminalClient", "Failed to paste from clipboard", e)
         }
     }
 
@@ -76,30 +75,30 @@ class PtyTerminalClient(
     }
 
     override fun logError(tag: String?, message: String?) {
-        Log.e(tag ?: "PtyTerminalClient", message ?: "Unknown error")
+        AppLog.e(tag ?: "PtyTerminalClient", message ?: "Unknown error")
     }
 
     override fun logWarn(tag: String?, message: String?) {
-        Log.w(tag ?: "PtyTerminalClient", message ?: "Unknown warning")
+        AppLog.w(tag ?: "PtyTerminalClient", message ?: "Unknown warning")
     }
 
     override fun logInfo(tag: String?, message: String?) {
-        Log.i(tag ?: "PtyTerminalClient", message ?: "")
+        AppLog.i(tag ?: "PtyTerminalClient", message ?: "")
     }
 
     override fun logDebug(tag: String?, message: String?) {
-        Log.d(tag ?: "PtyTerminalClient", message ?: "")
+        AppLog.d(tag ?: "PtyTerminalClient", message ?: "")
     }
 
     override fun logVerbose(tag: String?, message: String?) {
-        Log.v(tag ?: "PtyTerminalClient", message ?: "")
+        AppLog.v(tag ?: "PtyTerminalClient", message ?: "")
     }
 
     override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) {
-        Log.e(tag ?: "PtyTerminalClient", message, e)
+        AppLog.e(tag ?: "PtyTerminalClient", message ?: "Unknown error", e)
     }
 
     override fun logStackTrace(tag: String?, e: Exception?) {
-        Log.e(tag ?: "PtyTerminalClient", "Stack trace", e)
+        AppLog.e(tag ?: "PtyTerminalClient", "Stack trace", e)
     }
 }

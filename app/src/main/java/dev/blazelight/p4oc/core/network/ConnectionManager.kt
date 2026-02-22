@@ -1,6 +1,7 @@
 package dev.blazelight.p4oc.core.network
 
-import android.util.Log
+import dev.blazelight.p4oc.BuildConfig
+import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.data.remote.mapper.EventMapper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,7 +45,7 @@ class ConnectionManager constructor(
     fun getEventSource(): OpenCodeEventSource? = _connection.value?.eventSource
 
     suspend fun connect(config: ServerConfig, password: String? = null): Result<Unit> {
-        Log.d(TAG, "Connecting to ${config.url}")
+        AppLog.d(TAG, "Connecting to ${config.url}")
         
         disconnect()
         _connectionState.value = ConnectionState.Connecting
@@ -58,12 +59,12 @@ class ConnectionManager constructor(
             
             if (healthResult.isFailure) {
                 val error = healthResult.exceptionOrNull()
-                Log.e(TAG, "Health check failed", error)
+                AppLog.e(TAG, "Health check failed", error)
                 _connectionState.value = ConnectionState.Error(error?.message ?: "Connection failed")
                 return Result.failure(error ?: Exception("Connection failed"))
             }
 
-            Log.d(TAG, "Health check passed, starting SSE")
+            AppLog.d(TAG, "Health check passed, starting SSE")
 
             val sseClient = buildSseOkHttpClient(config, password)
             val eventSource = OpenCodeEventSource(
@@ -84,17 +85,17 @@ class ConnectionManager constructor(
 
             eventSource.connect()
 
-            Log.d(TAG, "Connected successfully to ${config.url}")
+            AppLog.d(TAG, "Connected successfully to ${config.url}")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(TAG, "Connection failed", e)
+            AppLog.e(TAG, "Connection failed", e)
             _connectionState.value = ConnectionState.Error(e.message ?: "Unknown error")
             Result.failure(e)
         }
     }
 
     fun disconnect() {
-        Log.d(TAG, "Disconnecting")
+        AppLog.d(TAG, "Disconnecting")
         _connection.value?.disconnect()
         _connection.value = null
         _connectionState.value = ConnectionState.Disconnected
@@ -106,7 +107,7 @@ class ConnectionManager constructor(
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BODY
+                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE
             })
 
         if (config.username != null && password != null) {
@@ -122,7 +123,7 @@ class ConnectionManager constructor(
             .readTimeout(0, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.HEADERS
+                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.HEADERS else HttpLoggingInterceptor.Level.NONE
             })
 
         if (config.username != null && password != null) {

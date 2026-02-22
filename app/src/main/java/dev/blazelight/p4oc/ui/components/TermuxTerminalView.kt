@@ -21,6 +21,7 @@ import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TerminalSession
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
+import dev.blazelight.p4oc.core.log.AppLog
 
 class KeyInterceptingContainer(context: Context) : FrameLayout(context) {
     
@@ -266,7 +267,7 @@ private fun createTerminalViewClient(
         override fun isTerminalViewSelected(): Boolean = true
 
         override fun copyModeChanged(copyMode: Boolean) {
-            android.util.Log.d("TerminalView", "Copy mode changed: $copyMode")
+            AppLog.d("TerminalView", "Copy mode changed: $copyMode")
         }
 
         override fun onKeyDown(keyCode: Int, e: KeyEvent?, session: TerminalSession?): Boolean = false
@@ -294,35 +295,35 @@ private fun createTerminalViewClient(
         }
 
         override fun onEmulatorSet() {
-            android.util.Log.d("TerminalView", "Emulator set")
+            AppLog.d("TerminalView", "Emulator set")
         }
 
         override fun logError(tag: String?, message: String?) {
-            android.util.Log.e(tag ?: "TerminalView", message ?: "")
+            AppLog.e(tag ?: "TerminalView", message ?: "")
         }
 
         override fun logWarn(tag: String?, message: String?) {
-            android.util.Log.w(tag ?: "TerminalView", message ?: "")
+            AppLog.w(tag ?: "TerminalView", message ?: "")
         }
 
         override fun logInfo(tag: String?, message: String?) {
-            android.util.Log.i(tag ?: "TerminalView", message ?: "")
+            AppLog.i(tag ?: "TerminalView", message ?: "")
         }
 
         override fun logDebug(tag: String?, message: String?) {
-            android.util.Log.d(tag ?: "TerminalView", message ?: "")
+            AppLog.d(tag ?: "TerminalView", message ?: "")
         }
 
         override fun logVerbose(tag: String?, message: String?) {
-            android.util.Log.v(tag ?: "TerminalView", message ?: "")
+            AppLog.v(tag ?: "TerminalView", message ?: "")
         }
 
         override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) {
-            android.util.Log.e(tag ?: "TerminalView", message, e)
+            AppLog.e(tag ?: "TerminalView", message ?: "Unknown error", e)
         }
 
         override fun logStackTrace(tag: String?, e: Exception?) {
-            android.util.Log.e(tag ?: "TerminalView", "Stack trace", e)
+            AppLog.e(tag ?: "TerminalView", "Stack trace", e)
         }
     }
 }

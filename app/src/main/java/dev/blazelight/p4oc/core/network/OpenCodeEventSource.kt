@@ -1,6 +1,6 @@
 package dev.blazelight.p4oc.core.network
 
-import android.util.Log
+import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.data.remote.dto.EventDataDto
 import dev.blazelight.p4oc.data.remote.dto.GlobalEventDto
 import dev.blazelight.p4oc.data.remote.mapper.EventMapper
@@ -44,7 +44,7 @@ class OpenCodeEventSource(
     private var shouldReconnect = true
 
     fun connect() {
-        Log.d(TAG, "connect() called, state=${_connectionState.value}, jobActive=${sseJob?.isActive}")
+        AppLog.d(TAG, "connect() called, state=${_connectionState.value}, jobActive=${sseJob?.isActive}")
         if (_connectionState.value is ConnectionState.Connected) return
         if (sseJob?.isActive == true) return
         
@@ -57,7 +57,7 @@ class OpenCodeEventSource(
             // Use /global/event endpoint which receives ALL events via GlobalBus
             // Events are filtered client-side by sessionId in ChatViewModel
             val eventUrl = "$baseUrl/global/event"
-            Log.d(TAG, "Connecting to SSE: $eventUrl")
+            AppLog.d(TAG, "Connecting to SSE: $eventUrl")
             
             val request = Request.Builder()
                 .url(eventUrl)
@@ -73,7 +73,7 @@ class OpenCodeEventSource(
                     throw IOException("Unexpected response: ${response.code}")
                 }
 
-                Log.d(TAG, "SSE connected")
+                AppLog.d(TAG, "SSE connected")
                 _connectionState.value = ConnectionState.Connected
                 _events.tryEmit(OpenCodeEvent.Connected)
 
@@ -86,7 +86,7 @@ class OpenCodeEventSource(
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.e(TAG, "SSE error", e)
+                AppLog.e(TAG, "SSE error", e)
                 _connectionState.value = ConnectionState.Error(e.message)
                 _events.tryEmit(OpenCodeEvent.Error(e))
                 scheduleReconnect()
@@ -105,10 +105,10 @@ class OpenCodeEventSource(
                     line.startsWith("data:") -> {
                         val data = line.removePrefix("data:").trim()
                         eventData.append(data)
-                        Log.v(TAG, "SSE data line received, length=${data.length}")
+                        AppLog.v(TAG, "SSE data line received, length=${data.length}")
                     }
                     line.isEmpty() && eventData.isNotEmpty() -> {
-                        Log.d(TAG, "SSE event complete, parsing ${eventData.length} chars")
+                        AppLog.d(TAG, "SSE event complete, parsing ${eventData.length} chars")
                         parseAndEmitEvent(eventData.toString())
                         eventData = StringBuilder()
                     }
@@ -119,9 +119,9 @@ class OpenCodeEventSource(
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.e(TAG, "Error reading SSE stream", e)
+            AppLog.e(TAG, "Error reading SSE stream", e)
         } finally {
-            Log.d(TAG, "SSE stream ended")
+            AppLog.d(TAG, "SSE stream ended")
             _connectionState.value = ConnectionState.Disconnected
             _events.tryEmit(OpenCodeEvent.Disconnected(null))
             scheduleReconnect()
@@ -129,7 +129,7 @@ class OpenCodeEventSource(
     }
 
     fun disconnect() {
-        Log.d(TAG, "disconnect() called")
+        AppLog.d(TAG, "disconnect() called")
         // Disable auto-reconnect when intentionally disconnecting
         shouldReconnect = false
         sseJob?.cancel()
@@ -138,7 +138,7 @@ class OpenCodeEventSource(
     }
 
     fun reconnect() {
-        Log.d(TAG, "reconnect() called - reconnecting with current directory")
+        AppLog.d(TAG, "reconnect() called - reconnecting with current directory")
         disconnect()
         connect()
     }
@@ -154,7 +154,7 @@ class OpenCodeEventSource(
             val event = eventMapper.mapToEvent(globalEvent.payload)
             if (event != null) {
                 val emitted = _events.tryEmit(event)
-                Log.d(TAG, "Event emitted: ${event::class.simpleName}, success=$emitted")
+                AppLog.d(TAG, "Event emitted: ${event::class.simpleName}, success=$emitted")
             }
         } catch (e: Exception) {
             try {
@@ -162,12 +162,12 @@ class OpenCodeEventSource(
                 val event = eventMapper.mapToEvent(eventData)
                 if (event != null) {
                     val emitted = _events.tryEmit(event)
-                    Log.d(TAG, "Event emitted (fallback): ${event::class.simpleName}, success=$emitted")
+                    AppLog.d(TAG, "Event emitted (fallback): ${event::class.simpleName}, success=$emitted")
                 }
             } catch (e2: Exception) {
                 // Only log if not a known ignorable event type
                 if (!data.contains("server.heartbeat") && !data.contains("server.connected")) {
-                    Log.e(TAG, "Failed to parse event: $data", e2)
+                    AppLog.e(TAG, "Failed to parse event (${data.length} chars): ${data.take(80)}…", e2)
                 }
             }
         }
@@ -175,7 +175,7 @@ class OpenCodeEventSource(
 
     private fun scheduleReconnect() {
         if (!shouldReconnect) {
-            Log.d(TAG, "scheduleReconnect() skipped - shouldReconnect=false")
+            AppLog.d(TAG, "scheduleReconnect() skipped - shouldReconnect=false")
             return
         }
         scope.launch {

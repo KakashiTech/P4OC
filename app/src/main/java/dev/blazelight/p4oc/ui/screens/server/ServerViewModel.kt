@@ -1,6 +1,6 @@
 package dev.blazelight.p4oc.ui.screens.server
 
-import android.util.Log
+import dev.blazelight.p4oc.core.log.AppLog
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.blazelight.p4oc.core.datastore.RecentServer
@@ -45,7 +45,7 @@ class ServerViewModel constructor(
         viewModelScope.launch {
             val lastConnection = settingsDataStore.getLastConnection() ?: return@launch
             
-            Log.d(TAG, "Found last connection: ${lastConnection.url}")
+            AppLog.d(TAG, "Found last connection: ${lastConnection.url}")
             _uiState.update { 
                 it.copy(
                     isConnecting = true,
@@ -57,12 +57,12 @@ class ServerViewModel constructor(
             
             result.fold(
                 onSuccess = {
-                    Log.d(TAG, "Auto-reconnect successful")
+                    AppLog.d(TAG, "Auto-reconnect successful")
                     initializeProjectContext()
                     _uiState.update { it.copy(isConnecting = false, isConnected = true) }
                 },
                 onFailure = { error ->
-                    Log.w(TAG, "Auto-reconnect failed: ${error.message}")
+                    AppLog.w(TAG, "Auto-reconnect failed: ${error.message}")
                     _uiState.update { it.copy(isConnecting = false) }
                 }
             )
@@ -83,10 +83,10 @@ class ServerViewModel constructor(
 
     fun connectToRemote() {
         val state = _uiState.value
-        Log.d(TAG, "connectToRemote called, url='${state.remoteUrl}'")
+        AppLog.d(TAG, "connectToRemote called, url='${state.remoteUrl}'")
         
         if (state.remoteUrl.isBlank()) {
-            Log.w(TAG, "URL is blank, showing error")
+            AppLog.w(TAG, "URL is blank, showing error")
             _uiState.update { it.copy(error = "Please enter a server URL") }
             return
         }
@@ -95,7 +95,7 @@ class ServerViewModel constructor(
             _uiState.update { it.copy(isConnecting = true, error = null) }
 
             val url = normalizeServerUrl(state.remoteUrl)
-            Log.d(TAG, "Connecting to normalized URL: $url")
+            AppLog.d(TAG, "Connecting to normalized URL: $url")
             
             val config = ServerConfig(
                 url = url,
@@ -110,7 +110,7 @@ class ServerViewModel constructor(
 
             result.fold(
                 onSuccess = {
-                    Log.d(TAG, "Connection successful!")
+                    AppLog.d(TAG, "Connection successful!")
                     // Clear password from UI state after successful connection for security
                     _uiState.update { it.copy(password = "") }
                     settingsDataStore.saveLastConnection(config)
@@ -119,7 +119,7 @@ class ServerViewModel constructor(
                     _uiState.update { it.copy(isConnecting = false, isConnected = true) }
                 },
                 onFailure = { error ->
-                    Log.e(TAG, "Connection failed: ${error.message}", error)
+                    AppLog.e(TAG, "Connection failed: ${error.message}", error)
                     // Clear password from UI state on failure too - user can re-enter
                     _uiState.update { 
                         it.copy(
@@ -179,7 +179,7 @@ class ServerViewModel constructor(
         // Clear any persisted directory - we now show all sessions unified
         directoryManager.setDirectory(null)
         
-        Log.d(TAG, "Navigating to unified Sessions screen")
+        AppLog.d(TAG, "Navigating to unified Sessions screen")
         _uiState.update { it.copy(navigationDestination = NavigationDestination.Sessions) }
     }
 

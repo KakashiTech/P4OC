@@ -2,6 +2,7 @@ package dev.blazelight.p4oc.ui.screens.sessions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.core.network.ApiResult
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.network.DirectoryManager
@@ -126,7 +127,7 @@ class SessionListViewModel constructor(
                                 )
                             }
                             is ApiResult.Error -> {
-                                android.util.Log.e("SessionListVM", "Failed to load global sessions: ${result.message}")
+                                AppLog.e("SessionListVM", "Failed to load global sessions: ${result.message}")
                                 emptyList()
                             }
                         }
@@ -145,7 +146,7 @@ class SessionListViewModel constructor(
                                     )
                                 }
                                 is ApiResult.Error -> {
-                                    android.util.Log.e("SessionListVM", "Failed to load sessions for ${project.name}: ${result.message}")
+                                    AppLog.e("SessionListVM", "Failed to load sessions for ${project.name}: ${result.message}")
                                     emptyList()
                                 }
                             }
@@ -163,7 +164,7 @@ class SessionListViewModel constructor(
                     uniqueGlobalSessions + projectSessions
                 }
 
-                android.util.Log.d("SessionListVM", "loadSessions: aggregated ${allSessionsWithProjects.size} total sessions")
+                AppLog.d("SessionListVM", "loadSessions: aggregated ${allSessionsWithProjects.size} total sessions")
 
                 _uiState.update {
                     it.copy(
@@ -172,7 +173,7 @@ class SessionListViewModel constructor(
                     )
                 }
             } catch (e: Exception) {
-                android.util.Log.e("SessionListVM", "loadSessions error", e)
+                AppLog.e("SessionListVM", "loadSessions error", e)
                 _uiState.update {
                     it.copy(isLoading = false, error = "Failed to load sessions: ${e.message}")
                 }
@@ -184,13 +185,13 @@ class SessionListViewModel constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             
-            android.util.Log.d("SessionListVM", "createSession called with title=$title, directory=$directory")
+            AppLog.d("SessionListVM", "createSession called with title=$title, directory=$directory")
 
             val api = connectionManager.getApi() ?: run {
                 _uiState.update { it.copy(isLoading = false, error = "Not connected") }
                 return@launch
             }
-            android.util.Log.d("SessionListVM", "Calling API createSession with directory=$directory")
+            AppLog.d("SessionListVM", "Calling API createSession with directory=$directory")
             val result = safeApiCall { 
                 api.createSession(
                     directory = directory,

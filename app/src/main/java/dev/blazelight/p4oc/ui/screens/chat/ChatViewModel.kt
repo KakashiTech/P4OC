@@ -1,6 +1,6 @@
 package dev.blazelight.p4oc.ui.screens.chat
 
-import android.util.Log
+import dev.blazelight.p4oc.core.log.AppLog
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshotFlow
@@ -182,9 +182,9 @@ class ChatViewModel constructor(
             try {
                 val question = json.decodeFromString<QuestionRequest>(jsonString)
                 _uiState.update { it.copy(pendingQuestion = question) }
-                Log.d(TAG, "Restored pending question: ${question.id}")
+                AppLog.d(TAG, "Restored pending question: ${question.id}")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to restore pending question", e)
+                AppLog.e(TAG, "Failed to restore pending question", e)
                 savedStateHandle.remove<String>(KEY_PENDING_QUESTION)
             }
         }
@@ -194,9 +194,9 @@ class ChatViewModel constructor(
             try {
                 val questions = json.decodeFromString<List<QuestionRequest>>(jsonString)
                 pendingQuestions.addAll(questions)
-                Log.d(TAG, "Restored ${questions.size} queued questions")
+                AppLog.d(TAG, "Restored ${questions.size} queued questions")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to restore pending questions queue", e)
+                AppLog.e(TAG, "Failed to restore pending questions queue", e)
                 savedStateHandle.remove<String>(KEY_PENDING_QUESTIONS_QUEUE)
             }
         }
@@ -206,9 +206,9 @@ class ChatViewModel constructor(
             try {
                 val permission = json.decodeFromString<Permission>(jsonString)
                 _uiState.update { it.copy(pendingPermission = permission) }
-                Log.d(TAG, "Restored pending permission: ${permission.id}")
+                AppLog.d(TAG, "Restored pending permission: ${permission.id}")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to restore pending permission", e)
+                AppLog.e(TAG, "Failed to restore pending permission", e)
                 savedStateHandle.remove<String>(KEY_PENDING_PERMISSION)
             }
         }
@@ -218,9 +218,9 @@ class ChatViewModel constructor(
             try {
                 val permissions = json.decodeFromString<List<Permission>>(jsonString)
                 pendingPermissions.addAll(permissions)
-                Log.d(TAG, "Restored ${permissions.size} queued permissions")
+                AppLog.d(TAG, "Restored ${permissions.size} queued permissions")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to restore pending permissions queue", e)
+                AppLog.e(TAG, "Failed to restore pending permissions queue", e)
                 savedStateHandle.remove<String>(KEY_PENDING_PERMISSIONS_QUEUE)
             }
         }
@@ -253,7 +253,7 @@ class ChatViewModel constructor(
     private fun loadMessages() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
-            Log.d(TAG, "loadMessages() called for session: $sessionId")
+            AppLog.d(TAG, "loadMessages() called for session: $sessionId")
 
             val api = connectionManager.getApi() ?: run {
                 _uiState.update { it.copy(isLoading = false, error = "Not connected") }
@@ -265,7 +265,7 @@ class ChatViewModel constructor(
 
             when (result) {
                 is ApiResult.Success -> {
-                    Log.d(TAG, "Loaded ${result.data.size} messages")
+                    AppLog.d(TAG, "Loaded ${result.data.size} messages")
                     result.data.forEach { dto ->
                         val msg = messageMapper.mapWrapperToDomain(dto, partMapper)
                         _messagesMap[msg.message.id] = msg
@@ -273,7 +273,7 @@ class ChatViewModel constructor(
                     _uiState.update { it.copy(isLoading = false) }
                 }
                 is ApiResult.Error -> {
-                    Log.e(TAG, "Failed to load messages: ${result.message}", result.throwable)
+                    AppLog.e(TAG, "Failed to load messages: ${result.message}", result.throwable)
                     _uiState.update { 
                         it.copy(isLoading = false, error = "Failed to load messages") 
                     }
@@ -284,9 +284,9 @@ class ChatViewModel constructor(
 
     private fun observeEvents() {
         viewModelScope.launch {
-            Log.d(TAG, "observeEvents: Starting to collect SSE events")
+            AppLog.d(TAG, "observeEvents: Starting to collect SSE events")
             connectionManager.getEventSource()?.events?.collect { event ->
-                Log.d(TAG, "observeEvents: Received ${event::class.simpleName}")
+                AppLog.d(TAG, "observeEvents: Received ${event::class.simpleName}")
                 handleEvent(event)
             }
         }
@@ -355,7 +355,7 @@ class ChatViewModel constructor(
             }
             is OpenCodeEvent.SessionError -> {
                 if (event.sessionID == sessionId) {
-                    Log.e(TAG, "Session error: ${event.error?.message}")
+                    AppLog.e(TAG, "Session error: ${event.error?.message}")
                     _uiState.update { 
                         it.copy(
                             isBusy = false, 
@@ -367,7 +367,7 @@ class ChatViewModel constructor(
             }
             is OpenCodeEvent.SessionIdle -> {
                 if (event.sessionID == sessionId) {
-                    Log.d(TAG, "Session became idle")
+                    AppLog.d(TAG, "Session became idle")
                     viewModelScope.launch {
                         messagesMutex.withLock {
                             clearStreamingFlags()
@@ -449,7 +449,7 @@ class ChatViewModel constructor(
                     MessageWithParts(message, emptyList())
                 }
                 _messagesVersion.value++
-                Log.d(TAG, "upsertMessage: ${message.id}, exists=${existing != null}")
+                AppLog.d(TAG, "upsertMessage: ${message.id}, exists=${existing != null}")
             }
         }
     }
@@ -468,7 +468,7 @@ class ChatViewModel constructor(
                 val existing = _messagesMap[messageId] ?: run {
                     val placeholder = createPlaceholderMessage(messageId)
                     _messagesMap[messageId] = placeholder
-                    Log.d(TAG, "upsertPart: Created placeholder for message $messageId")
+                    AppLog.d(TAG, "upsertPart: Created placeholder for message $messageId")
                     placeholder
                 }
                 
@@ -483,7 +483,7 @@ class ChatViewModel constructor(
                 
                 _messagesMap[messageId] = existing.copy(parts = updatedParts)
                 _messagesVersion.value++
-                Log.d(TAG, "upsertPart: partId=${part.id}, messageId=$messageId, delta=${delta?.length ?: 0} chars, partCount=${updatedParts.size}")
+                AppLog.d(TAG, "upsertPart: partId=${part.id}, messageId=$messageId, delta=${delta?.length ?: 0} chars, partCount=${updatedParts.size}")
             }
         }
     }
@@ -557,7 +557,7 @@ class ChatViewModel constructor(
 
             when (result) {
                 is ApiResult.Success -> {
-                    Log.d(TAG, "sendMessage: Async call succeeded, waiting for SSE events")
+                    AppLog.d(TAG, "sendMessage: Async call succeeded, waiting for SSE events")
                 }
                 is ApiResult.Error -> {
                     _uiState.update { 
@@ -636,7 +636,7 @@ class ChatViewModel constructor(
                 queuedMessage = queued
             )
         }
-        Log.d(TAG, "queueMessage: Queued message with ${text.length} chars, ${attachedFiles.size} files")
+        AppLog.d(TAG, "queueMessage: Queued message with ${text.length} chars, ${attachedFiles.size} files")
     }
     
     /**
@@ -645,7 +645,7 @@ class ChatViewModel constructor(
     private fun sendQueuedMessageIfAny() {
         val queued = _uiState.value.queuedMessage ?: return
         
-        Log.d(TAG, "sendQueuedMessageIfAny: Sending queued message")
+        AppLog.d(TAG, "sendQueuedMessageIfAny: Sending queued message")
         
         // Clear the queued message first
         _uiState.update { it.copy(queuedMessage = null, isSending = true) }
@@ -685,7 +685,7 @@ class ChatViewModel constructor(
             
             when (result) {
                 is ApiResult.Success -> {
-                    Log.d(TAG, "sendQueuedMessageIfAny: Queued message sent successfully")
+                    AppLog.d(TAG, "sendQueuedMessageIfAny: Queued message sent successfully")
                 }
                 is ApiResult.Error -> {
                     _uiState.update { 
@@ -753,14 +753,14 @@ class ChatViewModel constructor(
             val result = safeApiCall { api.listCommands(getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
-                    Log.d(TAG, "loadCommands: Got ${result.data.size} commands from API")
+                    AppLog.d(TAG, "loadCommands: Got ${result.data.size} commands from API")
                     val apiCommands = result.data.map { commandMapper.mapToDomain(it) }
                     // Merge with built-in commands (API doesn't return these)
                     val allCommands = (BUILTIN_COMMANDS + apiCommands).distinctBy { it.name }
                     _uiState.update { it.copy(commands = allCommands, isLoadingCommands = false) }
                 }
                 is ApiResult.Error -> {
-                    Log.e(TAG, "loadCommands failed: ${result.message}", result.throwable)
+                    AppLog.e(TAG, "loadCommands failed: ${result.message}", result.throwable)
                     // Still show built-in commands even if API fails
                     _uiState.update { 
                         it.copy(
@@ -821,17 +821,17 @@ class ChatViewModel constructor(
     private fun loadAgents() {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: run {
-                Log.d(TAG, "loadAgents: No API available")
+                AppLog.d(TAG, "loadAgents: No API available")
                 return@launch
             }
             val result = safeApiCall { api.getAgents() }
             when (result) {
                 is ApiResult.Success -> {
-                    Log.d(TAG, "loadAgents: Got ${result.data.size} agents")
+                    AppLog.d(TAG, "loadAgents: Got ${result.data.size} agents")
                     val primaryAgents = result.data.filter { 
                         it.mode == "primary" && it.hidden != true 
                     }
-                    Log.d(TAG, "loadAgents: ${primaryAgents.size} primary agents: ${primaryAgents.map { it.name }}")
+                    AppLog.d(TAG, "loadAgents: ${primaryAgents.size} primary agents: ${primaryAgents.map { it.name }}")
                     _uiState.update { state ->
                         state.copy(
                             availableAgents = primaryAgents,
@@ -841,7 +841,7 @@ class ChatViewModel constructor(
                     }
                 }
                 is ApiResult.Error -> {
-                    Log.e(TAG, "loadAgents failed: ${result.message}")
+                    AppLog.e(TAG, "loadAgents failed: ${result.message}")
                 }
             }
         }
