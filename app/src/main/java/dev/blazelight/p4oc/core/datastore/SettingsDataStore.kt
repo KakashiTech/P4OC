@@ -7,10 +7,16 @@ import androidx.datastore.preferences.preferencesDataStore
 import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.core.security.CredentialStore
 import dev.blazelight.p4oc.data.remote.dto.ModelInput
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
@@ -64,9 +70,14 @@ class SettingsDataStore constructor(
         const val THEME_DARK = "dark"
         const val MAX_RECENT_SERVERS = 5
 
-        // Migration flag
+        // Migration flags
         private val KEY_CREDENTIALS_MIGRATED = booleanPreferencesKey("credentials_migrated_v1")
+        private val KEY_RECENT_SERVERS_MIGRATED_V2 = booleanPreferencesKey("recent_servers_migrated_v2")
     }
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile
     private var cachedServerUrl: String = DEFAULT_LOCAL_URL
@@ -74,16 +85,24 @@ class SettingsDataStore constructor(
     private var cachedUsername: String? = null
 
     init {
-        // Preload cache from DataStore + run one-time credential migration
-        runBlocking {
-            val prefs = context.dataStore.data.first()
-            cachedServerUrl = prefs[KEY_SERVER_URL] ?: DEFAULT_LOCAL_URL
-            cachedUsername = prefs[KEY_USERNAME]
+        scope.launch {
+            try {
+                val prefs = context.dataStore.data.first()
+                cachedServerUrl = prefs[KEY_SERVER_URL] ?: DEFAULT_LOCAL_URL
+                cachedUsername = prefs[KEY_USERNAME]
 
-            // One-time migration from plaintext DataStore to CredentialStore
-            @Suppress("DEPRECATION")
-            if (prefs[KEY_CREDENTIALS_MIGRATED] != true) {
-                migrateCredentials(prefs)
+                // One-time migration from plaintext DataStore to CredentialStore
+                @Suppress("DEPRECATION")
+                if (prefs[KEY_CREDENTIALS_MIGRATED] != true) {
+                    migrateCredentials(prefs)
+                }
+
+                // One-time migration from hand-rolled JSON to kotlinx.serialization format
+                if (prefs[KEY_RECENT_SERVERS_MIGRATED_V2] != true) {
+                    migrateRecentServersFormat()
+                }
+            } catch (e: Exception) {
+                AppLog.e(TAG, "Error during init migration", e)
             }
         }
     }
@@ -101,17 +120,14 @@ class SettingsDataStore constructor(
         val serverUrl = prefs[KEY_SERVER_URL]
         credentialStore.migrateFromPlaintext(legacyPassword, serverUrl)
 
-        // 2. Migrate recent server passwords
+        // 2. Migrate recent server passwords (parse legacy hand-rolled JSON)
         val storedServers = prefs[KEY_RECENT_SERVERS] ?: ""
         if (storedServers.startsWith("[")) {
             try {
-                val jsonItems = storedServers.removeSurrounding("[", "]")
-                    .split("},")
-                    .map { it.trim().removeSuffix("}") + "}" }
-                jsonItems.forEach { json ->
-                    val server = RecentServer.fromJson(json)
-                    if (server != null && !server.password.isNullOrBlank()) {
-                        credentialStore.migrateRecentServerPassword(server.url, server.password)
+                val legacyServers = parseLegacyJsonServers(storedServers)
+                legacyServers.forEach { (url, _, _, password) ->
+                    if (!password.isNullOrBlank()) {
+                        credentialStore.migrateRecentServerPassword(url, password)
                     }
                 }
             } catch (e: Exception) {
@@ -128,12 +144,9 @@ class SettingsDataStore constructor(
             val stored = mutablePrefs[KEY_RECENT_SERVERS] ?: ""
             if (stored.startsWith("[")) {
                 try {
-                    val jsonItems = stored.removeSurrounding("[", "]")
-                        .split("},")
-                        .map { it.trim().removeSuffix("}") + "}" }
-                    val cleaned = jsonItems.mapNotNull { RecentServer.fromJson(it) }
-                        .map { it.copy(password = null) }
-                    mutablePrefs[KEY_RECENT_SERVERS] = "[" + cleaned.joinToString(",") { it.toJson() } + "]"
+                    val legacyServers = parseLegacyJsonServers(stored)
+                    val cleaned = legacyServers.map { RecentServer(url = it.url, name = it.name, username = it.username) }
+                    mutablePrefs[KEY_RECENT_SERVERS] = json.encodeToString(cleaned)
                 } catch (e: Exception) {
                     AppLog.e(TAG, "Error cleaning recent servers during migration", e)
                 }
@@ -144,6 +157,28 @@ class SettingsDataStore constructor(
         }
 
         AppLog.d(TAG, "Credential migration complete")
+    }
+
+    /**
+     * Migrate recent servers from legacy formats (hand-rolled JSON or delimiter)
+     * to kotlinx.serialization JSON format.
+     */
+    private suspend fun migrateRecentServersFormat() {
+        context.dataStore.edit { mutablePrefs ->
+            val stored = mutablePrefs[KEY_RECENT_SERVERS] ?: ""
+            if (stored.isNotBlank()) {
+                try {
+                    val servers = parseRecentServersLenient(stored)
+                    mutablePrefs[KEY_RECENT_SERVERS] = json.encodeToString(servers)
+                } catch (e: Exception) {
+                    AppLog.e(TAG, "Error migrating recent servers to v2 format", e)
+                    // Don't set the flag — retry on next launch
+                    return@edit
+                }
+            }
+            mutablePrefs[KEY_RECENT_SERVERS_MIGRATED_V2] = true
+        }
+        AppLog.d(TAG, "Recent servers v2 migration complete")
     }
 
     fun getCachedServerUrl(): String = cachedServerUrl
@@ -324,21 +359,9 @@ class SettingsDataStore constructor(
     val recentServers: Flow<List<RecentServer>> = context.dataStore.data.map { prefs ->
         val stored = prefs[KEY_RECENT_SERVERS] ?: return@map emptyList()
         try {
-            if (stored.startsWith("[")) {
-                val jsonItems = stored.removeSurrounding("[", "]")
-                    .split("},")
-                    .map { it.trim().removeSuffix("}") + "}" }
-                jsonItems.mapNotNull { RecentServer.fromJson(it) }
-            } else {
-                // Fallback to legacy delimiter format for migration
-                stored.split("|||").mapNotNull { entry ->
-                    val parts = entry.split(":::")
-                    if (parts.size >= 2) {
-                        RecentServer(url = parts[0], name = parts[1])
-                    } else null
-                }
-            }
+            parseRecentServersLenient(stored)
         } catch (e: Exception) {
+            AppLog.e(TAG, "Error parsing recent servers", e)
             emptyList()
         }
     }
@@ -356,26 +379,20 @@ class SettingsDataStore constructor(
             val stored = prefs[KEY_RECENT_SERVERS] ?: ""
             val existingServers = if (stored.isBlank()) {
                 mutableListOf()
-            } else if (stored.startsWith("[")) {
-                val jsonItems = stored.removeSurrounding("[", "]")
-                    .split("},")
-                    .map { it.trim().removeSuffix("}") + "}" }
-                jsonItems.mapNotNull { RecentServer.fromJson(it) }.toMutableList()
             } else {
-                // Legacy format migration
-                stored.split("|||").mapNotNull { entry ->
-                    val parts = entry.split(":::")
-                    if (parts.size >= 2) RecentServer(parts[0], parts[1]) else null
-                }.toMutableList()
+                try {
+                    parseRecentServersLenient(stored).toMutableList()
+                } catch (e: Exception) {
+                    AppLog.e(TAG, "Error parsing recent servers in addRecentServer", e)
+                    mutableListOf()
+                }
             }
             
             existingServers.removeAll { it.url == url }
-            // Note: password=null in RecentServer — it's in CredentialStore now
-            existingServers.add(0, RecentServer(url, name, username, password = null))
+            existingServers.add(0, RecentServer(url, name, username))
             val trimmed = existingServers.take(MAX_RECENT_SERVERS)
             
-            // Save as JSON array (no passwords in JSON)
-            prefs[KEY_RECENT_SERVERS] = "[" + trimmed.joinToString(",") { it.toJson() } + "]"
+            prefs[KEY_RECENT_SERVERS] = json.encodeToString(trimmed)
         }
     }
 
@@ -385,18 +402,13 @@ class SettingsDataStore constructor(
 
         context.dataStore.edit { prefs ->
             val stored = prefs[KEY_RECENT_SERVERS] ?: return@edit
-            val servers = if (stored.startsWith("[")) {
-                val jsonItems = stored.removeSurrounding("[", "]")
-                    .split("},")
-                    .map { it.trim().removeSuffix("}") + "}" }
-                jsonItems.mapNotNull { RecentServer.fromJson(it) }.filter { it.url != url }
-            } else {
-                stored.split("|||").mapNotNull { entry ->
-                    val parts = entry.split(":::")
-                    if (parts.size >= 2 && parts[0] != url) RecentServer(parts[0], parts[1]) else null
-                }
+            val servers = try {
+                parseRecentServersLenient(stored).filter { it.url != url }
+            } catch (e: Exception) {
+                AppLog.e(TAG, "Error parsing recent servers in removeRecentServer", e)
+                return@edit
             }
-            prefs[KEY_RECENT_SERVERS] = "[" + servers.joinToString(",") { it.toJson() } + "]"
+            prefs[KEY_RECENT_SERVERS] = json.encodeToString(servers)
         }
     }
 
@@ -504,6 +516,70 @@ class SettingsDataStore constructor(
             }
         }
     }
+
+    // ── Legacy parsing helpers (used for migration and backward-compatible reads) ──
+
+    /**
+     * Parse recent servers from any stored format:
+     * 1. kotlinx.serialization JSON: `[{"url":"...","name":"...","username":"..."},...]`
+     * 2. Hand-rolled JSON (legacy): same shape but may contain "password" field (ignored via ignoreUnknownKeys)
+     * 3. Delimiter format (very old): `url1:::name1|||url2:::name2`
+     *
+     * Returns a list of [RecentServer] with no password field.
+     */
+    private fun parseRecentServersLenient(stored: String): List<RecentServer> {
+        if (stored.isBlank()) return emptyList()
+
+        // Delimiter format (very old legacy)
+        if (!stored.startsWith("[")) {
+            return stored.split("|||").mapNotNull { entry ->
+                val parts = entry.split(":::")
+                if (parts.size >= 2) RecentServer(url = parts[0], name = parts[1]) else null
+            }
+        }
+
+        // Try kotlinx.serialization first (new format — ignoreUnknownKeys handles old "password" field)
+        return try {
+            json.decodeFromString<List<RecentServer>>(stored)
+        } catch (_: Exception) {
+            // Fall back to legacy hand-rolled JSON parsing with regex
+            try {
+                parseLegacyJsonServers(stored).map {
+                    RecentServer(url = it.url, name = it.name, username = it.username)
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+    }
+
+    /**
+     * Parse the legacy hand-rolled JSON format used before kotlinx.serialization.
+     * Returns [LegacyRecentServer] which preserves the password field for migration.
+     */
+    private fun parseLegacyJsonServers(stored: String): List<LegacyRecentServer> {
+        val jsonItems = stored.removeSurrounding("[", "]")
+            .split("},")
+            .map { it.trim().removeSuffix("}") + "}" }
+        return jsonItems.mapNotNull { item ->
+            try {
+                val urlMatch = """"url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"""".toRegex().find(item)
+                val nameMatch = """"name"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"""".toRegex().find(item)
+                val usernameMatch = """"username"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"""".toRegex().find(item)
+                val passwordMatch = """"password"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"""".toRegex().find(item)
+                if (urlMatch != null && nameMatch != null) {
+                    LegacyRecentServer(
+                        url = urlMatch.groupValues[1].replace("\\\"", "\""),
+                        name = nameMatch.groupValues[1].replace("\\\"", "\""),
+                        username = usernameMatch?.groupValues?.get(1)?.replace("\\\"", "\""),
+                        password = passwordMatch?.groupValues?.get(1)?.replace("\\\"", "\"")
+                    )
+                } else null
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
 }
 
 private fun ModelInput.toStorageKey(): String = "$providerID/$modelID"
@@ -515,44 +591,27 @@ private fun String.toModelInput(): ModelInput? {
     } else null
 }
 
+/**
+ * A recent server entry for the server picker.
+ * Password is NOT stored here — it lives in [CredentialStore].
+ */
+@Serializable
 data class RecentServer(
     val url: String,
     val name: String,
+    val username: String? = null
+)
+
+/**
+ * Legacy representation of a recent server, used only during migration
+ * to extract passwords from the old hand-rolled JSON format.
+ */
+private data class LegacyRecentServer(
+    val url: String,
+    val name: String,
     val username: String? = null,
-    val password: String? = null  // DEPRECATED: kept for migration parsing only, never written
-) {
-    fun toJson(): String {
-        val parts = mutableListOf(
-            """"url":"${url.replace("\"", "\\\"")}"""",
-            """"name":"${name.replace("\"", "\\\"")}""""
-        )
-        username?.let { parts.add(""""username":"${it.replace("\"", "\\\"")}"""") }
-        // password intentionally NOT serialized to JSON
-        return "{${parts.joinToString(",")}}"
-    }
-    
-    companion object {
-        fun fromJson(json: String): RecentServer? {
-            return try {
-                val urlMatch = """"url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"""".toRegex().find(json)
-                val nameMatch = """"name"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"""".toRegex().find(json)
-                val usernameMatch = """"username"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"""".toRegex().find(json)
-                // Still parse password for migration purposes
-                val passwordMatch = """"password"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"""".toRegex().find(json)
-                if (urlMatch != null && nameMatch != null) {
-                    RecentServer(
-                        url = urlMatch.groupValues[1].replace("\\\"", "\""),
-                        name = nameMatch.groupValues[1].replace("\\\"", "\""),
-                        username = usernameMatch?.groupValues?.get(1)?.replace("\\\"", "\""),
-                        password = passwordMatch?.groupValues?.get(1)?.replace("\\\"", "\"")
-                    )
-                } else null
-            } catch (e: Exception) {
-                null
-            }
-        }
-    }
-}
+    val password: String? = null
+)
 
 data class VisualSettings(
     val fontSize: Int = 14,
