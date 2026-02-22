@@ -1,34 +1,44 @@
 package dev.blazelight.p4oc.core.network
 
+import com.launchdarkly.eventsource.ConnectStrategy
+import com.launchdarkly.eventsource.ErrorStrategy
+import com.launchdarkly.eventsource.EventSource
+import com.launchdarkly.eventsource.MessageEvent
+import com.launchdarkly.eventsource.background.BackgroundEventHandler
+import com.launchdarkly.eventsource.background.BackgroundEventSource
+import com.launchdarkly.eventsource.background.ConnectionErrorHandler
 import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.data.remote.dto.EventDataDto
 import dev.blazelight.p4oc.data.remote.dto.GlobalEventDto
 import dev.blazelight.p4oc.data.remote.mapper.EventMapper
 import dev.blazelight.p4oc.domain.model.OpenCodeEvent
-import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okio.BufferedSource
-import java.io.IOException
+import java.net.URI
+import java.util.concurrent.TimeUnit
 
 class OpenCodeEventSource(
     private val okHttpClient: OkHttpClient,
     private val json: Json,
     private val baseUrl: String,
     private val eventMapper: EventMapper,
+    @Suppress("unused") // kept for constructor compatibility; directory changes trigger reconnect() externally
     private val directoryProvider: () -> String?
 ) {
     companion object {
         private const val TAG = "OpenCodeEventSource"
-        private const val RECONNECT_DELAY_MS = 3000L
     }
 
     private val _events = MutableSharedFlow<OpenCodeEvent>(
         replay = 0,
-        extraBufferCapacity = 64,
+        extraBufferCapacity = 256,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     val events: SharedFlow<OpenCodeEvent> = _events.asSharedFlow()
@@ -36,117 +46,135 @@ class OpenCodeEventSource(
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private var sseJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    
-    // Flag to prevent auto-reconnect after intentional disconnect
+    // Lifecycle lock — guards backgroundEventSource reference only.
+    // close() is called OUTSIDE the lock to avoid blocking other callers (~2s executor shutdown).
+    private val lock = Any()
+    private var backgroundEventSource: BackgroundEventSource? = null
+
+    // Generation counter for stale-callback protection.
+    // Volatile because it is written under lock but read from library threads without lock.
     @Volatile
-    private var shouldReconnect = true
+    private var generation: Long = 0L
+
+    @Volatile
+    private var isShutdown = false
 
     fun connect() {
-        AppLog.d(TAG, "connect() called, state=${_connectionState.value}, jobActive=${sseJob?.isActive}")
-        if (_connectionState.value is ConnectionState.Connected) return
-        if (sseJob?.isActive == true) return
-        
-        // Re-enable reconnection when explicitly connecting
-        shouldReconnect = true
+        val besRef: BackgroundEventSource
+        synchronized(lock) {
+            if (isShutdown) {
+                AppLog.w(TAG, "connect() called after shutdown – ignoring")
+                return
+            }
+            if (backgroundEventSource != null) {
+                AppLog.d(TAG, "connect() called but already active – no-op")
+                return
+            }
 
-        sseJob = scope.launch {
+            AppLog.d(TAG, "connect() – creating BackgroundEventSource")
             _connectionState.value = ConnectionState.Connecting
 
-            // Use /global/event endpoint which receives ALL events via GlobalBus
-            // Events are filtered client-side by sessionId in ChatViewModel
-            val eventUrl = "$baseUrl/global/event"
-            AppLog.d(TAG, "Connecting to SSE: $eventUrl")
-            
-            val request = Request.Builder()
-                .url(eventUrl)
-                .header("Accept", "text/event-stream")
-                .header("Cache-Control", "no-cache")
-                .build()
-
-            try {
-                val response = okHttpClient.newCall(request).execute()
-                
-                if (!response.isSuccessful) {
-                    response.close()  // Close response body on error
-                    throw IOException("Unexpected response: ${response.code}")
-                }
-
-                AppLog.d(TAG, "SSE connected")
-                _connectionState.value = ConnectionState.Connected
-                _events.tryEmit(OpenCodeEvent.Connected)
-
-                try {
-                    response.body?.source()?.let { source ->
-                        readSseStream(source)
-                    }
-                } finally {
-                    response.close()  // Always close response when done
-                }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                AppLog.e(TAG, "SSE error", e)
-                _connectionState.value = ConnectionState.Error(e.message)
-                _events.tryEmit(OpenCodeEvent.Error(e))
-                scheduleReconnect()
-            }
+            val gen = ++generation
+            besRef = createBackgroundEventSource(gen)
+            backgroundEventSource = besRef
         }
-    }
-
-    private suspend fun readSseStream(source: BufferedSource) {
-        var eventData = StringBuilder()
-        
-        try {
-            while (!source.exhausted()) {
-                val line = source.readUtf8Line() ?: break
-                
-                when {
-                    line.startsWith("data:") -> {
-                        val data = line.removePrefix("data:").trim()
-                        eventData.append(data)
-                        AppLog.v(TAG, "SSE data line received, length=${data.length}")
-                    }
-                    line.isEmpty() && eventData.isNotEmpty() -> {
-                        AppLog.d(TAG, "SSE event complete, parsing ${eventData.length} chars")
-                        parseAndEmitEvent(eventData.toString())
-                        eventData = StringBuilder()
-                    }
-                    line.startsWith(":") -> {
-                        // Comment/keepalive
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            AppLog.e(TAG, "Error reading SSE stream", e)
-        } finally {
-            AppLog.d(TAG, "SSE stream ended")
-            _connectionState.value = ConnectionState.Disconnected
-            _events.tryEmit(OpenCodeEvent.Disconnected(null))
-            scheduleReconnect()
-        }
+        besRef.start()
     }
 
     fun disconnect() {
         AppLog.d(TAG, "disconnect() called")
-        // Disable auto-reconnect when intentionally disconnecting
-        shouldReconnect = false
-        sseJob?.cancel()
-        sseJob = null
-        _connectionState.value = ConnectionState.Disconnected
+        val toClose: BackgroundEventSource?
+        synchronized(lock) {
+            toClose = detachLocked()
+            _connectionState.value = ConnectionState.Disconnected
+        }
+        toClose?.closeSafely()
     }
 
     fun reconnect() {
-        AppLog.d(TAG, "reconnect() called - reconnecting with current directory")
-        disconnect()
-        connect()
+        AppLog.d(TAG, "reconnect() called")
+        val toClose: BackgroundEventSource?
+        val besRef: BackgroundEventSource
+        synchronized(lock) {
+            if (isShutdown) {
+                AppLog.w(TAG, "reconnect() called after shutdown – ignoring")
+                return
+            }
+            toClose = detachLocked()
+            _connectionState.value = ConnectionState.Connecting
+
+            val gen = ++generation
+            besRef = createBackgroundEventSource(gen)
+            backgroundEventSource = besRef
+        }
+        toClose?.closeSafely()
+        besRef.start()
     }
 
     fun shutdown() {
-        disconnect()
-        scope.cancel()
+        AppLog.d(TAG, "shutdown() called")
+        val toClose: BackgroundEventSource?
+        synchronized(lock) {
+            isShutdown = true
+            toClose = detachLocked()
+            _connectionState.value = ConnectionState.Disconnected
+        }
+        toClose?.closeSafely()
     }
+
+    /**
+     * Detach the current BackgroundEventSource and invalidate its generation.
+     * Must be called while holding [lock]. The returned BES should be closed OUTSIDE the lock.
+     */
+    private fun detachLocked(): BackgroundEventSource? {
+        val bes = backgroundEventSource
+        backgroundEventSource = null
+        // Increment generation so any pending callbacks from bes are ignored
+        generation++
+        return bes
+    }
+
+    private fun BackgroundEventSource.closeSafely() {
+        AppLog.d(TAG, "Closing BackgroundEventSource")
+        try {
+            close()
+        } catch (e: Exception) {
+            AppLog.w(TAG, "Error closing BackgroundEventSource: ${e.message}", e)
+        }
+    }
+
+    private fun createBackgroundEventSource(gen: Long): BackgroundEventSource {
+        val eventUrl = "$baseUrl/global/event"
+        AppLog.d(TAG, "SSE target URL: $eventUrl")
+
+        val connectStrategy = ConnectStrategy.http(URI(eventUrl))
+            .httpClient(okHttpClient)
+            .readTimeout(0, TimeUnit.SECONDS)
+
+        val eventSourceBuilder = EventSource.Builder(connectStrategy)
+            .errorStrategy(ErrorStrategy.alwaysContinue())
+            .retryDelay(3, TimeUnit.SECONDS)
+
+        val handler = SseEventHandler(gen)
+
+        return BackgroundEventSource.Builder(handler, eventSourceBuilder)
+            .threadBaseName("OpenCodeSSE")
+            .connectionErrorHandler(ConnectionErrorHandler { t ->
+                // Decision-only — do NOT emit events here to avoid duplicates with onError/onClosed.
+                if (isShutdown || !isActiveGeneration(gen)) {
+                    AppLog.d(TAG, "Connection error after shutdown/stale → SHUTDOWN (${t.message})")
+                    ConnectionErrorHandler.Action.SHUTDOWN
+                } else {
+                    AppLog.d(TAG, "Connection error, library will retry: ${t.message}")
+                    ConnectionErrorHandler.Action.PROCEED
+                }
+            })
+            .build()
+    }
+
+    /** Returns true if [gen] matches the current active generation and we're not shut down. */
+    private fun isActiveGeneration(gen: Long): Boolean =
+        !isShutdown && generation == gen
 
     private fun parseAndEmitEvent(data: String) {
         try {
@@ -155,6 +183,9 @@ class OpenCodeEventSource(
             if (event != null) {
                 val emitted = _events.tryEmit(event)
                 AppLog.d(TAG, "Event emitted: ${event::class.simpleName}, success=$emitted")
+                if (!emitted) {
+                    AppLog.w(TAG, "Dropped event (buffer full): ${event::class.simpleName}")
+                }
             }
         } catch (e: Exception) {
             try {
@@ -163,9 +194,11 @@ class OpenCodeEventSource(
                 if (event != null) {
                     val emitted = _events.tryEmit(event)
                     AppLog.d(TAG, "Event emitted (fallback): ${event::class.simpleName}, success=$emitted")
+                    if (!emitted) {
+                        AppLog.w(TAG, "Dropped event (buffer full, fallback): ${event::class.simpleName}")
+                    }
                 }
             } catch (e2: Exception) {
-                // Only log if not a known ignorable event type
                 if (!data.contains("server.heartbeat") && !data.contains("server.connected")) {
                     AppLog.e(TAG, "Failed to parse event (${data.length} chars): ${data.take(80)}…", e2)
                 }
@@ -173,16 +206,59 @@ class OpenCodeEventSource(
         }
     }
 
-    private fun scheduleReconnect() {
-        if (!shouldReconnect) {
-            AppLog.d(TAG, "scheduleReconnect() skipped - shouldReconnect=false")
-            return
+    private fun emitEvent(event: OpenCodeEvent) {
+        val emitted = _events.tryEmit(event)
+        if (!emitted) {
+            AppLog.w(TAG, "Dropped lifecycle event (buffer full): ${event::class.simpleName}")
         }
-        scope.launch {
-            delay(RECONNECT_DELAY_MS)
-            if (_connectionState.value !is ConnectionState.Connected && shouldReconnect) {
-                connect()
-            }
+    }
+
+    /**
+     * BackgroundEventHandler implementation. Each instance is bound to a [gen]
+     * so stale callbacks from a closed BackgroundEventSource are safely ignored.
+     *
+     * Note on library callback sequence for FaultEvents:
+     *   1. onError(cause) — called on event thread
+     *   2. onClosed()     — called on event thread
+     *   3. ConnectionErrorHandler.onConnectionError(cause) — called on stream thread
+     * When ConnectionErrorHandler returns PROCEED, the library auto-reconnects and
+     * onOpen() fires once the new connection succeeds. We only emit Error from onError()
+     * and don't emit Disconnected from onClosed() to avoid UI flicker during retries.
+     */
+    private inner class SseEventHandler(private val gen: Long) : BackgroundEventHandler {
+
+        override fun onOpen() {
+            if (!isActiveGeneration(gen)) return
+            AppLog.d(TAG, "SSE connected (onOpen)")
+            _connectionState.value = ConnectionState.Connected
+            emitEvent(OpenCodeEvent.Connected)
+        }
+
+        override fun onMessage(event: String, messageEvent: MessageEvent) {
+            if (!isActiveGeneration(gen)) return
+            val data = messageEvent.data
+            AppLog.v(TAG, "SSE message received: event=$event, length=${data.length}")
+            parseAndEmitEvent(data)
+        }
+
+        override fun onComment(comment: String) {
+            // Keepalive — nothing to do
+        }
+
+        override fun onClosed() {
+            if (!isActiveGeneration(gen)) return
+            // Don't emit Disconnected here — this fires on EVERY FaultEvent, including
+            // retriable errors where the library will auto-reconnect. Disconnected is
+            // emitted explicitly from disconnect()/shutdown() instead.
+            AppLog.d(TAG, "SSE stream closed (onClosed), library may auto-reconnect")
+            _connectionState.value = ConnectionState.Error("Stream closed")
+        }
+
+        override fun onError(t: Throwable) {
+            if (!isActiveGeneration(gen)) return
+            AppLog.e(TAG, "SSE error (onError): ${t.message}", t)
+            _connectionState.value = ConnectionState.Error(t.message)
+            emitEvent(OpenCodeEvent.Error(t))
         }
     }
 }
