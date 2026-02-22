@@ -1,7 +1,5 @@
 package dev.blazelight.p4oc.di
 
-import androidx.room.Room
-import dev.blazelight.p4oc.core.database.PocketCodeDatabase
 import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.security.CredentialStore
@@ -10,14 +8,6 @@ import dev.blazelight.p4oc.core.network.PtyWebSocketClient
 import dev.blazelight.p4oc.core.notification.NotificationEventObserver
 import dev.blazelight.p4oc.core.notification.NotificationHelper
 import dev.blazelight.p4oc.data.remote.mapper.*
-import dev.blazelight.p4oc.data.repository.EventRepositoryImpl
-import dev.blazelight.p4oc.data.repository.FileRepositoryImpl
-import dev.blazelight.p4oc.data.repository.MessageRepositoryImpl
-import dev.blazelight.p4oc.data.repository.SessionRepositoryImpl
-import dev.blazelight.p4oc.domain.repository.EventRepository
-import dev.blazelight.p4oc.domain.repository.FileRepository
-import dev.blazelight.p4oc.domain.repository.MessageRepository
-import dev.blazelight.p4oc.domain.repository.SessionRepository
 import dev.blazelight.p4oc.ui.screens.chat.ChatViewModel
 import dev.blazelight.p4oc.ui.screens.files.FilesViewModel
 import dev.blazelight.p4oc.ui.screens.server.ServerViewModel
@@ -36,7 +26,6 @@ import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.singleOf
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.module.dsl.viewModelOf
-import org.koin.dsl.bind
 import org.koin.dsl.module
 
 val appModule = module {
@@ -58,22 +47,9 @@ val appModule = module {
     single { SettingsDataStore(androidContext(), get()) }
     single { NotificationHelper(androidContext()) }
     single { NotificationEventObserver(get(), get()) }
-}
 
-val databaseModule = module {
-    single {
-        Room.databaseBuilder(
-            androidContext(),
-            PocketCodeDatabase::class.java,
-            "pocketcode.db"
-        )
-            .fallbackToDestructiveMigration(dropAllTables = true)
-            .build()
-    }
-
-    single { get<PocketCodeDatabase>().sessionDao() }
-    single { get<PocketCodeDatabase>().messageDao() }
-    single { get<PocketCodeDatabase>().serverConfigDao() }
+    // Tab management (singleton for app lifetime)
+    single { TabManager() }
 }
 
 val networkModule = module {
@@ -96,16 +72,6 @@ val networkModule = module {
     single { ConnectionManager(get(), get(), get()) }
 }
 
-val repositoryModule = module {
-    singleOf(::SessionRepositoryImpl) bind SessionRepository::class
-    singleOf(::MessageRepositoryImpl) bind MessageRepository::class
-    singleOf(::FileRepositoryImpl) bind FileRepository::class
-    singleOf(::EventRepositoryImpl) bind EventRepository::class
-    
-    // Tab management (singleton for app lifetime)
-    single { TabManager() }
-}
-
 val viewModelModule = module {
     viewModelOf(::FilesViewModel)
     viewModelOf(::ServerViewModel)
@@ -123,8 +89,6 @@ val viewModelModule = module {
 
 val allModules = listOf(
     appModule,
-    databaseModule,
     networkModule,
-    repositoryModule,
     viewModelModule
 )

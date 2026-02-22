@@ -144,20 +144,6 @@ interface OpenCodeApi {
         @Query("directory") directory: String? = null
     ): MessageWrapperDto
 
-    @POST("session/{sessionId}/message")
-    suspend fun sendMessage(
-        @Path("sessionId") sessionId: String,
-        @Body request: SendMessageRequest,
-        @Query("directory") directory: String? = null
-    ): MessageWrapperDto
-
-    @POST("session/{sessionId}/message")
-    suspend fun sendMessageStreaming(
-        @Path("sessionId") sessionId: String,
-        @Body request: SendMessageRequest,
-        @Query("directory") directory: String? = null
-    ): MessageWrapperDto
-
     /**
      * Send a message asynchronously (fire-and-forget).
      * Returns immediately - all response content streams via SSE events.
