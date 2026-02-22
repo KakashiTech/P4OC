@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -274,7 +275,7 @@ private fun TuiTodoItem(todo: Todo) {
         modifier = Modifier
             .fillMaxWidth()
             .animateContentSize()
-            .clickable { expanded = !expanded },
+            .clickable(role = Role.Button) { expanded = !expanded },
         color = if (isCompleted || isCancelled)
             theme.backgroundElement.copy(alpha = 0.5f)
         else

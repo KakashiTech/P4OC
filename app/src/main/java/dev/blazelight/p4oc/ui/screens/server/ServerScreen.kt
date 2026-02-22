@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -113,7 +114,7 @@ fun ServerScreen(
                 Surface(
                     color = theme.error.copy(alpha = 0.1f),
                     shape = RectangleShape,
-                    modifier = Modifier.border(1.dp, theme.error.copy(alpha = 0.3f), RectangleShape)
+                    modifier = Modifier.border(Sizing.strokeMd, theme.error.copy(alpha = 0.3f), RectangleShape)
                 ) {
                     Row(
                         modifier = Modifier.padding(Spacing.md),
@@ -219,7 +220,7 @@ private fun RemoteServerSection(
                         text = if (passwordVisible) "◉" else "○",
                         color = theme.textMuted,
                         fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.clickable { passwordVisible = !passwordVisible }
+                        modifier = Modifier.clickable(role = Role.Button) { passwordVisible = !passwordVisible }
                     )
                 }
             )
@@ -274,7 +275,7 @@ private fun RecentServersSection(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable(enabled = !isConnecting) { onServerClick(server) }
+                        .clickable(enabled = !isConnecting, role = Role.Button) { onServerClick(server) }
                         .padding(vertical = Spacing.md),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Spacing.lg)
@@ -306,7 +307,7 @@ private fun RecentServersSection(
                         text = "×",
                         color = theme.textMuted,
                         fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.clickable { onRemoveServer(server) }
+                        modifier = Modifier.clickable(role = Role.Button) { onRemoveServer(server) }
                     )
                 }
             }

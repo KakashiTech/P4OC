@@ -18,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -75,7 +76,7 @@ fun FilePickerDialog(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .fillMaxHeight(0.85f)
-                .border(1.dp, theme.border, RectangleShape),
+                .border(Sizing.strokeMd, theme.border, RectangleShape),
             shape = RectangleShape,
             color = theme.background
         ) {
@@ -99,7 +100,7 @@ fun FilePickerDialog(
                                 color = theme.textMuted,
                                 fontFamily = FontFamily.Monospace,
                                 modifier = Modifier
-                                    .clickable(onClick = onDismiss)
+                                    .clickable(onClick = onDismiss, role = Role.Button)
                                     .padding(end = Spacing.md)
                             )
                             Text(
@@ -164,7 +165,7 @@ fun FilePickerDialog(
                                 "×",
                                 fontFamily = FontFamily.Monospace,
                                 color = theme.textMuted,
-                                modifier = Modifier.clickable { searchQuery = "" }
+                                modifier = Modifier.clickable(role = Role.Button) { searchQuery = "" }
                             )
                         }
                     } else null,
@@ -221,7 +222,7 @@ fun FilePickerDialog(
                         else -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(8.dp),
+                                contentPadding = PaddingValues(Spacing.md),
                                 verticalArrangement = Arrangement.spacedBy(Spacing.xxs)
                             ) {
                                 if (currentPath.isNotBlank()) {
@@ -229,7 +230,7 @@ fun FilePickerDialog(
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .clickable(onClick = onNavigateUp)
+                                                .clickable(onClick = onNavigateUp, role = Role.Button)
                                                 .padding(Spacing.sm),
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
@@ -297,7 +298,7 @@ private fun PickerBreadcrumb(
             style = MaterialTheme.typography.labelMedium,
             color = theme.accent,
             fontFamily = FontFamily.Monospace,
-            modifier = Modifier.clickable { onNavigateTo("") }
+            modifier = Modifier.clickable(role = Role.Button) { onNavigateTo("") }
         )
         
         var currentPath = ""
@@ -318,7 +319,7 @@ private fun PickerBreadcrumb(
                 color = if (index == parts.lastIndex) theme.accent else theme.text,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = if (index == parts.lastIndex) FontWeight.Bold else FontWeight.Normal,
-                modifier = Modifier.clickable { onNavigateTo(pathToNavigate) },
+                modifier = Modifier.clickable(role = Role.Button) { onNavigateTo(pathToNavigate) },
                 maxLines = 1
             )
         }
@@ -343,8 +344,8 @@ private fun SelectedFilesChips(
             Row(
                 modifier = Modifier
                     .background(theme.backgroundElement)
-                    .border(1.dp, theme.border, RectangleShape)
-                    .clickable { onRemove(file.path) }
+                    .border(Sizing.strokeMd, theme.border, RectangleShape)
+                    .clickable(role = Role.Button) { onRemove(file.path) }
                     .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
@@ -384,7 +385,7 @@ private fun PickerFileItem(
                 if (isSelected && !file.isDirectory) theme.accent.copy(alpha = 0.1f)
                 else Color.Transparent
             )
-            .clickable(onClick = onClick)
+            .clickable(onClick = onClick, role = Role.Button)
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.sm)

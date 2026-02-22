@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.Permission
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
+import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.TuiCodeFontSize
 
@@ -67,7 +68,7 @@ fun InlinePermissionPrompt(
                 onClick = onReject,
                 modifier = Modifier
                     .weight(1f)
-                    .height(32.dp),
+                    .height(Sizing.buttonHeightSm),
                 shape = RectangleShape,
                 contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = Spacing.none),
                 colors = ButtonDefaults.outlinedButtonColors(
@@ -84,7 +85,7 @@ fun InlinePermissionPrompt(
                 onClick = onAlways,
                 modifier = Modifier
                     .weight(1f)
-                    .height(32.dp),
+                    .height(Sizing.buttonHeightSm),
                 shape = RectangleShape,
                 contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = Spacing.none)
             ) {
@@ -98,7 +99,7 @@ fun InlinePermissionPrompt(
                 onClick = onAllow,
                 modifier = Modifier
                     .weight(1f)
-                    .height(32.dp),
+                    .height(Sizing.buttonHeightSm),
                 shape = RectangleShape,
                 contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = Spacing.none),
                 colors = ButtonDefaults.buttonColors(

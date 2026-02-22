@@ -24,6 +24,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -81,7 +82,7 @@ fun FileAttachmentBar(
                     text = "+",
                     color = theme.accent,
                     fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.clickable(onClick = onAddAttachment)
+                    modifier = Modifier.clickable(onClick = onAddAttachment, role = Role.Button)
                 )
             }
         }
@@ -98,7 +99,7 @@ private fun AttachmentChip(
     Surface(
         shape = RectangleShape,
         color = theme.accent.copy(alpha = 0.1f),
-        modifier = Modifier.border(1.dp, theme.border, RectangleShape)
+        modifier = Modifier.border(Sizing.strokeMd, theme.border, RectangleShape)
     ) {
         Row(
             modifier = Modifier.padding(start = Spacing.md, end = Spacing.xs, top = Spacing.xs, bottom = Spacing.xs),
@@ -118,7 +119,7 @@ private fun AttachmentChip(
                 color = theme.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 120.dp)
+                modifier = Modifier.widthIn(max = Sizing.panelWidthMd)
             )
             
             Text(
@@ -132,7 +133,7 @@ private fun AttachmentChip(
                 text = "×",
                 color = theme.textMuted,
                 fontFamily = FontFamily.Monospace,
-                modifier = Modifier.clickable(onClick = onRemove)
+                modifier = Modifier.clickable(onClick = onRemove, role = Role.Button)
             )
         }
     }

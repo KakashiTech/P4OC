@@ -20,6 +20,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -289,13 +290,13 @@ fun ContextUsageBar(
                 usage = usage,
                 percentage = usage.usedTokens.toFloat() / usage.maxTokens.toFloat(),
                 color = getContextColor(usage),
-                modifier = Modifier.clickable { expanded = false }
+                modifier = Modifier.clickable(role = Role.Button) { expanded = false }
             )
         } else {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { expanded = true }
+                    .clickable(role = Role.Button) { expanded = true }
                     .padding(horizontal = Spacing.lg, vertical = Spacing.md),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md)

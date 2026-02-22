@@ -19,7 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -115,8 +117,8 @@ fun ChatInputBar(
                                 shape = RectangleShape,
                                 color = theme.accent.copy(alpha = 0.1f),
                                 modifier = Modifier
-                                    .height(32.dp)
-                                    .border(1.dp, theme.border, RectangleShape)
+                                    .height(Sizing.buttonHeightSm)
+                                    .border(Sizing.strokeMd, theme.border, RectangleShape)
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = Spacing.mdLg),
@@ -130,13 +132,13 @@ fun ChatInputBar(
                                         color = theme.text,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.widthIn(max = 120.dp)
+                                        modifier = Modifier.widthIn(max = Sizing.panelWidthMd)
                                     )
                                     Text(
                                         text = "×",
                                         color = theme.textMuted,
                                         fontFamily = FontFamily.Monospace,
-                                        modifier = Modifier.clickable { onRemoveAttachment(file.path) }
+                                        modifier = Modifier.clickable(role = Role.Button) { onRemoveAttachment(file.path) }
                                     )
                                 }
                             }
@@ -167,9 +169,9 @@ fun ChatInputBar(
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .heightIn(min = 40.dp)
+                            .heightIn(min = Sizing.textFieldHeightSm)
                             .border(
-                                width = 1.dp,
+                                width = Sizing.strokeMd,
                                 color = theme.border,
                                 shape = RectangleShape
                             )
@@ -193,7 +195,8 @@ fun ChatInputBar(
                             onValueChange = onValueChange,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .focusRequester(focusRequester),
+                                .focusRequester(focusRequester)
+                                .testTag("chat_input"),
                             enabled = true,  // Always enabled to keep keyboard open
                             textStyle = TextStyle(
                                 fontFamily = FontFamily.Monospace,
@@ -230,7 +233,7 @@ fun ChatInputBar(
                                 focusRequester.requestFocus()
                             },
                             enabled = canSend,
-                            modifier = Modifier.size(Sizing.iconButtonMd)
+                            modifier = Modifier.size(Sizing.iconButtonMd).testTag("send_button")
                         ) {
                             if (isLoading) {
                                 TuiLoadingIndicator()

@@ -60,7 +60,7 @@ fun PermissionDialogEnhanced(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .fillMaxHeight(0.65f)
-                .border(1.dp, theme.border, RectangleShape),
+                .border(Sizing.strokeMd, theme.border, RectangleShape),
             shape = RectangleShape,
             color = theme.background
         ) {
@@ -132,7 +132,7 @@ fun PermissionDialogEnhanced(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(Spacing.xl),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md, Alignment.End)
                 ) {
                     OutlinedButton(
                         onClick = onDeny,
@@ -175,7 +175,7 @@ private fun PermissionTypeCard(type: String) {
     Surface(
         color = getPermissionColor(type).copy(alpha = 0.1f),
         shape = RectangleShape,
-        modifier = Modifier.border(1.dp, getPermissionColor(type).copy(alpha = 0.3f), RectangleShape)
+        modifier = Modifier.border(Sizing.strokeMd, getPermissionColor(type).copy(alpha = 0.3f), RectangleShape)
     ) {
         Row(
             modifier = Modifier
@@ -244,7 +244,7 @@ private fun CommandCard(command: String) {
     Surface(
         color = theme.warning.copy(alpha = 0.1f),
         shape = RectangleShape,
-        modifier = Modifier.border(1.dp, theme.warning.copy(alpha = 0.3f), RectangleShape)
+        modifier = Modifier.border(Sizing.strokeMd, theme.warning.copy(alpha = 0.3f), RectangleShape)
     ) {
         Column(
             modifier = Modifier

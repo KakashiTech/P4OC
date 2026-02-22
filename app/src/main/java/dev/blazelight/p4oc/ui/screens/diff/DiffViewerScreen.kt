@@ -239,7 +239,7 @@ private fun UnifiedDiffView(
                                     else -> Color.Transparent
                                 }
                             )
-                            .padding(vertical = 1.dp)
+                            .padding(vertical = Spacing.hairline)
                     ) {
                         Text(
                             text = (line.oldLineNumber?.toString() ?: "").padStart(4),
@@ -248,7 +248,7 @@ private fun UnifiedDiffView(
                                 fontSize = TuiCodeFontSize.md
                             ),
                             color = theme.textMuted,
-                            modifier = Modifier.width(40.dp)
+                            modifier = Modifier.width(Sizing.diffGutterWidth)
                         )
                         Text(
                             text = (line.newLineNumber?.toString() ?: "").padStart(4),
@@ -257,7 +257,7 @@ private fun UnifiedDiffView(
                                 fontSize = TuiCodeFontSize.md
                             ),
                             color = theme.textMuted,
-                            modifier = Modifier.width(40.dp)
+                            modifier = Modifier.width(Sizing.diffGutterWidth)
                         )
                         Text(
                             text = buildAnnotatedString {
@@ -410,7 +410,7 @@ private fun SideBySideDiffView(
                                     else -> Color.Transparent
                                 }
                             )
-                            .padding(vertical = 1.dp)
+                            .padding(vertical = Spacing.hairline)
                     ) {
                         Text(
                             text = (line.leftLineNum?.toString() ?: "").padStart(4),
@@ -419,7 +419,7 @@ private fun SideBySideDiffView(
                                 fontSize = TuiCodeFontSize.md
                             ),
                             color = theme.textMuted,
-                            modifier = Modifier.width(40.dp)
+                            modifier = Modifier.width(Sizing.diffGutterWidth)
                         )
                         Text(
                             text = line.leftContent ?: "",
@@ -435,7 +435,7 @@ private fun SideBySideDiffView(
 
                     VerticalDivider(
                         modifier = Modifier.fillMaxHeight(),
-                        thickness = 1.dp,
+                        thickness = Sizing.strokeMd,
                         color = theme.border
                     )
 
@@ -449,7 +449,7 @@ private fun SideBySideDiffView(
                                     else -> Color.Transparent
                                 }
                             )
-                            .padding(vertical = 1.dp)
+                            .padding(vertical = Spacing.hairline)
                     ) {
                         Text(
                             text = (line.rightLineNum?.toString() ?: "").padStart(4),
@@ -458,7 +458,7 @@ private fun SideBySideDiffView(
                                 fontSize = TuiCodeFontSize.md
                             ),
                             color = theme.textMuted,
-                            modifier = Modifier.width(40.dp)
+                            modifier = Modifier.width(Sizing.diffGutterWidth)
                         )
                         Text(
                             text = line.rightContent ?: "",

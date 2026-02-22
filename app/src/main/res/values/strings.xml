@@ -458,4 +458,11 @@
     <string name="cd_context_memory">Context memory usage</string>
     <string name="cd_token_stat">Token statistic</string>
     <string name="cd_all_complete">All tasks complete</string>
+    <string name="cd_open_sub_agent">Open sub-agent</string>
+    <string name="cd_toggle_password">Toggle password visibility</string>
+    <string name="cd_remove_server">Remove server</string>
+    <string name="cd_expand_collapse">Expand or collapse</string>
+    <string name="cd_tab_icon">Tab icon</string>
+    <string name="cd_remove_attachment">Remove attachment</string>
+    <string name="cd_custom_answer">Type custom answer</string>
 </resources>

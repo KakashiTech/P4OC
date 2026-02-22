@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,7 +70,7 @@ fun SlashCommandsPopup(
                 .widthIn(min = 280.dp, max = 400.dp)
                 .heightIn(max = 300.dp)
                 .padding(horizontal = Spacing.md, vertical = Spacing.xs)
-                .border(1.dp, theme.border, RectangleShape),
+                .border(Sizing.strokeMd, theme.border, RectangleShape),
             shape = RectangleShape,
             color = theme.background,
             shadowElevation = 8.dp
@@ -110,7 +111,7 @@ private fun SlashCommandItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(onClick = onClick, role = Role.Button)
             .padding(horizontal = Spacing.lg, vertical = Spacing.mdLg),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.md)

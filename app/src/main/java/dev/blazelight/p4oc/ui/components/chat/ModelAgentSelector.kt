@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -75,7 +76,7 @@ fun ModelAgentSelectorBar(
     }
 
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().testTag("agent_selector"),
         color = theme.backgroundElement
     ) {
         Row(
@@ -97,8 +98,8 @@ fun ModelAgentSelectorBar(
                     },
                     shape = androidx.compose.ui.graphics.RectangleShape,
                     color = agentColor.copy(alpha = 0.1f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, agentColor.copy(alpha = 0.4f)),
-                    modifier = Modifier.height(36.dp)
+                    border = androidx.compose.foundation.BorderStroke(Sizing.strokeMd, agentColor.copy(alpha = 0.4f)),
+                    modifier = Modifier.height(Sizing.buttonHeightMd)
                 ) {
                     Box(
                         modifier = Modifier.padding(horizontal = Spacing.lg),
@@ -126,8 +127,8 @@ fun ModelAgentSelectorBar(
                     onClick = { showModelPicker = true },
                     shape = androidx.compose.ui.graphics.RectangleShape,
                     color = theme.background,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, theme.border),
-                    modifier = Modifier.height(36.dp)
+                    border = androidx.compose.foundation.BorderStroke(Sizing.strokeMd, theme.border),
+                    modifier = Modifier.height(Sizing.buttonHeightMd)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = Spacing.lg),
@@ -141,7 +142,7 @@ fun ModelAgentSelectorBar(
                             color = theme.text,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.widthIn(max = 180.dp)
+                            modifier = Modifier.widthIn(max = Sizing.panelWidthLg)
                         )
                         Text(
                             text = "▾",
@@ -230,7 +231,7 @@ fun ModelPickerDialog(
                 .fillMaxHeight(0.85f),
             shape = MaterialTheme.shapes.medium,
             color = theme.background,
-            border = androidx.compose.foundation.BorderStroke(1.dp, theme.border)
+            border = androidx.compose.foundation.BorderStroke(Sizing.strokeMd, theme.border)
         ) {
             Column {
                 // TUI-style header
@@ -339,7 +340,7 @@ fun ModelPickerDialog(
                     }
                 }
 
-                HorizontalDivider(color = theme.border, thickness = 0.5.dp)
+                HorizontalDivider(color = theme.border, thickness = Sizing.dividerThickness)
 
                 // Model list
                 LazyColumn(
@@ -438,7 +439,7 @@ private fun TuiFilterTab(
         color = if (selected) theme.accent.copy(alpha = 0.15f) else Color.Transparent,
         shape = MaterialTheme.shapes.extraSmall,
         border = if (selected) {
-            androidx.compose.foundation.BorderStroke(1.dp, theme.accent.copy(alpha = 0.5f))
+            androidx.compose.foundation.BorderStroke(Sizing.strokeMd, theme.accent.copy(alpha = 0.5f))
         } else null
     ) {
         Text(

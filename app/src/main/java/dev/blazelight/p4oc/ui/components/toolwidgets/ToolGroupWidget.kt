@@ -25,6 +25,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.domain.model.Part
 import dev.blazelight.p4oc.domain.model.ToolState
@@ -150,7 +151,7 @@ fun ToolGroupWidget(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(theme.backgroundPanel.copy(alpha = 0.5f))
-                    .clickable { currentState = currentState.next() }
+                    .clickable(role = Role.Button) { currentState = currentState.next() }
                     .padding(horizontal = Spacing.sm, vertical = Spacing.xxs),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -233,7 +234,7 @@ private fun PendingApprovalButtonsInline(
             onClick = onDeny,
             modifier = Modifier
                 .weight(1f)
-                .height(28.dp),
+                .height(Sizing.chipHeight),
             contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.none),
             shape = RectangleShape
         ) {
@@ -243,7 +244,7 @@ private fun PendingApprovalButtonsInline(
             onClick = onApprove,
             modifier = Modifier
                 .weight(1f)
-                .height(28.dp),
+                .height(Sizing.chipHeight),
             contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.none),
             shape = RectangleShape
         ) {

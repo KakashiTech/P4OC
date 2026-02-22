@@ -37,6 +37,10 @@ object Sizing {
     val listItemHeightMd: Dp = 52.dp  // Two lines
     val listItemHeightLg: Dp = 64.dp  // Three lines / with thumbnail
     
+    // Status indicators
+    val indicatorDot: Dp = 6.dp
+    val indicatorDotActive: Dp = 8.dp
+
     // Avatars / Badges
     val avatarXs: Dp = 20.dp
     val avatarSm: Dp = 24.dp
@@ -58,6 +62,12 @@ object Sizing {
     val iconButtonMd: Dp = 40.dp
     val iconButtonLg: Dp = 44.dp
     
+    // Fixed-width panels
+    val diffGutterWidth: Dp = 40.dp
+    val panelWidthSm: Dp = 80.dp
+    val panelWidthMd: Dp = 120.dp
+    val panelWidthLg: Dp = 180.dp
+
     // Corner radius (we use 0 for TUI, but keep tokens for potential future use)
     val radiusNone: Dp = 0.dp
     val radiusSm: Dp = 2.dp

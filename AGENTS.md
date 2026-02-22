@@ -19,7 +19,7 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 # Agent instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+This project uses **tk** (ticket) for issue tracking. Run `tk` to get started.
 
 ## Build verification
 
@@ -35,7 +35,7 @@ export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
 | Domain models | `app/src/main/java/dev/blazelight/p4oc/domain/model/` |
 | API interface | `app/src/main/java/dev/blazelight/p4oc/core/network/OpenCodeApi.kt` |
 | SSE events | `app/src/main/java/dev/blazelight/p4oc/core/network/OpenCodeEventSource.kt` |
-| DTOs | `app/src/main/java/dev/blazelight/p4oc/data/remote/dto/Dtos.kt` |
+| DTOs | `app/src/main/java/dev/blazelight/p4oc/data/remote/dto/` |
 | Mappers | `app/src/main/java/dev/blazelight/p4oc/data/remote/mapper/Mappers.kt` |
 | Chat UI | `app/src/main/java/dev/blazelight/p4oc/ui/screens/chat/` |
 | Terminal | `app/src/main/java/dev/blazelight/p4oc/ui/screens/terminal/` + `terminal/` |
@@ -44,8 +44,18 @@ export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
 ## Code conventions
 
 - Use `LocalOpenCodeTheme.current` for colors, not `MaterialTheme.colorScheme`
+- `MaterialTheme.typography` IS the custom typography and is fine to use
 - Use `Spacing.*` and `Sizing.*` tokens, not hardcoded `.dp` values
+  - `Spacing.hairline` (1dp) — fine pixel-perfect TUI borders, tiny padding
+  - `Sizing.indicatorDot` / `indicatorDotActive` — status dot sizes
+  - `Sizing.diffGutterWidth` — line number gutters in diff views
+  - `Sizing.panelWidthSm/Md/Lg` — fixed-width columns (80/120/180dp)
+  - `Sizing.strokeMd` / `strokeThin` / `dividerThickness` — border/divider widths
+  - `Sizing.buttonHeightSm/Md/Lg` — button heights (32/36/44dp)
 - Use `TuiShapes` for shapes (all 0dp corners)
+- Add `role = Role.Button` / `Role.Tab` to actionable `.clickable` modifiers
+- Add meaningful `contentDescription` to functional icons (not decorative ones)
+- Add `Modifier.testTag(...)` to key interactive elements for UI testing
 - Package: `dev.blazelight.p4oc`
 
 ## Quick reference

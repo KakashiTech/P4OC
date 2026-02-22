@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.domain.model.SessionConnectionState
@@ -61,7 +62,7 @@ fun TabBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(28.dp)
+                .height(Sizing.chipHeight)
                 .padding(horizontal = Spacing.xs),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -147,7 +148,7 @@ private fun TabIndicator(
     Surface(
         modifier = modifier
             .height(22.dp)
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick, role = Role.Tab),
         shape = RectangleShape,
         color = backgroundColor
     ) {
@@ -160,14 +161,14 @@ private fun TabIndicator(
             if (indicatorColor != null) {
                 Box(
                     modifier = Modifier
-                        .size(if (isActive) 8.dp else 6.dp)
+                        .size(if (isActive) Sizing.indicatorDotActive else Sizing.indicatorDot)
                         .alpha(if (shouldPulse) pulseAlpha else 1f),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.Circle,
                         contentDescription = connectionState?.name,
-                        modifier = Modifier.size(if (isActive) 8.dp else 6.dp),
+                        modifier = Modifier.size(if (isActive) Sizing.indicatorDotActive else Sizing.indicatorDot),
                         tint = indicatorColor
                     )
                     
@@ -187,8 +188,8 @@ private fun TabIndicator(
                 // Icon for non-chat tabs
                 Icon(
                     imageVector = icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(if (isActive) Sizing.iconXs else Sizing.iconXs),
+                    contentDescription = title,
+                    modifier = Modifier.size(Sizing.iconXs),
                     tint = if (isActive) theme.text else theme.textMuted
                 )
             }
@@ -204,7 +205,7 @@ private fun TabIndicator(
                 },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 80.dp)
+                modifier = Modifier.widthIn(max = Sizing.panelWidthSm)
             )
             
             // Close button
@@ -215,7 +216,7 @@ private fun TabIndicator(
                     contentDescription = "Close tab",
                     modifier = Modifier
                         .size(Sizing.iconXs)
-                        .clickable(onClick = onClose),
+                        .clickable(onClick = onClose, role = Role.Button),
                     tint = theme.textMuted
                 )
             }

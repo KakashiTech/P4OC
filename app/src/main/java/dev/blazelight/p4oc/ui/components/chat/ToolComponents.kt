@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -237,7 +238,7 @@ fun DiffPreview(
                                     else -> Color.Transparent
                                 }
                             )
-                            .padding(horizontal = Spacing.md, vertical = 1.dp)
+                            .padding(horizontal = Spacing.md, vertical = Spacing.hairline)
                     ) {
                         Text(
                             text = line.lineNumber?.toString() ?: "",
@@ -246,7 +247,7 @@ fun DiffPreview(
                                 fontSize = TuiCodeFontSize.sm
                             ),
                             color = theme.textMuted,
-                            modifier = Modifier.width(32.dp)
+                            modifier = Modifier.width(Sizing.diffGutterWidth)
                         )
                         
                         Text(
@@ -317,7 +318,7 @@ fun ToolOutputDialog(
                 .fillMaxHeight(0.85f),
             shape = RectangleShape,
             color = theme.background,
-            border = BorderStroke(1.dp, theme.border)
+                border = BorderStroke(Sizing.strokeMd, theme.border)
         ) {
             Column {
                 // TUI Header
@@ -452,7 +453,7 @@ fun EnhancedToolPart(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded },
+                    .clickable(role = Role.Button) { isExpanded = !isExpanded },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md)
             ) {

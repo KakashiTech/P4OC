@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.Part
@@ -57,7 +58,7 @@ fun BashWidgetExpanded(
     
     Column(
         modifier = modifier
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
             .background(theme.backgroundPanel.copy(alpha = 0.5f))
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
@@ -154,7 +155,7 @@ fun ReadWidgetExpanded(
     
     Column(
         modifier = modifier
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
             .background(theme.backgroundPanel.copy(alpha = 0.5f))
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
@@ -250,7 +251,7 @@ fun EditWidgetExpanded(
     
     Column(
         modifier = modifier
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
             .background(theme.backgroundPanel.copy(alpha = 0.5f))
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
@@ -357,7 +358,7 @@ fun DefaultWidgetExpanded(
     
     Column(
         modifier = modifier
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
             .background(theme.backgroundPanel.copy(alpha = 0.5f))
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
@@ -467,7 +468,7 @@ fun TaskWidgetExpanded(
     
     Column(
         modifier = modifier
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
             .background(theme.backgroundPanel.copy(alpha = 0.5f))
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
@@ -546,13 +547,13 @@ fun TaskWidgetExpanded(
                 onClick = { onOpenSubSession(sessionId) },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(32.dp),
+                    .height(Sizing.buttonHeightSm),
                 shape = RectangleShape,
                 contentPadding = PaddingValues(horizontal = Spacing.md)
             ) {
                 Icon(
                     Icons.AutoMirrored.Filled.OpenInNew,
-                    contentDescription = null,
+                    contentDescription = stringResource(R.string.cd_open_sub_agent),
                     modifier = Modifier.size(Sizing.iconSm)
                 )
                 Spacer(Modifier.width(Spacing.sm))
@@ -585,7 +586,7 @@ private fun PendingApprovalButtons(
             onClick = onDeny,
             modifier = Modifier
                 .weight(1f)
-                .height(32.dp),
+                .height(Sizing.buttonHeightSm),
             shape = RectangleShape,
             contentPadding = PaddingValues(horizontal = Spacing.md)
         ) {
@@ -595,7 +596,7 @@ private fun PendingApprovalButtons(
             onClick = onApprove,
             modifier = Modifier
                 .weight(1f)
-                .height(32.dp),
+                .height(Sizing.buttonHeightSm),
             shape = RectangleShape,
             contentPadding = PaddingValues(horizontal = Spacing.md)
         ) {

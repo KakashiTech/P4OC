@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -66,7 +67,7 @@ fun MessageBranchIndicator(
     
     Row(
         modifier = modifier
-            .clickable(onClick = onShowBranches)
+            .clickable(onClick = onShowBranches, role = Role.Button)
             .padding(horizontal = Spacing.md, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
@@ -151,7 +152,7 @@ fun BranchSelectorDialog(
                 .fillMaxHeight(0.7f),
             shape = RectangleShape,
             color = theme.background,
-            border = BorderStroke(1.dp, theme.border)
+            border = BorderStroke(Sizing.strokeMd, theme.border)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // TUI Header
@@ -194,7 +195,7 @@ fun BranchSelectorDialog(
                         .padding(Spacing.md),
                     color = theme.backgroundElement,
                     shape = RectangleShape,
-                    border = BorderStroke(1.dp, theme.borderSubtle)
+                    border = BorderStroke(Sizing.strokeMd, theme.borderSubtle)
                 ) {
                     Column(modifier = Modifier.padding(Spacing.md)) {
                         Text(

@@ -49,7 +49,7 @@ fun InlineQuestionCard(
         modifier = modifier
             .fillMaxWidth()
             .background(theme.backgroundPanel)
-            .border(1.dp, theme.border, RectangleShape)
+            .border(Sizing.strokeMd, theme.border, RectangleShape)
             .padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md)
     ) {
@@ -95,7 +95,7 @@ fun InlineQuestionCard(
                 color = theme.textMuted
             )
             
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(Spacing.xs))
             
             // Options
             InlineQuestionOptions(
@@ -107,7 +107,7 @@ fun InlineQuestionCard(
             )
         }
         
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(Spacing.xs))
         
         // Action buttons
         Row(
@@ -217,12 +217,12 @@ private fun InlineQuestionOptions(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { 
+                    .clickable(role = Role.Button) { 
                         showCustomInput = true
                         onSelectionChange(emptyList())
                     }
                     .background(theme.backgroundElement)
-                    .border(1.dp, theme.borderSubtle, RectangleShape)
+                    .border(Sizing.strokeMd, theme.borderSubtle, RectangleShape)
                     .padding(horizontal = Spacing.lg, vertical = Spacing.mdLg),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -256,7 +256,7 @@ private fun InlineOptionItem(
                 role = if (isMultiple) Role.Checkbox else Role.RadioButton
             )
             .background(bgColor)
-            .border(1.dp, borderColor, RectangleShape)
+            .border(Sizing.strokeMd, borderColor, RectangleShape)
             .padding(horizontal = Spacing.lg, vertical = Spacing.mdLg),
             horizontalArrangement = Arrangement.spacedBy(Spacing.mdLg),
             verticalAlignment = Alignment.CenterVertically

@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 data class TuiSpacing(
     // Base units
     val none: Dp = 0.dp,
+    val hairline: Dp = 1.dp,
     val xxs: Dp = 2.dp,
     val xs: Dp = 4.dp,
     val sm: Dp = 6.dp,
@@ -118,6 +119,7 @@ object Spacing {
     
     // Direct accessors for common values (non-composable contexts)
     val none = TuiDefaults.none
+    val hairline = TuiDefaults.hairline
     val xxs = TuiDefaults.xxs
     val xs = TuiDefaults.xs
     val sm = TuiDefaults.sm
