@@ -3,7 +3,6 @@ package dev.blazelight.p4oc.ui.screens.chat
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -144,7 +143,12 @@ fun ChatScreen(
     LaunchedEffect(messageCount, lastMessagePartCount, isBusy) {
         if (messages.isNotEmpty()) {
             if (!userScrolledAway) {
-                listState.scrollToItem(0)  // In reversed layout, 0 is bottom
+                // Smooth scroll for small distances, instant for large jumps
+                if (listState.firstVisibleItemIndex < 3) {
+                    listState.animateScrollToItem(0)  // Smooth when close to bottom
+                } else {
+                    listState.scrollToItem(0)  // Instant for large jumps
+                }
             } else {
                 hasNewContentWhileAway = true
             }
@@ -231,48 +235,46 @@ fun ChatScreen(
                     groupMessagesIntoBlocks(messages)
                 }
                 
-                SelectionContainer {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize().testTag("message_list"),
-                        contentPadding = PaddingValues(vertical = Spacing.xxs, horizontal = Spacing.xs),
-                        verticalArrangement = Arrangement.spacedBy(Spacing.hairline),
-                        reverseLayout = true
-                    ) {
-                        // Inline question card at the bottom (top in reversed layout)
-                        pendingQuestion?.let { questionRequest ->
-                            item(key = "pending_question_${questionRequest.id}") {
-                                InlineQuestionCard(
-                                    questionData = dev.blazelight.p4oc.domain.model.QuestionData(questionRequest.questions),
-                                    onDismiss = viewModel::dismissQuestion,
-                                    onSubmit = { answers ->
-                                        viewModel.respondToQuestion(questionRequest.id, answers)
-                                    },
-                                    modifier = Modifier.padding(vertical = Spacing.xs)
-                                )
-                            }
-                        }
-                        
-                        // All messages - stable keys ensure only changed items recompose
-                        items(
-                            items = messageBlocks.asReversed(),
-                            key = { block -> 
-                                when (block) {
-                                    is MessageBlock.UserBlock -> block.message.message.id
-                                    is MessageBlock.AssistantBlock -> block.messages.first().message.id
-                                }
-                            }
-                        ) { block ->
-                            MessageBlockView(
-                                block = block,
-                                onToolApprove = { viewModel.respondToPermission(it, "once") },
-                                onToolDeny = { viewModel.respondToPermission(it, "reject") },
-                                onToolAlways = { viewModel.respondToPermission(it, "always") },
-                                onOpenSubSession = onOpenSubSession,
-                                defaultToolWidgetState = defaultToolWidgetState,
-                                pendingPermissionsByCallId = pendingPermissionsByCallId
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().testTag("message_list"),
+                    contentPadding = PaddingValues(vertical = Spacing.xxs, horizontal = Spacing.xs),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.hairline),
+                    reverseLayout = true
+                ) {
+                    // Inline question card at the bottom (top in reversed layout)
+                    pendingQuestion?.let { questionRequest ->
+                        item(key = "pending_question_${questionRequest.id}") {
+                            InlineQuestionCard(
+                                questionData = dev.blazelight.p4oc.domain.model.QuestionData(questionRequest.questions),
+                                onDismiss = viewModel::dismissQuestion,
+                                onSubmit = { answers ->
+                                    viewModel.respondToQuestion(questionRequest.id, answers)
+                                },
+                                modifier = Modifier.padding(vertical = Spacing.xs)
                             )
                         }
+                    }
+                    
+                    // All messages - stable keys ensure only changed items recompose
+                    items(
+                        items = messageBlocks.asReversed(),
+                        key = { block -> 
+                            when (block) {
+                                is MessageBlock.UserBlock -> block.message.message.id
+                                is MessageBlock.AssistantBlock -> block.messages.first().message.id
+                            }
+                        }
+                    ) { block ->
+                        MessageBlockView(
+                            block = block,
+                            onToolApprove = { viewModel.respondToPermission(it, "once") },
+                            onToolDeny = { viewModel.respondToPermission(it, "reject") },
+                            onToolAlways = { viewModel.respondToPermission(it, "always") },
+                            onOpenSubSession = onOpenSubSession,
+                            defaultToolWidgetState = defaultToolWidgetState,
+                            pendingPermissionsByCallId = pendingPermissionsByCallId
+                        )
                     }
                 }
             }

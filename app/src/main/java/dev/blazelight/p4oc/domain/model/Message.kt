@@ -1,5 +1,6 @@
 package dev.blazelight.p4oc.domain.model
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -75,6 +76,7 @@ data class ApiError(
     val responseBody: String? = null
 )
 
+@Immutable
 data class MessageWithParts(
     val message: Message,
     val parts: List<Part>

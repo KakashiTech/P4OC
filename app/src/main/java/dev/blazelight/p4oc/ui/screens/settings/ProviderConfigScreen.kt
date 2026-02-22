@@ -124,7 +124,7 @@ fun ProviderConfigScreen(
                         )
                     }
 
-                    items(connectedProviders) { provider ->
+                    items(connectedProviders, key = { it.id }) { provider ->
                         ProviderCard(
                             provider = provider,
                             isExpanded = uiState.selectedProviderId == provider.id,
@@ -146,7 +146,7 @@ fun ProviderConfigScreen(
                             )
                         }
 
-                        items(disconnectedProviders) { provider ->
+                        items(disconnectedProviders, key = { it.id }) { provider ->
                             DisabledProviderCard(provider = provider)
                         }
                     }

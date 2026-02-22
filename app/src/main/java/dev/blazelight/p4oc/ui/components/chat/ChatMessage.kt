@@ -2,6 +2,7 @@ package dev.blazelight.p4oc.ui.components.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -86,10 +87,12 @@ private fun UserMessage(messageWithParts: MessageWithParts) {
                 .background(theme.primary.copy(alpha = 0.12f))
                 .padding(horizontal = Spacing.mdLg, vertical = Spacing.md)
         ) {
-            StreamingMarkdown(
-                text = text,
-                modifier = Modifier.fillMaxWidth()
-            )
+            SelectionContainer {
+                StreamingMarkdown(
+                    text = text,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 }
@@ -194,11 +197,13 @@ private fun TextPart(part: Part.Text) {
         horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
         verticalAlignment = Alignment.Top
     ) {
-        StreamingMarkdown(
-            text = part.text,
-            isStreaming = part.isStreaming,
-            modifier = Modifier.weight(1f)
-        )
+        SelectionContainer(modifier = Modifier.weight(1f)) {
+            StreamingMarkdown(
+                text = part.text,
+                isStreaming = part.isStreaming,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
         if (part.isStreaming) {
             TuiLoadingIndicator()
         }
@@ -271,10 +276,12 @@ private fun ReasoningPart(part: Part.Reasoning) {
                     modifier = Modifier.padding(vertical = Spacing.xs),
                     color = theme.border
                 )
-                TertiaryStreamingMarkdown(
-                    text = part.text,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                SelectionContainer {
+                    TertiaryStreamingMarkdown(
+                        text = part.text,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         }
     }
