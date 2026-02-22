@@ -155,6 +155,13 @@ class MessageStore(
         )
     }
 
+    /**
+     * Snapshot of current messages for testing — avoids reflection.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun currentMessagesSnapshot(): List<MessageWithParts> =
+        _messagesMap.values.sortedBy { it.message.createdAt }
+
     private companion object {
         const val TAG = "MessageStore"
     }
