@@ -15,6 +15,9 @@ import dev.blazelight.p4oc.domain.model.MessageWithParts
 import dev.blazelight.p4oc.domain.model.OpenCodeEvent
 import dev.blazelight.p4oc.domain.model.Part
 import dev.blazelight.p4oc.domain.model.Permission
+import dev.blazelight.p4oc.domain.model.Question
+import dev.blazelight.p4oc.domain.model.QuestionRequest
+import dev.blazelight.p4oc.domain.model.Session
 import dev.blazelight.p4oc.domain.model.SessionStatus
 import dev.blazelight.p4oc.domain.model.TokenUsage
 import dev.blazelight.p4oc.ui.navigation.Screen
@@ -132,6 +135,52 @@ class ChatViewModelTest {
         flushMessages()
 
         assertTrue(vm.currentMessages().isEmpty())
+        assertNull(vm.dialogManager.pendingPermission.value)
+    }
+
+    @Test
+    fun handleEvent_routesSubagentPermission_afterSessionCreated() = runTest {
+        val vm = createViewModel()
+
+        // Register a child session via SessionCreated
+        val childSession = testSession(id = "child-1", parentID = "session-1")
+        events.emit(OpenCodeEvent.SessionCreated(childSession))
+        advanceUntilIdle()
+
+        // Emit permission from the child session
+        val perm = permission(id = "perm-child", sessionId = "child-1")
+        events.emit(OpenCodeEvent.PermissionRequested(perm))
+        advanceUntilIdle()
+
+        assertEquals(perm, vm.dialogManager.pendingPermission.value)
+    }
+
+    @Test
+    fun handleEvent_routesSubagentQuestion_afterSessionCreated() = runTest {
+        val vm = createViewModel()
+
+        // Register a child session via SessionCreated
+        val childSession = testSession(id = "child-2", parentID = "session-1")
+        events.emit(OpenCodeEvent.SessionCreated(childSession))
+        advanceUntilIdle()
+
+        // Emit question from the child session
+        val question = questionRequest(id = "q-child", sessionId = "child-2")
+        events.emit(OpenCodeEvent.QuestionAsked(question))
+        advanceUntilIdle()
+
+        assertEquals(question, vm.dialogManager.pendingQuestion.value)
+    }
+
+    @Test
+    fun handleEvent_doesNotRoutePermission_forUnrelatedSession() = runTest {
+        val vm = createViewModel()
+
+        // Emit permission from an unrelated session (not parent, not child)
+        val perm = permission(id = "perm-rando", sessionId = "random-session-999")
+        events.emit(OpenCodeEvent.PermissionRequested(perm))
+        advanceUntilIdle()
+
         assertNull(vm.dialogManager.pendingPermission.value)
     }
 
@@ -285,6 +334,33 @@ class ChatViewModelTest {
             title = "Allow",
             metadata = buildJsonObject { },
             always = emptyList()
+        )
+    }
+
+    private fun testSession(id: String, parentID: String? = null): Session {
+        return Session(
+            id = id,
+            projectID = "project-1",
+            directory = "/test",
+            parentID = parentID,
+            title = "Test Session",
+            version = "1.0",
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+    }
+
+    private fun questionRequest(id: String, sessionId: String): QuestionRequest {
+        return QuestionRequest(
+            id = id,
+            sessionID = sessionId,
+            questions = listOf(
+                Question(
+                    header = "Test",
+                    question = "Do you approve?",
+                    options = emptyList()
+                )
+            )
         )
     }
 }

@@ -104,6 +104,15 @@ class MessageStore(
     }
 
     /**
+     * Thread-safe snapshot of current messages for abort summary building.
+     * Uses mutex to ensure consistency during concurrent SSE part updates.
+     */
+    suspend fun snapshotMessages(): List<MessageWithParts> =
+        messagesMutex.withLock {
+            _messagesMap.values.sortedBy { it.message.createdAt }
+        }
+
+    /**
      * Clear streaming flags on all text parts in the messages map.
      * Called when session becomes idle or is aborted.
      */

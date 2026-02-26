@@ -23,6 +23,7 @@ import dev.blazelight.p4oc.core.network.ConnectionState
 import dev.blazelight.p4oc.domain.model.MessageWithParts
 import dev.blazelight.p4oc.domain.model.Part
 import dev.blazelight.p4oc.domain.model.SessionConnectionState
+import dev.blazelight.p4oc.ui.components.chat.AbortSummaryCard
 import dev.blazelight.p4oc.ui.components.chat.ChatInputBar
 import dev.blazelight.p4oc.ui.components.chat.FilePickerDialog
 import dev.blazelight.p4oc.ui.components.chat.JumpToBottomButton
@@ -251,6 +252,16 @@ fun ChatScreen(
                                 onSubmit = { answers ->
                                     viewModel.respondToQuestion(questionRequest.id, answers)
                                 },
+                                modifier = Modifier.padding(vertical = Spacing.xs)
+                            )
+                        }
+                    }
+
+                    // Abort summary card (shows after user hits Stop)
+                    uiState.abortSummary?.let { summary ->
+                        item(key = "abort_summary_${summary.abortedAt}") {
+                            AbortSummaryCard(
+                                summary = summary,
                                 modifier = Modifier.padding(vertical = Spacing.xs)
                             )
                         }

@@ -3,9 +3,14 @@ package dev.blazelight.p4oc.core.network
 import dev.blazelight.p4oc.BuildConfig
 import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.data.remote.mapper.EventMapper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import okhttp3.Credentials
 import okhttp3.Interceptor
@@ -25,6 +30,9 @@ class ConnectionManager constructor(
     companion object {
         private const val TAG = "ConnectionManager"
     }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var sseForwardingJob: Job? = null
 
     private val _connection = MutableStateFlow<Connection?>(null)
     val connection: StateFlow<Connection?> = _connection.asStateFlow()
@@ -88,7 +96,19 @@ class ConnectionManager constructor(
 
             val connection = Connection(config, api, eventSource)
             _connection.value = connection
-            _connectionState.value = ConnectionState.Connected
+
+            // Forward SSE connection state instead of setting Connected optimistically.
+            // The state will move from Connecting → Connected when SSE onOpen fires.
+            sseForwardingJob?.cancel()
+            sseForwardingJob = scope.launch {
+                eventSource.connectionState.collect { sseState ->
+                    // Only forward if this event source is still the active one
+                    if (_connection.value?.eventSource === eventSource) {
+                        AppLog.d(TAG, "SSE state forwarded: $sseState")
+                        _connectionState.value = sseState
+                    }
+                }
+            }
 
             directoryManager.setOnDirectoryChangedListener {
                 eventSource.reconnect()
@@ -100,6 +120,7 @@ class ConnectionManager constructor(
             Result.success(Unit)
         } catch (e: Exception) {
             AppLog.e(TAG, "Connection failed", e)
+            _connection.value = null
             _connectionState.value = ConnectionState.Error(e.message ?: "Unknown error")
             _authOkHttpClient.value = null
             Result.failure(e)
@@ -108,6 +129,8 @@ class ConnectionManager constructor(
 
     fun disconnect() {
         AppLog.d(TAG, "Disconnecting")
+        sseForwardingJob?.cancel()
+        sseForwardingJob = null
         _connection.value?.disconnect()
         _connection.value = null
         _authOkHttpClient.value = null

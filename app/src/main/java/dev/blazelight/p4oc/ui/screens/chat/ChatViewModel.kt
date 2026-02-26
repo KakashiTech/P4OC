@@ -22,6 +22,8 @@ import dev.blazelight.p4oc.data.remote.mapper.SessionMapper
 import dev.blazelight.p4oc.data.remote.mapper.TodoMapper
 import dev.blazelight.p4oc.domain.model.*
 import dev.blazelight.p4oc.domain.model.SessionConnectionState as TabConnectionState
+import dev.blazelight.p4oc.ui.components.chat.AbortSummary
+import dev.blazelight.p4oc.ui.components.chat.InterruptedTool
 import dev.blazelight.p4oc.ui.components.chat.SelectedFile
 import dev.blazelight.p4oc.ui.navigation.Screen
 import kotlinx.coroutines.flow.*
@@ -44,6 +46,12 @@ class ChatViewModel constructor(
     private val sessionId: String = savedStateHandle.get<String>(Screen.Chat.ARG_SESSION_ID)
         ?: throw IllegalArgumentException("sessionId is required for ChatViewModel")
     private val sessionDirectory: String? = savedStateHandle.get<String>(Screen.Chat.ARG_DIRECTORY)
+
+    // Child session IDs (subagent sessions whose parentID == this sessionId)
+    private val childSessionIds = mutableSetOf<String>()
+
+    private fun isOwnedSession(eventSessionId: String): Boolean =
+        eventSessionId == sessionId || eventSessionId in childSessionIds
 
     // JSON serializer for SavedStateHandle persistence
     private val json = Json { ignoreUnknownKeys = true }
@@ -220,13 +228,18 @@ class ChatViewModel constructor(
                 }
             }
             is OpenCodeEvent.PermissionRequested -> {
-                if (event.permission.sessionID == sessionId) {
+                if (isOwnedSession(event.permission.sessionID)) {
                     dialogManager.enqueuePermission(event.permission)
                 }
             }
             is OpenCodeEvent.QuestionAsked -> {
-                if (event.request.sessionID == sessionId) {
+                if (isOwnedSession(event.request.sessionID)) {
                     dialogManager.enqueueQuestion(event.request)
+                }
+            }
+            is OpenCodeEvent.SessionCreated -> {
+                if (event.session.parentID == sessionId) {
+                    childSessionIds.add(event.session.id)
                 }
             }
             is OpenCodeEvent.SessionStatusChanged -> {
@@ -278,7 +291,7 @@ class ChatViewModel constructor(
                 }
             }
             is OpenCodeEvent.PermissionReplied -> {
-                if (event.sessionID == sessionId) {
+                if (isOwnedSession(event.sessionID)) {
                     dialogManager.clearPermissionByRequestId(event.requestID)
                 }
             }
@@ -295,7 +308,7 @@ class ChatViewModel constructor(
 
         val selectedAgent = modelAgentManager.selectedAgent.value
         val selectedModel = modelAgentManager.selectedModel.value
-        _uiState.update { it.copy(inputText = "", isSending = true) }
+        _uiState.update { it.copy(inputText = "", isSending = true, abortSummary = null) }
         filePickerManager.clearAttachedFiles()
 
         viewModelScope.launch {
@@ -517,11 +530,46 @@ class ChatViewModel constructor(
 
     fun abortSession() {
         viewModelScope.launch {
+            // Snapshot state BEFORE clearing flags
+            val summary = buildAbortSummary()
+
             val api = connectionManager.getApi() ?: return@launch
             safeApiCall { api.abortSession(sessionId, getDirectory()) }
             messageStore.clearStreamingFlags()
-            _uiState.update { it.copy(isBusy = false, isSending = false) }
+            _uiState.update { it.copy(isBusy = false, isSending = false, abortSummary = summary) }
         }
+    }
+
+    private suspend fun buildAbortSummary(): AbortSummary {
+        val snapshot = messageStore.snapshotMessages()
+
+        val runningTools = snapshot
+            .flatMap { it.parts }
+            .filterIsInstance<Part.Tool>()
+            .filter { it.state is ToolState.Running }
+            .map { tool ->
+                val running = tool.state as ToolState.Running
+                InterruptedTool(
+                    toolName = tool.toolName,
+                    context = running.title?.take(40)
+                )
+            }
+
+        val wasStreaming = snapshot
+            .flatMap { it.parts }
+            .any { it is Part.Text && it.isStreaming }
+
+        val lastAssistant = snapshot
+            .map { it.message }
+            .filterIsInstance<Message.Assistant>()
+            .lastOrNull()
+
+        return AbortSummary(
+            interruptedTools = runningTools,
+            wasTextStreaming = wasStreaming,
+            tokens = lastAssistant?.tokens,
+            cost = lastAssistant?.cost
+        )
     }
 }
 
@@ -540,7 +588,8 @@ data class ChatUiState(
     val isLoadingCommands: Boolean = false,
     val todos: List<Todo> = emptyList(),
     val isLoadingTodos: Boolean = false,
-    val queuedMessage: QueuedMessage? = null
+    val queuedMessage: QueuedMessage? = null,
+    val abortSummary: AbortSummary? = null
 )
 
 data class QueuedMessage(

@@ -117,9 +117,15 @@ class DialogQueueManager(
     }
 
     fun clearPermissionByRequestId(requestId: String) {
-        // Find and remove the permission from the map by matching requestID
+        // Clear from inline map
         _pendingPermissionsByCallId.update { map ->
             map.filterValues { it.id != requestId }
+        }
+        // Also clear from modal if it matches
+        if (_pendingPermission.value?.id == requestId) {
+            _pendingPermission.value = null
+            savedStateHandle.remove<String>(KEY_PENDING_PERMISSION)
+            showNextPermission()
         }
     }
 

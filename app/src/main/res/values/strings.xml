@@ -13,6 +13,20 @@
     <string name="server_remote_description">Connect to an OpenCode server running on your network.</string>
     <string name="server_recent_servers">Recent Servers</string>
     
+    <!-- Server Setup Help -->
+    <string name="server_setup_title">Server Setup</string>
+    <string name="server_setup_subtitle">Need help starting a server?</string>
+    <string name="server_setup_step1_title">Install OpenCode</string>
+    <string name="server_setup_step1_cmd">$ npm install -g opencode</string>
+    <string name="server_setup_step2_title">Start the server</string>
+    <string name="server_setup_step2_cmd">$ OPENCODE_SERVER_PASSWORD=&lt;password&gt; \\\n  opencode serve \\\n  --hostname 0.0.0.0 --port 4096</string>
+    <string name="server_setup_step3_title">Connect from this device</string>
+    <string name="server_setup_step3_cmd">Enter http://&lt;your-pc-ip&gt;:4096\nin the URL field above.\nUsername: opencode\nPassword: &lt;your password&gt;</string>
+    <string name="server_setup_tip_label">Tip</string>
+    <string name="server_setup_tip_text">--hostname 0.0.0.0 is required so the server is reachable from your phone, not just localhost. Use your computer\'s local IP (e.g., 192.168.x.x) when connecting.</string>
+    <string name="server_setup_find_ip">$ ip addr    # Linux\n$ ifconfig   # macOS\n$ ipconfig   # Windows</string>
+    <string name="server_setup_test_hint">Test from your phone browser:\nhttp://&lt;your-ip&gt;:4096/global/health</string>
+    
     <!-- Termux Setup -->
     <string name="termux_step1_title">Step 1: Install Termux</string>
     <string name="termux_step1_description">Termux provides a Linux environment on Android. Install it from F-Droid (not Play Store).</string>
@@ -385,6 +399,8 @@
     <string name="step_completed">Step completed</string>
     <string name="snapshot_preview">Snapshot: %s…</string>
     <string name="snapshot_created">Snapshot created</string>
+    <string name="aborted">Aborted</string>
+    <string name="cd_abort_summary">Abort summary</string>
     
     <!-- Todo Tracker -->
     <string name="todo_tracker">Todo Tracker</string>

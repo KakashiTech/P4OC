@@ -1,3 +1,4 @@
+@file:Suppress("DEPRECATION") // LocalLifecycleOwner – platform version until lifecycle-runtime-compose upgrade
 package dev.blazelight.p4oc.ui.tabs
 
 import dev.blazelight.p4oc.core.log.AppLog
@@ -8,20 +9,25 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.blazelight.p4oc.core.network.ApiResult
 import dev.blazelight.p4oc.core.network.ConnectionManager
+import dev.blazelight.p4oc.core.network.ConnectionState
 import dev.blazelight.p4oc.core.network.safeApiCall
 import dev.blazelight.p4oc.data.remote.dto.CreatePtyRequest
 import dev.blazelight.p4oc.domain.model.SessionConnectionState
 import dev.blazelight.p4oc.ui.navigation.Screen
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -42,85 +48,80 @@ fun MainTabScreen(
     val theme = LocalOpenCodeTheme.current
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     
     val tabs by tabManager.tabs.collectAsState()
     val activeTabId by tabManager.activeTabId.collectAsState()
     val showTabWarning by tabManager.showTabWarning.collectAsState()
+    val connectionState by connectionManager.connectionState.collectAsState()
     
-    // State for pending new tab creation
-    var pendingNewTab by remember { mutableStateOf(false) }
-    var pendingNewTabRoute by remember { mutableStateOf<String?>(null) }
-    val pendingTabQueue = remember { mutableStateListOf<String?>() }
+    var wasEverConnected by remember { mutableStateOf(false) }
+
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            val eventSource = connectionManager.getEventSource()
+            if (eventSource != null && connectionManager.isConnected) {
+                eventSource.reconnect()
+            }
+        }
+    }
+
+    LaunchedEffect(connectionState) {
+        if (connectionState is ConnectionState.Connected) {
+            wasEverConnected = true
+        }
+        if (!wasEverConnected) return@LaunchedEffect
+
+        when (connectionState) {
+            is ConnectionState.Disconnected -> {
+                // Hard disconnect - navigate immediately
+                // But only if we were previously connected (not initial state)
+                if (tabs.isNotEmpty()) {
+                    onDisconnect()
+                }
+            }
+
+            is ConnectionState.Error -> {
+                // Transient error - wait before escalating
+                // SSE retries every 3s; 15s = ~5 consecutive failures
+                delay(15_000)
+                // Re-check after delay
+                val currentState = connectionManager.connectionState.value
+                if (currentState is ConnectionState.Error || currentState is ConnectionState.Disconnected) {
+                    connectionManager.disconnect()
+                    onDisconnect()
+                }
+            }
+
+            else -> { /* Connected or Connecting - do nothing */ }
+        }
+    }
     
-    // Create initial tab if needed
-    val initialNavController = rememberNavController()
+    // Create initial tab if needed (no NavController required)
     LaunchedEffect(Unit) {
         if (!tabManager.hasTabs()) {
-            val initialTab = TabInstance(TabState(), initialNavController)
+            val initialTab = TabInstance(TabState())
             tabManager.registerTab(initialTab, focus = true)
         }
     }
     
-    // TODO: Load existing PTY sessions as tabs on connect (disabled due to layout conflict)
-    // Loading multiple tabs during initial composition causes HorizontalPager layout issues
-    // For now, users need to create terminals manually
-    // var ptyTabsLoaded by remember { mutableStateOf(false) }
-    // LaunchedEffect(Unit) {
-    //     if (!ptyTabsLoaded) {
-    //         // Wait for UI to stabilize
-    //         kotlinx.coroutines.delay(500)
-    //         val api = connectionManager.getApi()
-    //         if (api != null) {
-    //             val result = safeApiCall { api.listPtySessions() }
-    //             when (result) {
-    //                 is ApiResult.Success -> {
-    //                     result.data.forEach { ptyDto ->
-    //                         pendingTabQueue.add(Screen.Terminal.createRoute(ptyDto.id))
-    //                     }
-    //                 }
-    //                 is ApiResult.Error -> {
-    //                     Log.e(TAG, "Failed to load PTY sessions: ${result.message}")
-    //                 }
-    //             }
-    //         }
-    //         ptyTabsLoaded = true
-    //     }
-    // }
-    
-    // Process pending tab queue
-    LaunchedEffect(pendingTabQueue.size, pendingNewTab) {
-        if (!pendingNewTab && pendingTabQueue.isNotEmpty()) {
-            val nextRoute = pendingTabQueue.removeAt(0)
-            pendingNewTabRoute = nextRoute
-            pendingNewTab = true
-        }
-    }
-    
-    // Build tab titles and icons from current routes
+    // Build tab titles and icons from current routes (updated inside pager pages)
     val tabTitles = remember { mutableStateMapOf<String, String>() }
     val tabIcons = remember { mutableStateMapOf<String, ImageVector>() }
     val tabConnectionStates = remember { mutableStateMapOf<String, SessionConnectionState>() }
+    // Track current routes per tab (for PTY cleanup on tab close)
+    val tabRoutes = remember { mutableStateMapOf<String, String>() }
+    val tabPtyIds = remember { mutableStateMapOf<String, String>() }
     
-    // Collect connection states from each tab's TabInstance
+    // Collect per-tab session connection states (busy/idle/awaiting)
     tabs.forEach { tab ->
-        val connectionState by tab.connectionState.collectAsState()
-        LaunchedEffect(connectionState) {
-            if (connectionState != null) {
-                tabConnectionStates[tab.id] = connectionState!!
+        val tabSessionState by tab.connectionState.collectAsState()
+        LaunchedEffect(tabSessionState) {
+            if (tabSessionState != null) {
+                tabConnectionStates[tab.id] = tabSessionState!!
             } else {
                 tabConnectionStates.remove(tab.id)
             }
-        }
-    }
-    
-    // Update titles/icons for each tab based on current route
-    tabs.forEach { tab ->
-        val backStackEntry by tab.navController.currentBackStackEntryAsState()
-        val currentRoute = backStackEntry?.destination?.route
-        
-        LaunchedEffect(currentRoute, tab.sessionTitle) {
-            tabTitles[tab.id] = getTitleForRoute(currentRoute, tab.sessionTitle)
-            tabIcons[tab.id] = getIconForRoute(currentRoute)
         }
     }
     
@@ -133,22 +134,6 @@ fun MainTabScreen(
                 duration = SnackbarDuration.Short
             )
             tabManager.dismissTabWarning()
-        }
-    }
-    
-    // Handle pending new tab creation
-    if (pendingNewTab) {
-        val newNavController = rememberNavController()
-        LaunchedEffect(newNavController) {
-            val newTab = TabInstance(
-                state = TabState(),
-                navController = newNavController,
-                pendingRoute = pendingNewTabRoute
-            )
-            tabManager.registerTab(newTab, focus = true)
-            
-            pendingNewTab = false
-            pendingNewTabRoute = null
         }
     }
     
@@ -180,12 +165,9 @@ fun MainTabScreen(
                 onTabClose = { tabId ->
                     coroutineScope.launch {
                         // Check if it's a terminal tab and delete the PTY
-                        val tab = tabs.find { it.id == tabId }
-                        val route = tab?.navController?.currentBackStackEntry?.destination?.route
+                        val route = tabRoutes[tabId]
                         if (route != null && route.startsWith("terminal/")) {
-                            // Extract ptyId from route (route is "terminal/{ptyId}")
-                            val ptyId = tab.navController.currentBackStackEntry
-                                ?.arguments?.getString(Screen.Terminal.ARG_PTY_ID)
+                            val ptyId = tabPtyIds[tabId]
                             if (ptyId != null) {
                                 val api = connectionManager.getApi()
                                 if (api != null) {
@@ -197,15 +179,18 @@ fun MainTabScreen(
                             }
                         }
                         
-                        // If this is the last tab, create a new one first
-                        if (tabs.size == 1) {
-                            pendingTabQueue.add(null)
-                        }
-                        tabManager.closeTab(tabId, null)
+                        // Clean up tracked state for this tab
+                        tabRoutes.remove(tabId)
+                        tabPtyIds.remove(tabId)
+                        tabTitles.remove(tabId)
+                        tabIcons.remove(tabId)
+                        tabConnectionStates.remove(tabId)
+                        
+                        tabManager.closeTab(tabId)
                     }
                 },
                 onAddClick = {
-                    pendingTabQueue.add(null)
+                    tabManager.createTab(focus = true)
                 },
             )
             
@@ -233,49 +218,75 @@ fun MainTabScreen(
             }
             
             // Tab content area with HorizontalPager for swipe between tabs
+            val saveableStateHolder = rememberSaveableStateHolder()
+            
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.weight(1f),
                 key = { tabs.getOrNull(it)?.id ?: it.toString() },
-                beyondViewportPageCount = 0  // Can't use 1 - causes NavController lifetime crash
+                beyondViewportPageCount = 0
             ) { pageIndex ->
                 tabs.getOrNull(pageIndex)?.let { tab ->
-                    val isActive = tab.id == activeTabId
-                    TabNavHost(
-                        navController = tab.navController,
-                        tabManager = tabManager,
-                        tabId = tab.id,
-                        onDisconnect = onDisconnect,
-                        pendingRoute = tab.pendingRoute,
-                        onNewFilesTab = {
-                            pendingTabQueue.add(Screen.Files.route)
-                        },
-                        onNewTerminalTab = {
-                            coroutineScope.launch {
-                                val api = connectionManager.getApi() ?: run {
-                                    AppLog.e(TAG, "Cannot create terminal: not connected")
-                                    snackbarHostState.showSnackbar("Not connected to server")
-                                    return@launch
-                                }
-                                val result = safeApiCall { api.createPtySession(CreatePtyRequest()) }
-                                when (result) {
-                                    is ApiResult.Success -> {
-                                        val ptyId = result.data.id
-                                        pendingTabQueue.add(Screen.Terminal.createRoute(ptyId))
-                                    }
-                                    is ApiResult.Error -> {
-                                        AppLog.e(TAG, "Failed to create PTY: ${result.message}")
-                                        snackbarHostState.showSnackbar("Failed to create terminal: ${result.message}")
-                                    }
-                                }
+                    saveableStateHolder.SaveableStateProvider(tab.id) {
+                        val navController = rememberNavController()
+                        
+                        // Track route for title/icon
+                        val backStackEntry by navController.currentBackStackEntryAsState()
+                        LaunchedEffect(backStackEntry?.destination?.route, tab.sessionTitle) {
+                            val route = backStackEntry?.destination?.route
+                            tabTitles[tab.id] = getTitleForRoute(route, tab.sessionTitle)
+                            tabIcons[tab.id] = getIconForRoute(route)
+                            // Track route for PTY cleanup on tab close
+                            if (route != null) {
+                                tabRoutes[tab.id] = route
                             }
-                        },
-                        isActiveTab = isActive,
-                        onConnectionStateChanged = { state ->
-                            tab.updateConnectionState(state)
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
+                            // Track PTY ID if on a terminal route
+                            val ptyId = backStackEntry?.arguments?.getString(Screen.Terminal.ARG_PTY_ID)
+                            if (ptyId != null) {
+                                tabPtyIds[tab.id] = ptyId
+                            }
+                        }
+                        
+                        val isActive = tab.id == activeTabId
+                        TabNavHost(
+                            navController = navController,
+                            tabManager = tabManager,
+                            tabId = tab.id,
+                            onDisconnect = onDisconnect,
+                            pendingRoute = tab.pendingRoute,
+                            onNewFilesTab = {
+                                tabManager.createTab(pendingRoute = Screen.Files.route, focus = true)
+                            },
+                            onNewTerminalTab = {
+                                coroutineScope.launch {
+                                    val api = connectionManager.getApi() ?: run {
+                                        AppLog.e(TAG, "Cannot create terminal: not connected")
+                                        snackbarHostState.showSnackbar("Not connected to server")
+                                        return@launch
+                                    }
+                                    val result = safeApiCall { api.createPtySession(CreatePtyRequest()) }
+                                    when (result) {
+                                        is ApiResult.Success -> {
+                                            val ptyId = result.data.id
+                                            tabManager.createTab(
+                                                pendingRoute = Screen.Terminal.createRoute(ptyId),
+                                                focus = true
+                                            )
+                                        }
+                                        is ApiResult.Error -> {
+                                            AppLog.e(TAG, "Failed to create PTY: ${result.message}")
+                                            snackbarHostState.showSnackbar("Failed to create terminal: ${result.message}")
+                                        }
+                                    }
+                                }
+                            },
+                            isActiveTab = isActive,
+                            onConnectionStateChanged = { state ->
+                                tab.updateConnectionState(state)
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
             }
         }

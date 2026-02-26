@@ -456,7 +456,7 @@ fun TaskWidgetExpanded(
     // Extract task info from input
     val description = extractJsonParam(state.input, "description") ?: "Sub-agent task"
     val subagentType = extractJsonParam(state.input, "subagent_type") ?: "general"
-    val sessionId = extractJsonParam(state.input, "session_id")
+    val sessionId = extractSubSessionId(tool, state)
     
     // Extract output/result
     val output = when (state) {
@@ -623,6 +623,36 @@ private fun getStateIconColor(
 private fun extractJsonParam(input: JsonObject, paramName: String): String? {
     return input[paramName]?.jsonPrimitive?.content
 }
+
+/**
+ * Extract the sub-agent session ID from tool/state metadata.
+ * The server places the sub-session ID in metadata, not in the tool input params.
+ * Try multiple possible key names for robustness.
+ */
+private fun extractSubSessionId(tool: Part.Tool, state: ToolState): String? {
+    // Check state-level metadata first (most specific - set during Running/Completed/Error)
+    val stateMetadata = when (state) {
+        is ToolState.Completed -> state.metadata
+        is ToolState.Running -> state.metadata
+        is ToolState.Error -> state.metadata
+        else -> null
+    }
+    stateMetadata?.let { meta ->
+        SESSION_ID_KEYS.forEach { key ->
+            meta[key]?.jsonPrimitive?.content?.let { return it }
+        }
+    }
+    // Fallback to part-level metadata
+    tool.metadata?.let { meta ->
+        SESSION_ID_KEYS.forEach { key ->
+            meta[key]?.jsonPrimitive?.content?.let { return it }
+        }
+    }
+    // Last resort: check input (unlikely to have it, but backwards compat)
+    return extractJsonParam(state.input, "session_id")
+}
+
+private val SESSION_ID_KEYS = listOf("sessionID", "sessionId", "session_id", "subSessionId")
 
 private fun getDiffStatsFromTool(tool: Part.Tool): Pair<Int, Int>? {
     val metadata = when (val state = tool.state) {

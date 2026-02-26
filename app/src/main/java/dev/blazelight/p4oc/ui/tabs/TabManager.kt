@@ -1,9 +1,5 @@
 package dev.blazelight.p4oc.ui.tabs
 
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
-import androidx.navigation.NavHostController
-import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,6 +14,10 @@ import kotlinx.coroutines.flow.update
  * - Create/close tabs
  * - Enforce session uniqueness (one tab per session)
  * - Handle minimum 1 tab rule
+ * 
+ * Note: This is a Koin singleton (app lifetime). It must NEVER hold
+ * Compose/NavController references — those are created inside the
+ * HorizontalPager page composition scope.
  */
 class TabManager {
     
@@ -39,32 +39,14 @@ class TabManager {
         get() = _activeTabId.value?.let { id -> _tabs.value.find { it.id == id } }
     
     /**
-     * Initialize with a single tab. Must be called from a Composable context
-     * to create the NavController.
-     */
-    @Composable
-    fun initializeIfNeeded(): TabInstance {
-        val navController = rememberNavController()
-        
-        return remember(navController) {
-            if (_tabs.value.isEmpty()) {
-                val tab = TabInstance(TabState(), navController)
-                _tabs.value = listOf(tab)
-                _activeTabId.value = tab.id
-                tab
-            } else {
-                // Return existing first tab, but update its navController if needed
-                _tabs.value.first()
-            }
-        }
-    }
-    
-    /**
      * Create a new tab and optionally focus it.
      * Returns the created tab instance.
      */
-    fun createTab(navController: NavHostController, focus: Boolean = true): TabInstance {
-        val tab = TabInstance(TabState(), navController)
+    fun createTab(
+        pendingRoute: String? = null,
+        focus: Boolean = true
+    ): TabInstance {
+        val tab = TabInstance(TabState(), pendingRoute = pendingRoute)
         
         _tabs.update { currentTabs ->
             val newTabs = currentTabs + tab
@@ -88,9 +70,9 @@ class TabManager {
     /**
      * Close a tab by ID.
      * If closing the active tab, focuses an adjacent tab.
-     * If closing the last tab, creates a fresh tab.
+     * If closing the last tab, creates a fresh replacement tab.
      */
-    fun closeTab(tabId: String, createNewTabNavController: (() -> NavHostController)? = null) {
+    fun closeTab(tabId: String) {
         val currentTabs = _tabs.value
         val tabIndex = currentTabs.indexOfFirst { it.id == tabId }
         
@@ -99,13 +81,10 @@ class TabManager {
         val isActive = _activeTabId.value == tabId
         
         if (currentTabs.size == 1) {
-            // Last tab - create fresh one if we have a factory
-            if (createNewTabNavController != null) {
-                val newTab = TabInstance(TabState(), createNewTabNavController())
-                _tabs.value = listOf(newTab)
-                _activeTabId.value = newTab.id
-            }
-            // If no factory provided, can't close last tab
+            // Last tab - create a fresh replacement
+            val newTab = TabInstance(TabState())
+            _tabs.value = listOf(newTab)
+            _activeTabId.value = newTab.id
             return
         }
         
@@ -168,7 +147,7 @@ class TabManager {
     }
     
     /**
-     * Register a tab that was created externally (e.g., via rememberNavController in Compose).
+     * Register a tab that was created externally.
      */
     fun registerTab(tab: TabInstance, focus: Boolean = true) {
         _tabs.update { currentTabs ->

@@ -1,5 +1,6 @@
 package dev.blazelight.p4oc.ui.screens.server
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -134,6 +135,8 @@ fun ServerScreen(
                     }
                 }
             }
+
+            ServerSetupHelpSection()
         }
     }
 }
@@ -244,6 +247,148 @@ private fun RemoteServerSection(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ServerSetupHelpSection() {
+    val theme = LocalOpenCodeTheme.current
+    var expanded by remember { mutableStateOf(false) }
+
+    Surface(
+        color = theme.backgroundElement,
+        shape = RectangleShape
+    ) {
+        Column(
+            modifier = Modifier.padding(Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            // Header — always visible, acts as toggle
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.Button) { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "[ ? ${stringResource(R.string.server_setup_title)} ]",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontFamily = FontFamily.Monospace,
+                    color = theme.text
+                )
+                Text(
+                    text = if (expanded) "▾" else "▸",
+                    fontFamily = FontFamily.Monospace,
+                    color = theme.textMuted
+                )
+            }
+
+            Text(
+                text = stringResource(R.string.server_setup_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = theme.textMuted
+            )
+
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                ) {
+                    Spacer(Modifier.height(Spacing.xs))
+
+                    SetupStep(
+                        number = "1",
+                        title = stringResource(R.string.server_setup_step1_title),
+                        command = stringResource(R.string.server_setup_step1_cmd)
+                    )
+
+                    SetupStep(
+                        number = "2",
+                        title = stringResource(R.string.server_setup_step2_title),
+                        command = stringResource(R.string.server_setup_step2_cmd)
+                    )
+
+                    SetupStep(
+                        number = "3",
+                        title = stringResource(R.string.server_setup_step3_title),
+                        command = stringResource(R.string.server_setup_step3_cmd)
+                    )
+
+                    // Tip box
+                    Surface(
+                        color = theme.accent.copy(alpha = 0.08f),
+                        shape = RectangleShape,
+                        modifier = Modifier.border(
+                            Sizing.strokeThin,
+                            theme.accent.copy(alpha = 0.3f),
+                            RectangleShape
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(Spacing.md),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+                        ) {
+                            Text(
+                                text = "── ${stringResource(R.string.server_setup_tip_label)} ──",
+                                fontFamily = FontFamily.Monospace,
+                                color = theme.accent,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                            Text(
+                                text = stringResource(R.string.server_setup_tip_text),
+                                fontFamily = FontFamily.Monospace,
+                                color = theme.textMuted,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            SetupCodeBlock(
+                                command = stringResource(R.string.server_setup_find_ip)
+                            )
+                            Text(
+                                text = stringResource(R.string.server_setup_test_hint),
+                                fontFamily = FontFamily.Monospace,
+                                color = theme.textMuted,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SetupStep(number: String, title: String, command: String) {
+    val theme = LocalOpenCodeTheme.current
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+        Text(
+            text = "$number. $title",
+            fontFamily = FontFamily.Monospace,
+            color = theme.text,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        SetupCodeBlock(command = command)
+    }
+}
+
+@Composable
+private fun SetupCodeBlock(command: String) {
+    val theme = LocalOpenCodeTheme.current
+    Surface(
+        color = theme.background,
+        shape = RectangleShape,
+        modifier = Modifier.border(Sizing.strokeThin, theme.border, RectangleShape)
+    ) {
+        Text(
+            text = command,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.sm),
+            fontFamily = FontFamily.Monospace,
+            color = theme.accent,
+            style = MaterialTheme.typography.bodySmall
+        )
     }
 }
 

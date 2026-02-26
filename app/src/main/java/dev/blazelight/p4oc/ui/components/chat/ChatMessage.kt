@@ -1,16 +1,21 @@
 package dev.blazelight.p4oc.ui.components.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.*
@@ -55,8 +60,11 @@ fun ChatMessage(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun UserMessage(messageWithParts: MessageWithParts) {
     val theme = LocalOpenCodeTheme.current
+    val clipboardManager = LocalClipboardManager.current
+    val haptic = LocalHapticFeedback.current
     // Filter out synthetic text parts (system prompts, AGENTS.md content, etc.)
     val textParts = messageWithParts.parts
         .filterIsInstance<Part.Text>()
@@ -85,14 +93,19 @@ private fun UserMessage(messageWithParts: MessageWithParts) {
             modifier = Modifier
                 .fillMaxWidth()
                 .background(theme.primary.copy(alpha = 0.12f))
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        clipboardManager.setText(AnnotatedString(text))
+                    }
+                )
                 .padding(horizontal = Spacing.mdLg, vertical = Spacing.md)
         ) {
-            SelectionContainer {
-                StreamingMarkdown(
-                    text = text,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
+            StreamingMarkdown(
+                text = text,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }
@@ -191,13 +204,27 @@ private sealed class PartGroupItem {
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun TextPart(part: Part.Text) {
+    val clipboardManager = LocalClipboardManager.current
+    val haptic = LocalHapticFeedback.current
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
         verticalAlignment = Alignment.Top
     ) {
-        SelectionContainer(modifier = Modifier.weight(1f)) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        clipboardManager.setText(AnnotatedString(part.text))
+                    }
+                )
+        ) {
             StreamingMarkdown(
                 text = part.text,
                 isStreaming = part.isStreaming,
@@ -211,8 +238,11 @@ private fun TextPart(part: Part.Text) {
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun ReasoningPart(part: Part.Reasoning) {
     val theme = LocalOpenCodeTheme.current
+    val clipboardManager = LocalClipboardManager.current
+    val haptic = LocalHapticFeedback.current
     var expanded by remember { mutableStateOf(false) }
     
     val thinkingDuration = part.time?.let { time ->
@@ -276,7 +306,15 @@ private fun ReasoningPart(part: Part.Reasoning) {
                     modifier = Modifier.padding(vertical = Spacing.xs),
                     color = theme.border
                 )
-                SelectionContainer {
+                Box(
+                    modifier = Modifier.combinedClickable(
+                        onClick = { expanded = !expanded },
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            clipboardManager.setText(AnnotatedString(part.text))
+                        }
+                    )
+                ) {
                     TertiaryStreamingMarkdown(
                         text = part.text,
                         modifier = Modifier.fillMaxWidth()

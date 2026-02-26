@@ -1,6 +1,6 @@
 package dev.blazelight.p4oc.ui.tabs
 
-import androidx.navigation.NavHostController
+import android.os.Bundle
 import dev.blazelight.p4oc.domain.model.SessionConnectionState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -10,9 +10,9 @@ import java.util.UUID
 /**
  * Represents a single tab in the top-level tab system.
  * 
- * Each tab has its own navigation stack (NavController) allowing independent
- * navigation within each tab. Tabs are generic containers - any screen type
- * can be shown in any tab.
+ * Each tab has its own navigation stack (NavController created inside the pager page)
+ * allowing independent navigation within each tab. Tabs are generic containers -
+ * any screen type can be shown in any tab.
  */
 data class TabState(
     /** Unique identifier for this tab */
@@ -42,12 +42,11 @@ data class TabState(
 }
 
 /**
- * Wrapper that holds TabState along with its NavController.
- * NavController is not data class friendly, so we keep it separate.
+ * Wrapper that holds TabState. NavController is created inside the HorizontalPager
+ * page composition scope, not stored here (to avoid ViewModelStore lifecycle crashes).
  */
 class TabInstance(
     val state: TabState,
-    val navController: NavHostController,
     /** Route to navigate to once the NavHost graph is ready. Consumed once. */
     val pendingRoute: String? = null
 ) {
@@ -55,6 +54,9 @@ class TabInstance(
     val sessionId: String? get() = state.sessionId
     val sessionTitle: String? get() = state.sessionTitle
     val shortTitle: String get() = state.shortTitle
+    
+    /** Saved NavController state for restoring after page disposal/recreation */
+    var savedNavState: Bundle? = null
     
     /** Connection state for this tab (only relevant for chat tabs) */
     private val _connectionState = MutableStateFlow<SessionConnectionState?>(null)
@@ -66,7 +68,8 @@ class TabInstance(
     }
     
     fun withState(newState: TabState): TabInstance {
-        return TabInstance(newState, navController, pendingRoute).also {
+        return TabInstance(newState, pendingRoute).also {
+            it.savedNavState = this.savedNavState
             it._connectionState.value = this._connectionState.value
         }
     }

@@ -65,7 +65,12 @@ class ServerViewModel constructor(
                 },
                 onFailure = { error ->
                     AppLog.w(TAG, "Auto-reconnect failed: ${error.message}")
-                    _uiState.update { it.copy(isConnecting = false) }
+                    _uiState.update {
+                        it.copy(
+                            isConnecting = false,
+                            error = "Could not reconnect: ${error.message}"
+                        )
+                    }
                 }
             )
         }

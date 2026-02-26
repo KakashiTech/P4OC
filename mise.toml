@@ -1,0 +1,86 @@
+[tools]
+java = "temurin-17"
+
+[env]
+JAVA_HOME = "/usr/lib/jvm/java-17-openjdk"
+
+[tasks.build]
+description = "Build debug APK"
+run = "./gradlew :app:assembleDebug"
+
+[tasks."build:release"]
+description = "Build release APK + AAB"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+./gradlew :app:assembleRelease :app:bundleRelease
+echo ""
+echo "=== Build artifacts ==="
+find app/build/outputs -name "*.apk" -o -name "*.aab" | sort
+'''
+
+[tasks.install]
+description = "Install debug APK on device"
+run = "./gradlew :app:installDebug"
+
+[tasks."install:release"]
+description = "Install release APK on device"
+run = "./gradlew :app:installRelease"
+
+[tasks.logcat]
+description = "Logcat filtered to debug build"
+run = "adb logcat --pid=$(adb shell pidof dev.blazelight.p4oc.debug)"
+
+[tasks."logcat:release"]
+description = "Logcat filtered to release build"
+run = "adb logcat --pid=$(adb shell pidof dev.blazelight.p4oc)"
+
+[tasks.bump]
+description = "Bump version (patch|minor|major, default: minor)"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+LEVEL="${1:-minor}"
+FILE="app/build.gradle.kts"
+
+CURRENT_CODE=$(grep -oP 'versionCode = \K[0-9]+' "$FILE")
+CURRENT_NAME=$(grep -oP 'versionName = "\K[^"]+' "$FILE")
+
+IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_NAME"
+
+case "$LEVEL" in
+  patch) PATCH=$((PATCH + 1)) ;;
+  minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+  major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+  *) echo "Usage: mise run bump [patch|minor|major]"; exit 1 ;;
+esac
+
+NEW_CODE=$((CURRENT_CODE + 1))
+NEW_NAME="$MAJOR.$MINOR.$PATCH"
+
+sed -i "s/versionCode = $CURRENT_CODE/versionCode = $NEW_CODE/" "$FILE"
+sed -i "s/versionName = \"$CURRENT_NAME\"/versionName = \"$NEW_NAME\"/" "$FILE"
+
+echo "$CURRENT_NAME (code $CURRENT_CODE) -> $NEW_NAME (code $NEW_CODE)"
+'''
+
+[tasks.lint]
+description = "Run Android lint"
+run = "./gradlew :app:lint"
+
+[tasks.detekt]
+description = "Run detekt static analysis"
+run = "./gradlew detekt"
+
+[tasks.test]
+description = "Run unit tests"
+run = "./gradlew :app:testDebugUnitTest"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "./gradlew clean"
+
+[tasks.deps]
+description = "Update version catalog dependencies"
+run = "./gradlew versionCatalogUpdate"
