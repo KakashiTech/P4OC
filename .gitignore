@@ -64,6 +64,9 @@ openspec/
 # AI session context (not project docs)
 compact_context.md
 
+# R8 mapping files (too large for git — upload to Play Console directly)
+mappings/
+
 # Temporary/debug files
 detekt-*.jar
 detekt-*.html
