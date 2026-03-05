@@ -23,6 +23,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
@@ -836,10 +837,15 @@ fun TuiSnackbar(
 // =============================================================================
 
 /**
- * TUI-style toggle switch rendered as [ON] / [OFF] text.
+ * TUI-style two-cell segmented toggle switch.
  *
- * Drop-in replacement for Material3 Switch with identical parameters.
- * Uses monospace-style text labels inside a bordered rectangular container.
+ * Renders as two adjacent rectangular cells — OFF (left) and ON (right).
+ * The active cell is filled with accent color and inverted text;
+ * the inactive cell is hollow with muted text. Fixed width in both states.
+ *
+ * ┌──────┬──────┐      ┌──────┬──────┐
+ * │▓ OFF ▓│  ON  │  vs  │  OFF │▓ ON ▓│
+ * └──────┴──────┘      └──────┴──────┘
  */
 @Composable
 fun TuiSwitch(
@@ -851,33 +857,30 @@ fun TuiSwitch(
     val theme = LocalOpenCodeTheme.current
     val contentAlpha = if (enabled) 1f else 0.38f
 
-    val labelColor = if (checked) {
-        theme.accent.copy(alpha = contentAlpha)
-    } else {
-        theme.textMuted.copy(alpha = contentAlpha)
-    }
-    val borderColor = if (checked) {
-        theme.accent.copy(alpha = contentAlpha)
-    } else {
-        theme.borderSubtle.copy(alpha = contentAlpha)
-    }
-    val bgColor = if (checked) {
-        theme.accent.copy(alpha = 0.1f * contentAlpha)
-    } else {
-        theme.background
-    }
+    // Active cell: solid accent background with inverted text
+    val activeBg = theme.accent.copy(alpha = contentAlpha)
+    val activeText = theme.background.copy(alpha = contentAlpha)
 
-    val label = if (checked) "ON" else "OFF"
+    // Inactive cell: panel background with muted text
+    val inactiveBg = theme.backgroundPanel.copy(alpha = contentAlpha)
+    val inactiveText = theme.textMuted.copy(alpha = contentAlpha)
 
-    Box(
+    val outerBorder = theme.border.copy(alpha = contentAlpha)
+    val dividerColor = theme.borderSubtle.copy(alpha = contentAlpha)
+
+    val monoLabel = MaterialTheme.typography.labelSmall.copy(
+        fontFamily = FontFamily.Monospace,
+        letterSpacing = 0.5.sp
+    )
+
+    Row(
         modifier = modifier
             .height(Sizing.buttonHeightSm)
             .border(
                 width = Sizing.strokeMd,
-                color = borderColor,
+                color = outerBorder,
                 shape = RectangleShape
             )
-            .background(bgColor, RectangleShape)
             .then(
                 if (onCheckedChange != null && enabled) {
                     Modifier.toggleable(
@@ -888,17 +891,52 @@ fun TuiSwitch(
                         onValueChange = onCheckedChange
                     )
                 } else Modifier
-            )
-            .padding(horizontal = Spacing.md, vertical = Spacing.xs),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium.copy(
-                fontFamily = FontFamily.Monospace
             ),
-            color = labelColor
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // OFF cell (left)
+        Box(
+            modifier = Modifier
+                .width(40.dp)
+                .fillMaxHeight()
+                .background(
+                    color = if (!checked) activeBg else inactiveBg,
+                    shape = RectangleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "OFF",
+                style = monoLabel,
+                color = if (!checked) activeText else inactiveText
+            )
+        }
+
+        // Vertical divider
+        Box(
+            modifier = Modifier
+                .width(Sizing.strokeMd)
+                .fillMaxHeight()
+                .background(dividerColor)
         )
+
+        // ON cell (right)
+        Box(
+            modifier = Modifier
+                .width(40.dp)
+                .fillMaxHeight()
+                .background(
+                    color = if (checked) activeBg else inactiveBg,
+                    shape = RectangleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "ON",
+                style = monoLabel,
+                color = if (checked) activeText else inactiveText
+            )
+        }
     }
 }
 

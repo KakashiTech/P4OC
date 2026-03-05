@@ -8,20 +8,18 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blazelight.p4oc.R
@@ -31,6 +29,8 @@ import dev.blazelight.p4oc.ui.theme.SemanticColors
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
+import dev.blazelight.p4oc.ui.components.TuiButton
+import dev.blazelight.p4oc.ui.components.TuiCard
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
 import dev.blazelight.p4oc.ui.components.TuiTopBar
 
@@ -67,7 +67,6 @@ fun ProviderConfigScreen(
                 )
             }
             uiState.error != null -> {
-                val theme = LocalOpenCodeTheme.current
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -84,10 +83,10 @@ fun ProviderConfigScreen(
                             color = theme.error
                         )
                         Text(
-                            text = uiState.error ?: "Unknown error",
+                            text = uiState.error ?: stringResource(R.string.connection_error_generic),
                             color = theme.error
                         )
-                        Button(onClick = { viewModel.loadProviders() }) {
+                        TuiButton(onClick = { viewModel.loadProviders() }) {
                             Text(stringResource(R.string.retry))
                         }
                     }
@@ -98,8 +97,8 @@ fun ProviderConfigScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding),
-                contentPadding = PaddingValues(Spacing.md),
-                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                    contentPadding = PaddingValues(Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
                     item {
                         CurrentModelCard(
@@ -108,11 +107,11 @@ fun ProviderConfigScreen(
                         )
                     }
 
-                    val connectedProviders = uiState.providers.filter { 
-                        it.id in uiState.connectedProviderIds 
+                    val connectedProviders = uiState.providers.filter {
+                        it.id in uiState.connectedProviderIds
                     }
-                    val disconnectedProviders = uiState.providers.filter { 
-                        it.id !in uiState.connectedProviderIds 
+                    val disconnectedProviders = uiState.providers.filter {
+                        it.id !in uiState.connectedProviderIds
                     }
 
                     item {
@@ -120,6 +119,7 @@ fun ProviderConfigScreen(
                             text = stringResource(R.string.provider_available),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
+                            color = theme.text,
                             modifier = Modifier.padding(top = Spacing.md, bottom = Spacing.xs)
                         )
                     }
@@ -136,7 +136,6 @@ fun ProviderConfigScreen(
 
                     if (disconnectedProviders.isNotEmpty()) {
                         item {
-                            val theme = LocalOpenCodeTheme.current
                             Text(
                                 text = stringResource(R.string.provider_disconnected),
                                 style = MaterialTheme.typography.titleMedium,
@@ -162,11 +161,9 @@ private fun CurrentModelCard(
     modifier: Modifier = Modifier
 ) {
     val theme = LocalOpenCodeTheme.current
-    Card(
+    TuiCard(
         modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = theme.accent.copy(alpha = 0.2f)
-        )
+        colors = CardDefaults.cardColors(containerColor = theme.accent.copy(alpha = 0.15f))
     ) {
         Row(
             modifier = Modifier
@@ -188,7 +185,9 @@ private fun CurrentModelCard(
                 )
                 Text(
                     text = currentModel ?: stringResource(R.string.provider_not_configured),
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontFamily = FontFamily.Monospace
+                    ),
                     fontWeight = FontWeight.Medium,
                     color = theme.text
                 )
@@ -210,10 +209,10 @@ private fun ProviderCard(
     val currentModelId = currentModel?.substringAfter("/")
     val isActiveProvider = currentProviderId == provider.id
 
-    Card(
+    TuiCard(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (isActiveProvider) 
+            containerColor = if (isActiveProvider)
                 theme.accent.copy(alpha = 0.1f)
             else theme.backgroundElement
         )
@@ -222,18 +221,19 @@ private fun ProviderCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onToggle)
-                    .padding(Spacing.xl),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+                    .clickable(role = Role.Button, onClick = onToggle)
+                    .padding(Spacing.md),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 ProviderIcon(provider.name)
-                
+
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = provider.name,
                         style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.Medium,
+                        color = theme.text
                     )
                     Text(
                         text = "${provider.models.size} model${if (provider.models.size != 1) "s" else ""}",
@@ -265,11 +265,15 @@ private fun ProviderCard(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = Spacing.xl, end = Spacing.xl, bottom = Spacing.xl),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                        .padding(start = Spacing.md, end = Spacing.md, bottom = Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
                 ) {
-                    HorizontalDivider()
-                    
+                    HorizontalDivider(
+                        thickness = Sizing.dividerThickness,
+                        color = theme.borderSubtle
+                    )
+                    Spacer(Modifier.height(Spacing.xs))
+
                     provider.models.values.sortedBy { it.name }.forEach { model ->
                         ModelItem(
                             model = model,
@@ -293,30 +297,35 @@ private fun ModelItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RectangleShape)
             .background(
                 if (isSelected) theme.accent.copy(alpha = 0.1f)
-                else Color.Transparent
+                else Color.Transparent,
+                shape = RectangleShape
             )
-            .clickable(onClick = onClick)
-            .padding(Spacing.lg),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(Spacing.md),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        RadioButton(
-            selected = isSelected,
-            onClick = onClick
+        // TUI-style selection indicator instead of RadioButton
+        Text(
+            text = if (isSelected) "◉" else "○",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontFamily = FontFamily.Monospace
+            ),
+            color = if (isSelected) theme.accent else theme.textMuted
         )
-        
+
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = model.name,
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal
+                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                color = theme.text
             )
-            
+
             Row(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
                 model.capabilities?.let { caps ->
                     if (caps.reasoning) {
@@ -326,7 +335,7 @@ private fun ModelItem(
                         CapabilityChip("Tools")
                     }
                 }
-                
+
                 model.limit?.let { limit ->
                     if (limit.context > 0) {
                         CapabilityChip("${limit.context / 1000}k ctx")
@@ -334,18 +343,22 @@ private fun ModelItem(
                 }
             }
         }
-        
+
         model.cost?.let { cost ->
             if (cost.input > 0 || cost.output > 0) {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
                         text = "$${String.format(java.util.Locale.US, "%.2f", cost.input)}/M in",
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace
+                        ),
                         color = theme.textMuted
                     )
                     Text(
                         text = "$${String.format(java.util.Locale.US, "%.2f", cost.output)}/M out",
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace
+                        ),
                         color = theme.textMuted
                     )
                 }
@@ -363,7 +376,9 @@ private fun CapabilityChip(text: String) {
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = FontFamily.Monospace
+            ),
             color = theme.textMuted,
             modifier = Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xxs)
         )
@@ -373,11 +388,9 @@ private fun CapabilityChip(text: String) {
 @Composable
 private fun DisabledProviderCard(provider: ProviderDto) {
     val theme = LocalOpenCodeTheme.current
-    Card(
+    TuiCard(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = theme.backgroundElement.copy(alpha = 0.5f)
-        )
+        colors = CardDefaults.cardColors(containerColor = theme.backgroundElement.copy(alpha = 0.5f))
     ) {
         Row(
             modifier = Modifier
@@ -387,7 +400,7 @@ private fun DisabledProviderCard(provider: ProviderDto) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             ProviderIcon(provider.name, alpha = 0.5f)
-            
+
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = provider.name,
@@ -418,13 +431,14 @@ private fun ProviderIcon(providerName: String, alpha: Float = 1f) {
     Box(
         modifier = Modifier
             .size(Sizing.iconButtonMd)
-            .clip(CircleShape)
-            .background(bgColor.copy(alpha = alpha)),
+            .background(bgColor.copy(alpha = alpha), RectangleShape),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = iconChar,
-            style = MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.titleSmall.copy(
+                fontFamily = FontFamily.Monospace
+            ),
             fontWeight = FontWeight.Bold,
             color = theme.text.copy(alpha = alpha)
         )

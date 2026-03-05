@@ -115,13 +115,6 @@ class VisualSettingsViewModel constructor(
         persistSettings(_settings.value.copy(showLineNumbers = !_settings.value.showLineNumbers))
     }
     
-    fun toggleWordWrap() {
-        persistSettings(_settings.value.copy(wordWrap = !_settings.value.wordWrap))
-    }
-    
-    fun toggleHighContrast() {
-        persistSettings(_settings.value.copy(highContrastMode = !_settings.value.highContrastMode))
-    }
     
     fun toggleReasoningExpanded() {
         persistSettings(_settings.value.copy(reasoningExpandedByDefault = !_settings.value.reasoningExpandedByDefault))
@@ -207,23 +200,6 @@ fun VisualSettingsScreen(
                     icon = Icons.Default.FormatListNumbered
                 )
                 
-                SettingsSwitch(
-                    title = stringResource(R.string.visual_settings_word_wrap),
-                    subtitle = stringResource(R.string.visual_settings_word_wrap_desc),
-                    checked = settings.wordWrap,
-                    onCheckedChange = { viewModel.toggleWordWrap() },
-                    icon = Icons.AutoMirrored.Filled.WrapText
-                )
-            }
-            
-            SettingsSection(title = stringResource(R.string.visual_settings_accessibility)) {
-                SettingsSwitch(
-                    title = stringResource(R.string.visual_settings_high_contrast),
-                    subtitle = stringResource(R.string.visual_settings_high_contrast_desc),
-                    checked = settings.highContrastMode,
-                    onCheckedChange = { viewModel.toggleHighContrast() },
-                    icon = Icons.Default.Contrast
-                )
             }
             
             SettingsSection(title = stringResource(R.string.visual_settings_message_display)) {
