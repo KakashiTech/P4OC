@@ -1,6 +1,11 @@
 package dev.blazelight.p4oc.ui.screens.server
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -27,6 +32,8 @@ import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.core.datastore.RecentServer
+import dev.blazelight.p4oc.core.network.DiscoveredServer
+import dev.blazelight.p4oc.core.network.DiscoveryState
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
@@ -42,6 +49,14 @@ fun ServerScreen(
 ) {
     val theme = LocalOpenCodeTheme.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // Start/stop mDNS discovery with screen lifecycle
+    DisposableEffect(Unit) {
+        viewModel.startDiscovery()
+        onDispose {
+            viewModel.stopDiscovery()
+        }
+    }
 
     LaunchedEffect(uiState.navigationDestination) {
         when (uiState.navigationDestination) {
@@ -95,6 +110,16 @@ fun ServerScreen(
                 .padding(Spacing.md),
             verticalArrangement = Arrangement.spacedBy(Spacing.md)
         ) {
+            // Discovered servers section (mDNS)
+            if (uiState.discoveredServers.isNotEmpty() || uiState.discoveryState == DiscoveryState.SCANNING) {
+                DiscoveredServersSection(
+                    servers = uiState.discoveredServers,
+                    discoveryState = uiState.discoveryState,
+                    isConnecting = uiState.isConnecting,
+                    onServerClick = viewModel::connectToDiscoveredServer
+                )
+            }
+
             if (uiState.recentServers.isNotEmpty()) {
                 RecentServersSection(
                     servers = uiState.recentServers,
@@ -462,4 +487,114 @@ private fun RecentServersSection(
             }
         }
     }
+}
+
+@Composable
+private fun DiscoveredServersSection(
+    servers: List<DiscoveredServer>,
+    discoveryState: DiscoveryState,
+    isConnecting: Boolean,
+    onServerClick: (DiscoveredServer) -> Unit
+) {
+    val theme = LocalOpenCodeTheme.current
+
+    Surface(
+        color = theme.backgroundElement,
+        shape = RectangleShape
+    ) {
+        Column(
+            modifier = Modifier.padding(Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "[ ${stringResource(R.string.discovery_section_title)} ]",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontFamily = FontFamily.Monospace,
+                    color = theme.text
+                )
+                if (discoveryState == DiscoveryState.SCANNING) {
+                    ScanningIndicator()
+                }
+            }
+
+            if (servers.isEmpty() && discoveryState == DiscoveryState.SCANNING) {
+                Text(
+                    text = stringResource(R.string.discovery_scanning_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = theme.textMuted
+                )
+            }
+
+            servers.forEach { server ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !isConnecting, role = Role.Button) {
+                            onServerClick(server)
+                        }
+                        .testTag("discovered_server_${server.serviceName}")
+                        .padding(vertical = Spacing.md),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.lg)
+                ) {
+                    Text(
+                        text = "●",
+                        color = theme.success,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = server.serviceName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.text,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${server.host}:${server.port}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.textMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = "→",
+                        color = theme.textMuted,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScanningIndicator() {
+    val theme = LocalOpenCodeTheme.current
+    val infiniteTransition = rememberInfiniteTransition(label = "scanning")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 800),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "scanPulse"
+    )
+
+    Text(
+        text = "● ${stringResource(R.string.discovery_scanning)}",
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        color = theme.accent.copy(alpha = alpha)
+    )
 }

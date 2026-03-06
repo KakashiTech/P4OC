@@ -1,22 +1,41 @@
 # P4OC (Pocket for OpenCode)
 
+[![GitHub Release](https://img.shields.io/github/v/release/theblazehen/P4OC?style=flat-square)](https://github.com/theblazehen/P4OC/releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/theblazehen/P4OC/build.yml?style=flat-square)](https://github.com/theblazehen/P4OC/actions)
+[![License](https://img.shields.io/github/license/theblazehen/P4OC?style=flat-square)](LICENSE)
+
 <a href="https://play.google.com/store/apps/details?id=dev.blazelight.p4oc">
   <img src="https://raw.githubusercontent.com/pioug/google-play-badges/main/svg/en.svg" alt="Get it on Google Play" height="80">
 </a>
 
 An Android client for [OpenCode](https://github.com/sst/opencode), the terminal-based AI coding assistant. You point it at a running OpenCode server and talk to it from your phone.
 
+> **Note:** P4OC is a community project and is not built by or affiliated with the OpenCode team.
+
 The whole thing is built around a terminal UI aesthetic. No stock Material3 cards or rounded corners. Everything is flat, monospaced where it matters, and styled to look like it belongs in a terminal.
+
+## Quick Start
+
+1. Start OpenCode in server mode:
+   ```bash
+   opencode serve --hostname 0.0.0.0 --port 4096
+   ```
+   To require authentication, set `OPENCODE_SERVER_PASSWORD` before starting the server.
+
+2. Install P4OC from [Google Play](https://play.google.com/store/apps/details?id=dev.blazelight.p4oc) or [GitHub Releases](https://github.com/theblazehen/P4OC/releases)
+
+3. Enter your server URL (e.g. `http://192.168.1.100:4096`) and start chatting
 
 ## What it does
 
 You connect to an OpenCode server instance by entering its URL. From there you can:
 
 - Chat with the AI assistant, with streaming responses via SSE
-- Manage multiple sessions (create, switch, delete)
-- Browse project files and view them with syntax highlighting
-- View diffs from file edits the assistant makes
+- Manage sessions — create, rename, share, summarize, view diffs, revert changes
+- Browse project files with symbol search and syntax highlighting
+- View file diffs from AI edits with additions/deletions
 - Use an embedded terminal (Termux-based)
+- Open sub-agent sessions in their own tabs
 - Configure providers, models, agents, and skills
 - Switch between 9 bundled color themes (catppuccin, dracula, nord, tokyonight, gruvbox, and others)
 

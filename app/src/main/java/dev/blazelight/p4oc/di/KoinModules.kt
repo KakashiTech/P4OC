@@ -4,6 +4,7 @@ import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.security.CredentialStore
 import dev.blazelight.p4oc.core.network.DirectoryManager
+import dev.blazelight.p4oc.core.network.MdnsDiscoveryManager
 import dev.blazelight.p4oc.core.network.PtyWebSocketClient
 import dev.blazelight.p4oc.core.notification.NotificationEventObserver
 import dev.blazelight.p4oc.core.notification.NotificationHelper
@@ -63,6 +64,7 @@ val networkModule = module {
 
     // Network
     single { DirectoryManager(get()) }
+    single { MdnsDiscoveryManager(androidContext()) }
     factory { PtyWebSocketClient(get()) }
     single { ConnectionManager(get(), get(), get()) }
 }

@@ -13,6 +13,13 @@
     <string name="server_remote_description">Connect to an OpenCode server running on your network.</string>
     <string name="server_recent_servers">Recent Servers</string>
     
+    <!-- mDNS Discovery -->
+    <string name="discovery_section_title">Discovered Servers</string>
+    <string name="discovery_scanning">scanning</string>
+    <string name="discovery_scanning_hint">Scanning local network for OpenCode servers…</string>
+    <string name="cd_discovered_server">Discovered server</string>
+    <string name="cd_scanning_indicator">Scanning for servers</string>
+    
     <!-- Server Setup Help -->
     <string name="server_setup_title">Server Setup</string>
     <string name="server_setup_subtitle">Need help starting a server?</string>
@@ -77,7 +84,7 @@
     <string name="settings_about">About</string>
     <string name="settings_version_format">OpenCode v%s</string>
     <string name="settings_about_github">View on GitHub</string>
-    <string name="settings_about_github_url">https://github.com/sst/opencode</string>
+    <string name="settings_about_github_url">https://github.com/theblazehen/P4OC</string>
     <string name="settings_about_build_info">Build: %1$s (%2$d)</string>
     <string name="settings_disconnect">Disconnect</string>
     <string name="settings_disconnect_confirm">Are you sure you want to disconnect from the server?</string>

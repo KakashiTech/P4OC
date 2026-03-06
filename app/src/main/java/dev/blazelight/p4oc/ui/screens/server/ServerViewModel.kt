@@ -8,6 +8,9 @@ import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.core.network.ApiResult
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.network.DirectoryManager
+import dev.blazelight.p4oc.core.network.DiscoveredServer
+import dev.blazelight.p4oc.core.network.DiscoveryState
+import dev.blazelight.p4oc.core.network.MdnsDiscoveryManager
 import dev.blazelight.p4oc.core.network.ServerConfig
 import dev.blazelight.p4oc.core.network.safeApiCall
 import dev.blazelight.p4oc.core.security.CredentialStore
@@ -24,7 +27,8 @@ class ServerViewModel constructor(
     private val settingsDataStore: SettingsDataStore,
     private val connectionManager: ConnectionManager,
     private val directoryManager: DirectoryManager,
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val mdnsDiscoveryManager: MdnsDiscoveryManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ServerUiState())
@@ -32,6 +36,7 @@ class ServerViewModel constructor(
 
     init {
         loadRecentServers()
+        collectDiscoveryFlows()
         tryAutoReconnect()
     }
 
@@ -179,6 +184,38 @@ class ServerViewModel constructor(
         }
     }
 
+    private fun collectDiscoveryFlows() {
+        viewModelScope.launch {
+            mdnsDiscoveryManager.discoveredServers.collect { servers ->
+                _uiState.update { it.copy(discoveredServers = servers) }
+            }
+        }
+        viewModelScope.launch {
+            mdnsDiscoveryManager.discoveryState.collect { state ->
+                _uiState.update { it.copy(discoveryState = state) }
+            }
+        }
+    }
+
+    fun startDiscovery() {
+        mdnsDiscoveryManager.startDiscovery()
+    }
+
+    fun stopDiscovery() {
+        mdnsDiscoveryManager.stopDiscovery()
+    }
+
+    fun connectToDiscoveredServer(server: DiscoveredServer) {
+        _uiState.update {
+            it.copy(
+                remoteUrl = server.url,
+                username = "opencode",
+                password = ""
+            )
+        }
+        connectToRemote()
+    }
+
     /**
      * Initialize project context after successful connection.
      * Now always navigates to the unified Sessions screen.
@@ -204,6 +241,8 @@ data class ServerUiState(
     val isConnected: Boolean = false,
     val error: String? = null,
     val recentServers: List<RecentServer> = emptyList(),
+    val discoveredServers: List<DiscoveredServer> = emptyList(),
+    val discoveryState: DiscoveryState = DiscoveryState.IDLE,
     // Navigation destination after connection
     val navigationDestination: NavigationDestination? = null
 )
