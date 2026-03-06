@@ -102,6 +102,7 @@ git log "${LAST_TAG}..HEAD" --oneline --no-merges
 
 Draft a concise user-facing blurb. Rules:
 - Max 500 characters (hard Play Store limit)
+- **Verify with `echo -n '<blurb>' | wc -c`** — do NOT estimate the count, actually run the command
 - No commit hashes, no technical jargon
 - Focus on user-visible changes: new features, fixes, improvements
 - Use bullet points with `•` prefix
