@@ -55,6 +55,7 @@ class SettingsDataStore constructor(
         private val KEY_REASONING_EXPANDED = booleanPreferencesKey("reasoning_expanded_by_default")
 
         private val KEY_TOOL_WIDGET_DEFAULT_STATE = stringPreferencesKey("tool_widget_default_state")
+        private val KEY_OPEN_SUB_AGENT_NEW_TAB = booleanPreferencesKey("open_sub_agent_new_tab")
         
         // Model favorites and recents
         private val KEY_FAVORITE_MODELS = stringSetPreferencesKey("favorite_models")
@@ -433,7 +434,8 @@ class SettingsDataStore constructor(
             messageSpacing = prefs[KEY_MESSAGE_SPACING] ?: 8,
             highContrastMode = prefs[KEY_HIGH_CONTRAST_MODE] ?: false,
             reasoningExpandedByDefault = prefs[KEY_REASONING_EXPANDED] ?: false,
-            toolWidgetDefaultState = prefs[KEY_TOOL_WIDGET_DEFAULT_STATE] ?: "compact"
+            toolWidgetDefaultState = prefs[KEY_TOOL_WIDGET_DEFAULT_STATE] ?: "compact",
+            openSubAgentInNewTab = prefs[KEY_OPEN_SUB_AGENT_NEW_TAB] ?: true
         )
     }
 
@@ -450,6 +452,7 @@ class SettingsDataStore constructor(
             prefs[KEY_HIGH_CONTRAST_MODE] = settings.highContrastMode
             prefs[KEY_REASONING_EXPANDED] = settings.reasoningExpandedByDefault
             prefs[KEY_TOOL_WIDGET_DEFAULT_STATE] = settings.toolWidgetDefaultState
+            prefs[KEY_OPEN_SUB_AGENT_NEW_TAB] = settings.openSubAgentInNewTab
         }
     }
 
@@ -667,7 +670,8 @@ data class VisualSettings(
     val messageSpacing: Int = 8,
     val highContrastMode: Boolean = false,
     val reasoningExpandedByDefault: Boolean = false,
-    val toolWidgetDefaultState: String = "compact" // "oneline", "compact", or "expanded"
+    val toolWidgetDefaultState: String = "compact", // "oneline", "compact", or "expanded"
+    val openSubAgentInNewTab: Boolean = true
 )
 
 data class NotificationSettings(

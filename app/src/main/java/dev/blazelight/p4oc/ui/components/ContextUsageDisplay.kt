@@ -98,7 +98,7 @@ private fun CompactContextIndicator(
             contentAlignment = Alignment.Center
         ) {
             Canvas(modifier = Modifier.size(Sizing.iconMd)) {
-                val strokeWidth = 3.dp.toPx()
+                val strokeWidth = Sizing.progressStrokeWidth.toPx()
                 
                 drawArc(
                     color = color.copy(alpha = 0.2f),
@@ -178,7 +178,7 @@ private fun ExpandedContextIndicator(
                 progress = { percentage },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(8.dp),
+                    .height(Sizing.progressBarHeight),
                 color = color,
                 trackColor = color.copy(alpha = 0.2f),
             )
@@ -310,7 +310,7 @@ fun ContextUsageBar(
                     progress = { usage.usedTokens.toFloat() / usage.maxTokens.toFloat() },
                     modifier = Modifier
                         .weight(1f)
-                        .height(4.dp),
+                        .height(Sizing.progressBarHeightSm),
                     color = getContextColor(usage),
                     trackColor = getContextColor(usage).copy(alpha = 0.2f),
                 )

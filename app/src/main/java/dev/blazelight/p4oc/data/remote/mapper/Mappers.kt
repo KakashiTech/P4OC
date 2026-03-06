@@ -766,15 +766,6 @@ private data class SessionCompactedDto(
     @SerialName("sessionID") val sessionID: String
 )
 
-private fun mapPatternToList(pattern: JsonElement?): List<String>? {
-    if (pattern == null) return null
-    return when {
-        pattern is kotlinx.serialization.json.JsonArray -> pattern.map { it.toString().removeSurrounding("\"") }
-        pattern is kotlinx.serialization.json.JsonPrimitive -> listOf(pattern.content)
-        else -> null
-    }
-}
-
 private fun mapPtyToDomain(dto: PtyDto): Pty = Pty(
     id = dto.id,
     title = dto.title,

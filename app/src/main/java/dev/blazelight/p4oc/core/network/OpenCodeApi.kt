@@ -18,7 +18,9 @@ interface OpenCodeApi {
     suspend fun getPath(): PathInfoDto
 
     @GET("vcs")
-    suspend fun getVcsInfo(): VcsInfoDto
+    suspend fun getVcsInfo(
+        @Query("directory") directory: String? = null
+    ): VcsInfoDto
 
     @GET("session")
     suspend fun listSessions(
@@ -113,7 +115,6 @@ interface OpenCodeApi {
     @POST("session/{id}/summarize")
     suspend fun summarizeSession(
         @Path("id") id: String,
-        @Body request: SummarizeSessionRequest,
         @Query("directory") directory: String? = null
     ): Boolean
 
@@ -122,13 +123,13 @@ interface OpenCodeApi {
         @Path("id") id: String,
         @Body request: RevertSessionRequest,
         @Query("directory") directory: String? = null
-    ): Boolean
+    ): SessionDto
 
     @POST("session/{id}/unrevert")
     suspend fun unrevertSession(
         @Path("id") id: String,
         @Query("directory") directory: String? = null
-    ): Boolean
+    ): SessionDto
 
     @GET("session/{sessionId}/message")
     suspend fun getMessages(

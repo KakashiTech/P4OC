@@ -126,6 +126,7 @@ fun TuiButton(
         modifier = modifier.height(Sizing.buttonHeightMd),
         enabled = enabled,
         colors = colors,
+        shape = RectangleShape,
         contentPadding = contentPadding,
         content = content
     )
@@ -148,6 +149,7 @@ fun TuiOutlinedButton(
         modifier = modifier.height(Sizing.buttonHeightMd),
         enabled = enabled,
         colors = colors,
+        shape = RectangleShape,
         contentPadding = contentPadding,
         content = content
     )
@@ -170,6 +172,7 @@ fun TuiTextButton(
         modifier = modifier.height(Sizing.buttonHeightMd),
         enabled = enabled,
         colors = colors,
+        shape = RectangleShape,
         contentPadding = contentPadding,
         content = content
     )
@@ -409,6 +412,7 @@ fun TuiChip(
             label = { Text(label, style = MaterialTheme.typography.labelMedium) },
             modifier = modifier.height(Sizing.chipHeight),
             enabled = enabled,
+            shape = RectangleShape,
             leadingIcon = leadingIcon?.let {
                 { Icon(it, contentDescription = null, modifier = Modifier.size(Sizing.iconSm)) }
             }
@@ -419,6 +423,7 @@ fun TuiChip(
             label = { Text(label, style = MaterialTheme.typography.labelMedium) },
             modifier = modifier.height(Sizing.chipHeight),
             enabled = false,
+            shape = RectangleShape,
             leadingIcon = leadingIcon?.let {
                 { Icon(it, contentDescription = null, modifier = Modifier.size(Sizing.iconSm)) }
             }
@@ -897,7 +902,7 @@ fun TuiSwitch(
         // OFF cell (left)
         Box(
             modifier = Modifier
-                .width(40.dp)
+                .width(Sizing.switchCellWidth)
                 .fillMaxHeight()
                 .background(
                     color = if (!checked) activeBg else inactiveBg,
@@ -923,7 +928,7 @@ fun TuiSwitch(
         // ON cell (right)
         Box(
             modifier = Modifier
-                .width(40.dp)
+                .width(Sizing.switchCellWidth)
                 .fillMaxHeight()
                 .background(
                     color = if (checked) activeBg else inactiveBg,

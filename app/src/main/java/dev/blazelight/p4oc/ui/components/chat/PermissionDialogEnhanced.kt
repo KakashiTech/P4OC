@@ -144,7 +144,7 @@ fun PermissionDialogEnhanced(
                         Text("✗ ${stringResource(R.string.deny)}", fontFamily = FontFamily.Monospace)
                     }
                     
-                    TextButton(onClick = onAlways) {
+                    TextButton(onClick = onAlways, shape = RectangleShape) {
                         Text(
                             "◎ ${stringResource(R.string.always_allow)}",
                             fontFamily = FontFamily.Monospace,
@@ -309,6 +309,7 @@ private fun CodePreviewCard(
                 if (hasMore) {
                     TextButton(
                         onClick = onToggleExpand,
+                        shape = RectangleShape,
                         colors = ButtonDefaults.textButtonColors(
                             contentColor = theme.text.copy(alpha = 0.7f)
                         )

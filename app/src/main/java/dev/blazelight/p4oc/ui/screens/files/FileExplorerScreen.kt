@@ -31,15 +31,18 @@ import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.res.stringResource
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.FileNode
+import dev.blazelight.p4oc.domain.model.Symbol
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
 
@@ -52,8 +55,11 @@ fun FileExplorerScreen(
 ) {
     val theme = LocalOpenCodeTheme.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val symbolResults by viewModel.symbolResults.collectAsStateWithLifecycle()
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
+    var isSymbolMode by remember { mutableStateOf(false) }
+    var symbolQuery by remember { mutableStateOf("") }
 
     val filteredFiles = remember(uiState.files, searchQuery) {
         if (searchQuery.isBlank()) {
@@ -72,9 +78,11 @@ fun FileExplorerScreen(
                 TuiTopBar(
                     title = "",
                     onNavigateBack = {
-                        if (isSearchActive) {
+                        if (isSearchActive || isSymbolMode) {
                             isSearchActive = false
+                            isSymbolMode = false
                             searchQuery = ""
+                            symbolQuery = ""
                         } else if (uiState.currentPath.isNotBlank()) {
                             viewModel.navigateUp()
                         } else {
@@ -82,7 +90,25 @@ fun FileExplorerScreen(
                         }
                     },
                     titleContent = {
-                        if (isSearchActive) {
+                        if (isSymbolMode) {
+                            OutlinedTextField(
+                                value = symbolQuery,
+                                onValueChange = {
+                                    symbolQuery = it
+                                    viewModel.searchSymbols(it)
+                                },
+                                placeholder = { Text(stringResource(R.string.symbol_search_hint), color = theme.textMuted) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color.Transparent,
+                                    unfocusedBorderColor = Color.Transparent,
+                                    cursorColor = theme.accent,
+                                    focusedTextColor = theme.text,
+                                    unfocusedTextColor = theme.text
+                                )
+                            )
+                        } else if (isSearchActive) {
                             OutlinedTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
@@ -108,12 +134,18 @@ fun FileExplorerScreen(
                         }
                     },
                     actions = {
-                        if (!isSearchActive) {
+                        if (!isSearchActive && !isSymbolMode) {
                             IconButton(
                                 onClick = { isSearchActive = true },
                                 modifier = Modifier.size(Sizing.iconButtonMd)
                             ) {
                                 Icon(Icons.Default.Search, contentDescription = stringResource(R.string.cd_search), tint = theme.textMuted, modifier = Modifier.size(Sizing.iconAction))
+                            }
+                            IconButton(
+                                onClick = { isSymbolMode = true },
+                                modifier = Modifier.size(Sizing.iconButtonMd)
+                            ) {
+                                Icon(Icons.Default.Code, contentDescription = stringResource(R.string.cd_symbol_search), tint = theme.textMuted, modifier = Modifier.size(Sizing.iconAction))
                             }
                         }
                         IconButton(
@@ -139,44 +171,98 @@ fun FileExplorerScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            when {
-                uiState.isLoading -> {
-                    TuiLoadingScreen(modifier = Modifier.align(Alignment.Center))
-                }
-                filteredFiles.isEmpty() -> {
+            if (isSymbolMode) {
+                // Symbol search results
+                if (symbolQuery.isBlank()) {
                     Column(
                         modifier = Modifier.align(Alignment.Center),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(Spacing.md)
                     ) {
                         Text(
-                            text = if (searchQuery.isNotBlank()) "∅" else "□",
+                            text = stringResource(R.string.symbol_kind_default),
                             style = MaterialTheme.typography.displayMedium,
                             color = theme.textMuted
                         )
                         Text(
-                            text = if (searchQuery.isNotBlank()) "-- no matching files --" else "-- empty folder --",
+                            text = stringResource(R.string.symbol_search_hint),
                             color = theme.textMuted
                         )
                     }
-                }
-                else -> {
+                } else if (symbolResults.isEmpty()) {
+                    Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                    ) {
+                        Text(
+                            text = "∅",
+                            style = MaterialTheme.typography.displayMedium,
+                            color = theme.textMuted
+                        )
+                        Text(
+                            text = stringResource(R.string.symbol_search_no_results),
+                            color = theme.textMuted
+                        )
+                    }
+                } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(Spacing.md),
                         verticalArrangement = Arrangement.spacedBy(Spacing.xxs)
                     ) {
-                        items(filteredFiles, key = { it.path }) { file ->
-                            TuiFileItem(
-                                file = file,
+                        items(symbolResults, key = { "${it.uri}:${it.range.startLine}:${it.name}" }) { symbol ->
+                            SymbolResultItem(
+                                symbol = symbol,
                                 onClick = {
-                                    if (file.isDirectory) {
-                                        viewModel.navigateTo(file.path)
-                                    } else {
-                                        onFileClick(file.path)
-                                    }
+                                    // Extract file path from URI (strip file:// prefix)
+                                    val filePath = symbol.uri.removePrefix("file://")
+                                    onFileClick(filePath)
                                 }
                             )
+                        }
+                    }
+                }
+            } else {
+                when {
+                    uiState.isLoading -> {
+                        TuiLoadingScreen(modifier = Modifier.align(Alignment.Center))
+                    }
+                    filteredFiles.isEmpty() -> {
+                        Column(
+                            modifier = Modifier.align(Alignment.Center),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                        ) {
+                            Text(
+                                text = if (searchQuery.isNotBlank()) "∅" else "□",
+                                style = MaterialTheme.typography.displayMedium,
+                                color = theme.textMuted
+                            )
+                            Text(
+                                text = if (searchQuery.isNotBlank()) "-- no matching files --" else "-- empty folder --",
+                                color = theme.textMuted
+                            )
+                        }
+                    }
+                    else -> {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(Spacing.md),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.xxs)
+                        ) {
+                            items(filteredFiles, key = { it.path }) { file ->
+                                TuiFileItem(
+                                    file = file,
+                                    onClick = {
+                                        if (file.isDirectory) {
+                                            viewModel.navigateTo(file.path)
+                                        } else {
+                                            onFileClick(file.path)
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -267,7 +353,8 @@ private fun TuiFileItem(
                     onLongClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         showContextMenu = true
-                    }
+                    },
+                    role = Role.Button
                 ),
             color = Color.Transparent,
             shape = RectangleShape
@@ -432,6 +519,96 @@ private fun getFileIcon(file: FileNode): Pair<ImageVector, Color> {
             Icons.Default.Storage to SemanticColors.FileType.database
         
         else -> Icons.AutoMirrored.Filled.InsertDriveFile to theme.textMuted
+    }
+}
+
+@Composable
+private fun SymbolResultItem(
+    symbol: Symbol,
+    onClick: () -> Unit
+) {
+    val theme = LocalOpenCodeTheme.current
+    val (kindLabel, kindColor) = getSymbolKind(symbol.kind)
+    // Extract short filename from URI
+    val fileName = symbol.uri.substringAfterLast('/')
+    val lineNumber = symbol.range.startLine + 1  // Convert from 0-indexed
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Button, onClick = onClick),
+        color = Color.Transparent,
+        shape = RectangleShape
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Kind indicator (monospace, colored)
+            Text(
+                text = kindLabel,
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = kindColor,
+                fontWeight = FontWeight.Bold
+            )
+
+            // Symbol name
+            Text(
+                text = symbol.name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = theme.text,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            // File:line location
+            Text(
+                text = "$fileName:$lineNumber",
+                style = MaterialTheme.typography.labelSmall,
+                color = theme.textMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * LSP SymbolKind values → display indicator and color.
+ * See: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#symbolKind
+ */
+@Composable
+private fun getSymbolKind(kind: Int): Pair<String, Color> {
+    val theme = LocalOpenCodeTheme.current
+    return when (kind) {
+        1 -> "F" to theme.accent         // File
+        2 -> "M" to theme.info           // Module
+        3 -> "N" to theme.info           // Namespace
+        4 -> "P" to theme.warning        // Package
+        5 -> "C" to theme.warning        // Class
+        6 -> "M" to theme.accent         // Method
+        7 -> "P" to theme.info           // Property
+        8 -> "F" to theme.textMuted      // Field
+        9 -> "C" to theme.warning        // Constructor
+        10 -> "E" to theme.success       // Enum
+        11 -> "I" to theme.info          // Interface
+        12 -> "ƒ" to theme.accent        // Function
+        13 -> "V" to theme.text          // Variable
+        14 -> "K" to theme.textMuted     // Constant
+        15 -> "S" to theme.warning       // String
+        16 -> "#" to theme.info          // Number
+        17 -> "B" to theme.info          // Boolean
+        18 -> "A" to theme.warning       // Array
+        19 -> "O" to theme.warning       // Object
+        22 -> "E" to theme.success       // EnumMember
+        23 -> "S" to theme.warning       // Struct
+        25 -> "O" to theme.info          // Operator
+        26 -> "T" to theme.warning       // TypeParameter
+        else -> "◇" to theme.textMuted   // Default/unknown
     }
 }
 

@@ -89,6 +89,15 @@
     <string name="sessions_empty_hint">Tap above to start a new session</string>
     <string name="sessions_new">New Session</string>
     <string name="sessions_delete">Delete</string>
+    <string name="sessions_rename">Rename</string>
+    <string name="sessions_rename_title">Rename Session</string>
+    <string name="sessions_rename_failed">Failed to rename session</string>
+    <string name="sessions_share">Share</string>
+    <string name="sessions_unshare">Unshare</string>
+    <string name="sessions_sharing">Sharing…</string>
+    <string name="sessions_share_failed">Failed to share session</string>
+    <string name="sessions_shared_badge">shared</string>
+    <string name="sessions_view_changes">View Changes</string>
     <string name="sessions_delete_title">Delete Session</string>
     <string name="sessions_delete_confirm">Are you sure you want to delete \"%1$s\"?</string>
     <string name="sessions_sub_count">%d sub</string>
@@ -113,6 +122,7 @@
     <string name="chat_input_placeholder">Type a message…</string>
     <string name="chat_input_placeholder_with_commands">Type a message or / for commands…</string>
     <string name="chat_send">Send</string>
+    <string name="vcs_branch_prefix">◈</string>
     
     <!-- Common -->
     <string name="back">Back</string>
@@ -224,6 +234,8 @@
     <string name="visual_settings_high_contrast_desc">Increase contrast for better visibility</string>
     <string name="visual_settings_expand_reasoning">Expand Reasoning by Default</string>
     <string name="visual_settings_expand_reasoning_desc">Show reasoning/thinking content expanded</string>
+    <string name="visual_settings_open_sub_agent_new_tab">Open Sub-Agents in New Tab</string>
+    <string name="visual_settings_open_sub_agent_new_tab_desc">Open sub-agent sessions in a new tab instead of the current tab</string>
     <string name="visual_settings_color_theme">Color Theme</string>
     <string name="visual_settings_oneline_minimal">Oneline (minimal)</string>
     <string name="visual_settings_compact_summary">Compact (summary)</string>
@@ -390,6 +402,8 @@
     <string name="cd_queue_message">Queue message</string>
     <string name="cd_show_details">Show details</string>
     <string name="cd_todos">Todos</string>
+    <string name="cd_git_branch">Current git branch</string>
+    <string name="cd_session_diff">View session changes</string>
     <string name="cd_retry">Retry</string>
     <string name="cd_switch_side_by_side">Switch to side-by-side</string>
     <string name="cd_switch_unified">Switch to unified</string>
@@ -399,6 +413,10 @@
     <!-- Diff Viewer -->
     <string name="diff_viewer_title">Diff Viewer</string>
     <string name="diff_no_content">No diff content to display</string>
+    <string name="session_diff_title">Session Changes</string>
+    <string name="session_diff_no_changes">No file changes in this session</string>
+    <string name="session_diff_summary">%1$d files changed  +%2$d -%3$d</string>
+    <string name="session_diff_loading">Loading changes…</string>
     
     <!-- Message Branching -->
     <string name="conversation_branches">Conversation Branches</string>
@@ -549,4 +567,32 @@
     <string name="notification_permission_not_granted">Notification permission not granted</string>
     <string name="notification_permission_tap_to_grant">Tap to request permission</string>
     <string name="notification_grant">Grant</string>
+
+    <!-- Revert/Unrevert -->
+    <string name="revert_changes">Revert</string>
+    <string name="revert_confirm_title">Revert Changes</string>
+    <string name="revert_confirm_message">This will undo all file changes from this message. Continue?</string>
+    <string name="revert_active_banner">Changes reverted</string>
+    <string name="unrevert_all">Restore All</string>
+    <string name="revert_failed">Failed to revert changes</string>
+    <string name="cd_revert">Revert changes from this message</string>
+
+    <!-- Session Summarize -->
+    <string name="sessions_summarize">Summarize</string>
+    <string name="sessions_summarize_started">Generating summary…</string>
+    <string name="sessions_summarize_failed">Failed to summarize session</string>
+
+    <!-- Symbol Search -->
+    <string name="symbol_search">Symbol Search</string>
+    <string name="symbol_search_hint">Search symbols…</string>
+    <string name="symbol_search_no_results">No symbols found</string>
+    <string name="symbol_kind_function">ƒ</string>
+    <string name="symbol_kind_class">C</string>
+    <string name="symbol_kind_interface">I</string>
+    <string name="symbol_kind_variable">V</string>
+    <string name="symbol_kind_method">M</string>
+    <string name="symbol_kind_property">P</string>
+    <string name="symbol_kind_enum">E</string>
+    <string name="symbol_kind_default">◇</string>
+    <string name="cd_symbol_search">Search workspace symbols</string>
 </resources>

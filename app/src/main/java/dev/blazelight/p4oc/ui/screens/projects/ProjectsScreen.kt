@@ -5,31 +5,20 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import dev.blazelight.p4oc.R
-import dev.blazelight.p4oc.core.network.ApiResult
-import dev.blazelight.p4oc.core.network.ConnectionManager
-import dev.blazelight.p4oc.core.network.DirectoryManager
-import dev.blazelight.p4oc.core.network.safeApiCall
 import dev.blazelight.p4oc.data.remote.dto.ProjectDto
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -37,61 +26,9 @@ import androidx.compose.ui.graphics.RectangleShape
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
+import dev.blazelight.p4oc.ui.components.TuiButton
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
 import dev.blazelight.p4oc.ui.components.TuiTopBar
-
-data class ProjectsUiState(
-    val projects: List<ProjectDto> = emptyList(),
-    val isLoading: Boolean = true,
-    val error: String? = null
-)
-
-
-class ProjectsViewModel constructor(
-    private val connectionManager: ConnectionManager,
-    private val directoryManager: DirectoryManager
-) : ViewModel() {
-
-    private val _uiState = MutableStateFlow(ProjectsUiState())
-    val uiState: StateFlow<ProjectsUiState> = _uiState.asStateFlow()
-
-    init {
-        loadProjects()
-    }
-
-    fun loadProjects() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
-            val api = connectionManager.getApi() ?: run {
-                _uiState.update { it.copy(isLoading = false, error = "Not connected") }
-                return@launch
-            }
-            val result = safeApiCall { api.listProjects() }
-            when (result) {
-                is ApiResult.Success -> {
-                    _uiState.update { 
-                        it.copy(
-                            isLoading = false, 
-                            projects = result.data.sortedByDescending { p -> p.time.created }
-                        ) 
-                    }
-                }
-                is ApiResult.Error -> {
-                    _uiState.update { it.copy(isLoading = false, error = result.message) }
-                }
-            }
-        }
-    }
-
-    /**
-     * Select a project and persist the directory.
-     */
-    fun selectProject(worktree: String) {
-        viewModelScope.launch {
-            directoryManager.setDirectoryAndPersist(worktree)
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -146,7 +83,7 @@ fun ProjectsScreen(
                             text = uiState.error ?: "Unknown error",
                             color = theme.error
                         )
-                        Button(onClick = { viewModel.loadProjects() }) {
+                        TuiButton(onClick = { viewModel.loadProjects() }) {
                             Text(stringResource(R.string.retry))
                         }
                     }
@@ -221,7 +158,7 @@ private fun ProjectCard(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick, role = Role.Button),
         color = theme.backgroundElement,
         shape = RectangleShape
     ) {

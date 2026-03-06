@@ -119,6 +119,10 @@ class VisualSettingsViewModel constructor(
     fun toggleReasoningExpanded() {
         persistSettings(_settings.value.copy(reasoningExpandedByDefault = !_settings.value.reasoningExpandedByDefault))
     }
+
+    fun toggleOpenSubAgentInNewTab() {
+        persistSettings(_settings.value.copy(openSubAgentInNewTab = !_settings.value.openSubAgentInNewTab))
+    }
     
     fun updateToolWidgetDefaultState(state: String) {
         persistSettings(_settings.value.copy(toolWidgetDefaultState = state))
@@ -147,7 +151,7 @@ fun VisualSettingsScreen(
                 title = stringResource(R.string.visual_settings_title),
                 onNavigateBack = onNavigateBack,
                 actions = {
-                    TextButton(onClick = viewModel::resetToDefaults) {
+                    TextButton(onClick = viewModel::resetToDefaults, shape = RectangleShape) {
                         Text(stringResource(R.string.visual_settings_reset))
                     }
                 }
@@ -209,6 +213,14 @@ fun VisualSettingsScreen(
                     checked = settings.reasoningExpandedByDefault,
                     onCheckedChange = { viewModel.toggleReasoningExpanded() },
                     icon = Icons.Default.Psychology
+                )
+                
+                SettingsSwitch(
+                    title = stringResource(R.string.visual_settings_open_sub_agent_new_tab),
+                    subtitle = stringResource(R.string.visual_settings_open_sub_agent_new_tab_desc),
+                    checked = settings.openSubAgentInNewTab,
+                    onCheckedChange = { viewModel.toggleOpenSubAgentInNewTab() },
+                    icon = Icons.Default.Tab
                 )
             }
             
@@ -308,7 +320,8 @@ private fun ThemeModeSelector(
                 selected = selected == id,
                 onClick = { onSelect(id) },
                 label = { Text(label) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                shape = RectangleShape
             )
         }
     }
@@ -468,7 +481,8 @@ private fun ToolWidgetStateSelector(
                 selected = selected == id,
                 onClick = { onSelect(id) },
                 label = { Text(label) },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                shape = RectangleShape
             )
         }
     }

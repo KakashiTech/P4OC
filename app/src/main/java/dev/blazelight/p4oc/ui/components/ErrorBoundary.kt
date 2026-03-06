@@ -203,7 +203,7 @@ fun ErrorSnackbar(
         modifier = modifier,
         action = {
             onRetry?.let {
-                TextButton(onClick = it) {
+                TextButton(onClick = it, shape = RectangleShape) {
                     Text(
                         stringResource(R.string.retry),
                         color = theme.error,
@@ -268,6 +268,7 @@ fun InlineError(
         onRetry?.let {
             TextButton(
                 onClick = it,
+                shape = RectangleShape,
                 contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.xs)
             ) {
                 Text(
@@ -318,7 +319,7 @@ fun NetworkErrorBanner(
                         fontFamily = FontFamily.Monospace
                     )
                 }
-                TextButton(onClick = onRetry) {
+                TextButton(onClick = onRetry, shape = RectangleShape) {
                     Text(
                         "[${stringResource(R.string.retry)}]",
                         color = theme.accent,

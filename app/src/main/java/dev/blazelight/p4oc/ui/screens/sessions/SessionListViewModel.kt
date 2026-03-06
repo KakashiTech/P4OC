@@ -8,6 +8,7 @@ import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.network.DirectoryManager
 import dev.blazelight.p4oc.core.network.safeApiCall
 import dev.blazelight.p4oc.data.remote.dto.CreateSessionRequest
+import dev.blazelight.p4oc.data.remote.dto.UpdateSessionRequest
 import dev.blazelight.p4oc.data.remote.mapper.SessionMapper
 import dev.blazelight.p4oc.domain.model.Session
 import dev.blazelight.p4oc.domain.model.SessionStatus
@@ -252,6 +253,92 @@ class SessionListViewModel constructor(
         _uiState.update { it.copy(newSessionId = null, newSessionDirectory = null) }
     }
 
+    fun renameSession(sessionId: String, newTitle: String) {
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+            val result = safeApiCall {
+                api.updateSession(sessionId, UpdateSessionRequest(title = newTitle), directoryManager.getDirectory())
+            }
+            when (result) {
+                is ApiResult.Success -> {
+                    val updated = SessionMapper.mapToDomain(result.data)
+                    _uiState.update { state ->
+                        state.copy(sessions = state.sessions.map { swp ->
+                            if (swp.session.id == sessionId) swp.copy(session = updated) else swp
+                        })
+                    }
+                }
+                is ApiResult.Error -> {
+                    _uiState.update { it.copy(error = "Failed to rename: ${result.message}") }
+                }
+            }
+        }
+    }
+
+    fun shareSession(sessionId: String) {
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+            val result = safeApiCall { api.shareSession(sessionId, directoryManager.getDirectory()) }
+            when (result) {
+                is ApiResult.Success -> {
+                    val updated = SessionMapper.mapToDomain(result.data)
+                    _uiState.update { state ->
+                        state.copy(
+                            sessions = state.sessions.map { swp ->
+                                if (swp.session.id == sessionId) swp.copy(session = updated) else swp
+                            },
+                            shareUrl = updated.shareUrl
+                        )
+                    }
+                }
+                is ApiResult.Error -> {
+                    _uiState.update { it.copy(error = "Failed to share session: ${result.message}") }
+                }
+            }
+        }
+    }
+
+    fun unshareSession(sessionId: String) {
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+            val result = safeApiCall { api.unshareSession(sessionId, directoryManager.getDirectory()) }
+            when (result) {
+                is ApiResult.Success -> {
+                    val updated = SessionMapper.mapToDomain(result.data)
+                    _uiState.update { state ->
+                        state.copy(sessions = state.sessions.map { swp ->
+                            if (swp.session.id == sessionId) swp.copy(session = updated) else swp
+                        })
+                    }
+                }
+                is ApiResult.Error -> {
+                    _uiState.update { it.copy(error = "Failed to unshare: ${result.message}") }
+                }
+            }
+        }
+    }
+
+    fun clearShareUrl() {
+        _uiState.update { it.copy(shareUrl = null) }
+    }
+
+    fun summarizeSession(sessionId: String) {
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+
+            // Body is optional per SDK — let server use its own default provider/model
+            val result = safeApiCall {
+                api.summarizeSession(sessionId, directoryManager.getDirectory())
+            }
+            when (result) {
+                is ApiResult.Success -> refresh()
+                is ApiResult.Error -> {
+                    _uiState.update { it.copy(error = "Failed to summarize: ${result.message}") }
+                }
+            }
+        }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(error = null) }
     }
@@ -264,6 +351,7 @@ data class SessionListUiState(
     val projects: List<ProjectInfo> = emptyList(),
     val newSessionId: String? = null,
     val newSessionDirectory: String? = null,
+    val shareUrl: String? = null,
     val error: String? = null
 )
 

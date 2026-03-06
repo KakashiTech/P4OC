@@ -28,9 +28,14 @@ sealed class Screen(val route: String) {
     
     data object DiffViewer : Screen("diff?content={content}&fileName={fileName}") {
         fun createRoute(diffContent: String, fileName: String? = null) = 
-            "diff?content=${Uri.encode(diffContent)}&fileName=${Uri.encode(fileName ?: "")}"
+            "diff?content=${Uri.encode(diffContent)}&fileName=${Uri.encode(fileName ?: "")}" 
         const val ARG_CONTENT = "content"
         const val ARG_FILE_NAME = "fileName"
+    }
+
+    data object SessionDiff : Screen("session_diff/{sessionId}") {
+        const val ARG_SESSION_ID = "sessionId"
+        fun createRoute(sessionId: String) = "session_diff/$sessionId"
     }
     
     data object ProviderConfig : Screen("settings/providers")

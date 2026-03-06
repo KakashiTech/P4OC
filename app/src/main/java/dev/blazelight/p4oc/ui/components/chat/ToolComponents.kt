@@ -586,6 +586,7 @@ fun EnhancedToolPart(
                             if (state.output.length > 500 || hasDiff) {
                                 TextButton(
                                     onClick = { showFullOutput = true },
+                                    shape = RectangleShape,
                                     contentPadding = PaddingValues(0.dp)
                                 ) {
                                     Text(

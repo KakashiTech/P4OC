@@ -89,11 +89,8 @@ data class RevertSessionRequest(
     @SerialName("partID") val partID: String? = null
 )
 
-@Serializable
-data class SummarizeSessionRequest(
-    @SerialName("providerID") val providerID: String,
-    @SerialName("modelID") val modelID: String
-)
+// SummarizeSessionRequest removed — the /summarize endpoint body is optional
+// and the server uses its own default provider/model when omitted.
 
 @Serializable
 data class InitSessionRequest(

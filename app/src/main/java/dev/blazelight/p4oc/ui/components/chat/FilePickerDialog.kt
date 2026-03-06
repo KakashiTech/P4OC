@@ -131,6 +131,7 @@ fun FilePickerDialog(
                                 fontFamily = FontFamily.Monospace,
                                 modifier = Modifier.clickable(
                                     enabled = selectedFiles.isNotEmpty(),
+                                    role = Role.Button,
                                     onClick = onConfirm
                                 )
                             )

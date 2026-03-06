@@ -29,8 +29,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.ui.components.TuiConfirmDialog
 import dev.blazelight.p4oc.ui.components.TuiAlertDialog
+import dev.blazelight.p4oc.ui.components.TuiInputDialog
 import dev.blazelight.p4oc.ui.components.TuiButton
 import dev.blazelight.p4oc.ui.components.TuiTextButton
+import dev.blazelight.p4oc.ui.components.TuiDropdownMenuItem
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
 import dev.blazelight.p4oc.domain.model.Session
@@ -45,6 +47,8 @@ import dev.blazelight.p4oc.ui.components.TuiTopBar
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.components.TuiCard
 import dev.blazelight.p4oc.ui.components.TuiSnackbar
+import android.content.Intent
+import androidx.compose.ui.platform.LocalContext
 
 private data class SessionNode(
     val sessionWithProject: SessionWithProject,
@@ -64,12 +68,15 @@ fun SessionListScreen(
     onSettings: () -> Unit,
     onProjects: () -> Unit = {},
     onProjectClick: (projectId: String) -> Unit = {},
+    onViewChanges: (sessionId: String) -> Unit = {},
     onNavigateBack: (() -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var showNewSessionDialog by remember { mutableStateOf(false) }
     var showNewSessionCustomDir by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf<Session?>(null) }
+    var showRenameDialog by remember { mutableStateOf<Session?>(null) }
+    val context = LocalContext.current
     
     val displayedSessions = remember(uiState.sessions, filterProjectId) {
         if (filterProjectId != null) {
@@ -89,6 +96,17 @@ fun SessionListScreen(
         uiState.newSessionId?.let { sessionId ->
             onNewSession(sessionId, uiState.newSessionDirectory)
             viewModel.clearNewSession()
+        }
+    }
+
+    LaunchedEffect(uiState.shareUrl) {
+        uiState.shareUrl?.let { shareUrl ->
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, shareUrl)
+            }
+            context.startActivity(Intent.createChooser(intent, null))
+            viewModel.clearShareUrl()
         }
     }
 
@@ -204,6 +222,20 @@ fun SessionListScreen(
                                 showProjectChip = filterProjectId == null,
                                 onSessionClick = { session -> onSessionClick(session.id, session.directory) },
                                 onDeleteSession = { showDeleteDialog = it },
+                                onRenameSession = { showRenameDialog = it },
+                                onShareSession = { session ->
+                                    if (session.shareUrl != null) {
+                                        viewModel.unshareSession(session.id)
+                                    } else {
+                                        viewModel.shareSession(session.id)
+                                    }
+                                },
+                                onViewChanges = { session ->
+                                    onViewChanges(session.id)
+                                },
+                                onSummarizeSession = { session ->
+                                    viewModel.summarizeSession(session.id)
+                                },
                                 onProjectClick = onProjectClick,
                                 onToggleExpand = { id ->
                                     expandedSessions[id] = !(expandedSessions[id] ?: false)
@@ -220,7 +252,7 @@ fun SessionListScreen(
                         .align(Alignment.BottomCenter)
                         .padding(Spacing.md),
                     action = {
-                        TextButton(onClick = viewModel::clearError) {
+                        TextButton(onClick = viewModel::clearError, shape = RectangleShape) {
                             Text(stringResource(R.string.sessions_dismiss))
                         }
                     }
@@ -259,6 +291,21 @@ fun SessionListScreen(
             isDestructive = true
         )
     }
+
+    showRenameDialog?.let { session ->
+        TuiInputDialog(
+            onDismissRequest = { showRenameDialog = null },
+            onConfirm = { newTitle ->
+                viewModel.renameSession(session.id, newTitle)
+                showRenameDialog = null
+            },
+            title = stringResource(R.string.sessions_rename_title),
+            initialValue = session.title,
+            label = stringResource(R.string.sessions_title_optional),
+            confirmText = stringResource(R.string.sessions_rename),
+            dismissText = stringResource(R.string.button_cancel)
+        )
+    }
 }
 
 private fun buildSessionTree(sessions: List<SessionWithProject>): List<SessionNode> {
@@ -285,6 +332,10 @@ private fun SessionTreeNode(
     showProjectChip: Boolean,
     onSessionClick: (Session) -> Unit,
     onDeleteSession: (Session) -> Unit,
+    onRenameSession: (Session) -> Unit,
+    onShareSession: (Session) -> Unit,
+    onViewChanges: (Session) -> Unit,
+    onSummarizeSession: (Session) -> Unit,
     onProjectClick: (String) -> Unit,
     onToggleExpand: (String) -> Unit
 ) {
@@ -292,7 +343,7 @@ private fun SessionTreeNode(
     val session = swp.session
     val isExpanded = expandedSessions[session.id] ?: false
     val hasChildren = node.children.isNotEmpty()
-    val indentPadding: Dp = (depth * 24).dp
+    val indentPadding: Dp = Sizing.treeIndent * depth
     
     Column(modifier = Modifier.padding(start = indentPadding)) {
         SessionCard(
@@ -301,8 +352,13 @@ private fun SessionTreeNode(
             projectName = swp.projectName,
             showProjectChip = showProjectChip,
             status = sessionStatuses[session.id],
+            isShared = session.shareUrl != null,
             onClick = { onSessionClick(session) },
             onDelete = { onDeleteSession(session) },
+            onRename = { onRenameSession(session) },
+            onShare = { onShareSession(session) },
+            onViewChanges = { onViewChanges(session) },
+            onSummarize = { onSummarizeSession(session) },
             onProjectClick = onProjectClick,
             childCount = node.totalDescendants,
             isExpanded = isExpanded,
@@ -328,6 +384,10 @@ private fun SessionTreeNode(
                         showProjectChip = showProjectChip,
                         onSessionClick = onSessionClick,
                         onDeleteSession = onDeleteSession,
+                        onRenameSession = onRenameSession,
+                        onShareSession = onShareSession,
+                        onViewChanges = onViewChanges,
+                        onSummarizeSession = onSummarizeSession,
                         onProjectClick = onProjectClick,
                         onToggleExpand = onToggleExpand
                     )
@@ -345,8 +405,13 @@ private fun SessionCard(
     projectName: String?,
     showProjectChip: Boolean,
     status: SessionStatus?,
+    isShared: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
+    onRename: () -> Unit,
+    onShare: () -> Unit,
+    onViewChanges: () -> Unit,
+    onSummarize: () -> Unit,
     onProjectClick: (String) -> Unit,
     childCount: Int = 0,
     isExpanded: Boolean = false,
@@ -363,7 +428,8 @@ private fun SessionCard(
             .fillMaxWidth()
             .combinedClickable(
                 onClick = onClick,
-                onLongClick = { showContextMenu = true }
+                onLongClick = { showContextMenu = true },
+                role = Role.Button
             ),
         color = when {
             isBusy -> theme.accent.copy(alpha = 0.1f)
@@ -463,6 +529,13 @@ private fun SessionCard(
                             )
                         }
                     }
+                    if (session.shareUrl != null) {
+                        Text(
+                            text = "◈ ${stringResource(R.string.sessions_shared_badge)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.info
+                        )
+                    }
                 }
             }
             
@@ -482,6 +555,50 @@ private fun SessionCard(
         expanded = showContextMenu,
         onDismissRequest = { showContextMenu = false }
     ) {
+        TuiDropdownMenuItem(
+            text = stringResource(R.string.sessions_rename),
+            onClick = {
+                showContextMenu = false
+                onRename()
+            },
+            leadingIcon = Icons.Default.Edit
+        )
+        TuiDropdownMenuItem(
+            text = stringResource(R.string.sessions_view_changes),
+            onClick = {
+                showContextMenu = false
+                onViewChanges()
+            },
+            leadingIcon = Icons.Default.Description
+        )
+        TuiDropdownMenuItem(
+            text = stringResource(R.string.sessions_summarize),
+            onClick = {
+                showContextMenu = false
+                onSummarize()
+            },
+            leadingIcon = Icons.Default.Summarize
+        )
+        if (isShared) {
+            TuiDropdownMenuItem(
+                text = stringResource(R.string.sessions_unshare),
+                onClick = {
+                    showContextMenu = false
+                    onShare()
+                },
+                leadingIcon = Icons.Default.LinkOff
+            )
+        } else {
+            TuiDropdownMenuItem(
+                text = stringResource(R.string.sessions_share),
+                onClick = {
+                    showContextMenu = false
+                    onShare()
+                },
+                leadingIcon = Icons.Default.Share
+            )
+        }
+        HorizontalDivider(color = theme.borderSubtle)
         DropdownMenuItem(
             text = { Text(stringResource(R.string.sessions_delete), color = theme.error) },
             onClick = {
@@ -490,7 +607,7 @@ private fun SessionCard(
             },
             leadingIcon = {
                 Icon(
-                    Icons.Default.Delete, 
+                    Icons.Default.Delete,
                     contentDescription = stringResource(R.string.sessions_delete),
                     tint = theme.error
                 )
@@ -511,7 +628,7 @@ private fun ProjectChip(
         color = ProjectColors.colorForProject(projectId),
         modifier = Modifier
             .padding(start = Spacing.md)
-            .widthIn(max = 150.dp)
+            .widthIn(max = Sizing.chipMaxWidth)
     ) {
         Box(
             contentAlignment = Alignment.Center,

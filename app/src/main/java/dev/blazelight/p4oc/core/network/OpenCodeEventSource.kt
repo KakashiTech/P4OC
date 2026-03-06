@@ -23,6 +23,7 @@ import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import java.net.URI
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class OpenCodeEventSource(
     private val okHttpClient: OkHttpClient,
@@ -60,8 +61,7 @@ class OpenCodeEventSource(
     @Volatile
     private var isShutdown = false
 
-    @Volatile
-    private var consecutiveErrors: Int = 0
+    private val consecutiveErrors = AtomicInteger(0)
 
     fun connect() {
         val besRef: BackgroundEventSource
@@ -77,7 +77,7 @@ class OpenCodeEventSource(
 
             AppLog.d(TAG, "connect() – creating BackgroundEventSource")
             _connectionState.value = ConnectionState.Connecting
-            consecutiveErrors = 0
+            consecutiveErrors.set(0)
 
             val gen = ++generation
             besRef = createBackgroundEventSource(gen)
@@ -107,7 +107,7 @@ class OpenCodeEventSource(
             }
             toClose = detachLocked()
             _connectionState.value = ConnectionState.Connecting
-            consecutiveErrors = 0
+            consecutiveErrors.set(0)
 
             val gen = ++generation
             besRef = createBackgroundEventSource(gen)
@@ -119,7 +119,7 @@ class OpenCodeEventSource(
 
     /** Reset error counter — call on foreground resume before reconnect. */
     fun resetConsecutiveErrors() {
-        consecutiveErrors = 0
+        consecutiveErrors.set(0)
     }
 
     fun shutdown() {
@@ -240,13 +240,14 @@ class OpenCodeEventSource(
 
         // Track whether onError already fired for this failure cycle to avoid double-counting.
         // FaultEvent sequence: onError → onClosed → ConnectionErrorHandler for one failure.
+        @Volatile
         private var errorFiredSinceOpen = false
 
         override fun onOpen() {
             if (!isActiveGeneration(gen)) return
             AppLog.d(TAG, "SSE connected (onOpen)")
             errorFiredSinceOpen = false
-            consecutiveErrors = 0
+            consecutiveErrors.set(0)
             _connectionState.value = ConnectionState.Connected
             emitEvent(OpenCodeEvent.Connected)
         }
@@ -272,12 +273,12 @@ class OpenCodeEventSource(
                 return
             }
             // Clean close without preceding error (e.g., server shutdown)
-            consecutiveErrors++
-            if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-                AppLog.w(TAG, "SSE stream closed (onClosed), $consecutiveErrors consecutive errors – escalating to Disconnected")
+            val closedCount = consecutiveErrors.incrementAndGet()
+            if (closedCount >= MAX_CONSECUTIVE_ERRORS) {
+                AppLog.w(TAG, "SSE stream closed (onClosed), $closedCount consecutive errors – escalating to Disconnected")
                 _connectionState.value = ConnectionState.Disconnected
             } else {
-                AppLog.d(TAG, "SSE stream closed (onClosed), consecutiveErrors=$consecutiveErrors, library may auto-reconnect")
+                AppLog.d(TAG, "SSE stream closed (onClosed), consecutiveErrors=$closedCount, library may auto-reconnect")
                 // Don't set Error state here to avoid UI flicker during auto-retries
             }
         }
@@ -285,12 +286,12 @@ class OpenCodeEventSource(
         override fun onError(t: Throwable) {
             if (!isActiveGeneration(gen)) return
             errorFiredSinceOpen = true
-            consecutiveErrors++
-            if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-                AppLog.e(TAG, "SSE error (onError): ${t.message}, $consecutiveErrors consecutive errors – escalating to Disconnected", t)
+            val errorCount = consecutiveErrors.incrementAndGet()
+            if (errorCount >= MAX_CONSECUTIVE_ERRORS) {
+                AppLog.e(TAG, "SSE error (onError): ${t.message}, $errorCount consecutive errors – escalating to Disconnected", t)
                 _connectionState.value = ConnectionState.Disconnected
             } else {
-                AppLog.e(TAG, "SSE error (onError): ${t.message}, consecutiveErrors=$consecutiveErrors", t)
+                AppLog.e(TAG, "SSE error (onError): ${t.message}, consecutiveErrors=$errorCount", t)
                 _connectionState.value = ConnectionState.Error(t.message)
             }
             emitEvent(OpenCodeEvent.Error(t))

@@ -68,6 +68,17 @@ object Sizing {
     val panelWidthMd: Dp = 120.dp
     val panelWidthLg: Dp = 180.dp
 
+    // Component-specific
+    val switchCellWidth: Dp = 40.dp   // TuiSwitch ON/OFF cell width
+    val treeIndent: Dp = 24.dp        // Session tree indentation per level
+    val chipMaxWidth: Dp = 150.dp     // Project chip max width
+    val tabHeight: Dp = 22.dp         // Tab bar item height
+
+    // Progress indicators
+    val progressBarHeight: Dp = 8.dp       // Standard LinearProgressIndicator
+    val progressBarHeightSm: Dp = 4.dp     // Compact LinearProgressIndicator
+    val progressStrokeWidth: Dp = 3.dp     // Circular progress arc stroke
+
     // Corner radius (we use 0 for TUI, but keep tokens for potential future use)
     val radiusNone: Dp = 0.dp
     val radiusSm: Dp = 2.dp

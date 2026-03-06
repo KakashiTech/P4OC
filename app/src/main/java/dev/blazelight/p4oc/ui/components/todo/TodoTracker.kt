@@ -122,7 +122,7 @@ fun TodoTrackerSheet(
                         progress = { progress },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(4.dp),
+                            .height(Sizing.progressBarHeightSm),
                         color = theme.accent,
                         trackColor = theme.border
                     )

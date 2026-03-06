@@ -27,6 +27,7 @@ import dev.blazelight.p4oc.ui.components.chat.InterruptedTool
 import dev.blazelight.p4oc.ui.components.chat.SelectedFile
 import dev.blazelight.p4oc.ui.navigation.Screen
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
@@ -70,6 +71,9 @@ class ChatViewModel constructor(
     val messages: StateFlow<List<MessageWithParts>> = messageStore.messages
 
     val connectionState: StateFlow<ConnectionState> = connectionManager.connectionState
+
+    private val _branchName = MutableStateFlow<String?>(null)
+    val branchName: StateFlow<String?> = _branchName.asStateFlow()
 
     // Track whether this tab has unread responses (LLM finished but user hasn't viewed)
     private val _hasUnreadResponse = MutableStateFlow(false)
@@ -130,6 +134,7 @@ class ChatViewModel constructor(
         modelAgentManager.loadAgents()
         modelAgentManager.loadModels()
         observeEvents()
+        loadVcsInfo()
     }
 
     // --- Public API (delegating) ---
@@ -165,6 +170,8 @@ class ChatViewModel constructor(
                     if (sessionDirectory == null && session.directory.isNotBlank()) {
                         directoryManager.setDirectory(session.directory)
                     }
+                    // Reload VCS now that we have the canonical session directory
+                    loadVcsInfo()
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(error = "Failed to load session") }
@@ -203,15 +210,34 @@ class ChatViewModel constructor(
         }
     }
 
+    private fun loadVcsInfo() {
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+            val directory = getDirectory()
+            when (val result = safeApiCall { api.getVcsInfo(directory) }) {
+                is ApiResult.Success -> _branchName.value = result.data.branch
+                is ApiResult.Error -> AppLog.w(TAG, "Failed to load VCS info: ${result.message}")
+            }
+        }
+    }
+
     // --- SSE event routing ---
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun observeEvents() {
         viewModelScope.launch {
             AppLog.d(TAG, "observeEvents: Starting to collect SSE events")
-            connectionManager.getEventSource()?.events?.collect { event ->
-                AppLog.d(TAG, "observeEvents: Received ${event::class.simpleName}")
-                handleEvent(event)
-            }
+            // Use flatMapLatest on the connection flow so that if a full reconnect
+            // creates a new Connection (with a new EventSource), we automatically
+            // switch to the new event stream instead of staying on the stale one.
+            connectionManager.connection
+                .flatMapLatest { conn ->
+                    conn?.eventSource?.events ?: emptyFlow()
+                }
+                .collect { event ->
+                    AppLog.d(TAG, "observeEvents: Received ${event::class.simpleName}")
+                    handleEvent(event)
+                }
         }
     }
 
@@ -521,6 +547,39 @@ class ChatViewModel constructor(
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(isLoadingTodos = false) }
+                }
+            }
+        }
+    }
+
+    // --- Revert / Unrevert ---
+
+    fun revertMessage(messageId: String) {
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+            val request = dev.blazelight.p4oc.data.remote.dto.RevertSessionRequest(messageID = messageId)
+            val result = safeApiCall { api.revertSession(sessionId, request, getDirectory()) }
+            when (result) {
+                is ApiResult.Success -> {
+                    loadSession()  // Refresh to get updated revert state
+                }
+                is ApiResult.Error -> {
+                    _uiState.update { it.copy(error = "Failed to revert: ${result.message}") }
+                }
+            }
+        }
+    }
+
+    fun unrevertSession() {
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+            val result = safeApiCall { api.unrevertSession(sessionId, getDirectory()) }
+            when (result) {
+                is ApiResult.Success -> {
+                    loadSession()  // Refresh to clear revert state
+                }
+                is ApiResult.Error -> {
+                    _uiState.update { it.copy(error = "Failed to unrevert: ${result.message}") }
                 }
             }
         }

@@ -5,7 +5,12 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.navigation.NavHostController
+import dev.blazelight.p4oc.core.datastore.SettingsDataStore
+import dev.blazelight.p4oc.core.datastore.VisualSettings
+import org.koin.compose.koinInject
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -14,6 +19,7 @@ import dev.blazelight.p4oc.domain.model.SessionConnectionState
 import dev.blazelight.p4oc.ui.navigation.Screen
 import dev.blazelight.p4oc.ui.screens.chat.ChatScreen
 import dev.blazelight.p4oc.ui.screens.diff.DiffViewerScreen
+import dev.blazelight.p4oc.ui.screens.diff.SessionDiffScreen
 import dev.blazelight.p4oc.ui.screens.files.FileExplorerScreen
 import dev.blazelight.p4oc.ui.screens.files.FileViewerScreen
 import dev.blazelight.p4oc.ui.screens.projects.ProjectsScreen
@@ -41,6 +47,11 @@ fun TabNavHost(
     onConnectionStateChanged: ((SessionConnectionState?) -> Unit)? = null,
     modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier
 ) {
+    // Read visual settings for sub-agent tab behavior
+    val settingsDataStore: SettingsDataStore = koinInject()
+    val visualSettings by settingsDataStore.visualSettings.collectAsState(initial = VisualSettings())
+    val openSubAgentInNewTab = visualSettings.openSubAgentInNewTab
+
     // Navigate to pending route once the NavHost graph is set
     LaunchedEffect(pendingRoute) {
         pendingRoute?.let { route ->
@@ -102,6 +113,9 @@ fun TabNavHost(
                 },
                 onProjectClick = { projectId ->
                     navController.navigate(Screen.SessionsFiltered.createRoute(projectId))
+                },
+                onViewChanges = { sessionId ->
+                    navController.navigate(Screen.SessionDiff.createRoute(sessionId))
                 }
             )
         }
@@ -138,6 +152,9 @@ fun TabNavHost(
                 onProjectClick = { pid ->
                     navController.navigate(Screen.SessionsFiltered.createRoute(pid))
                 },
+                onViewChanges = { sessionId ->
+                    navController.navigate(Screen.SessionDiff.createRoute(sessionId))
+                },
                 onNavigateBack = {
                     navController.popBackStack()
                 }
@@ -165,9 +182,25 @@ fun TabNavHost(
                 },
                 onOpenTerminal = onNewTerminalTab,
                 onOpenFiles = onNewFilesTab,
+                onViewSessionDiff = { sessionId ->
+                    navController.navigate(Screen.SessionDiff.createRoute(sessionId))
+                },
                 onOpenSubSession = { subSessionId ->
-                    // Navigate to the sub-agent session in the current tab
-                    navController.navigate(Screen.Chat.createRoute(subSessionId))
+                    // Check if sub-session is already open in another tab
+                    val existingTab = tabManager.findTabBySessionId(subSessionId)
+                    if (existingTab != null && existingTab.id != tabId) {
+                        // Focus the existing tab
+                        tabManager.focusTab(existingTab.id)
+                    } else if (openSubAgentInNewTab) {
+                        // Open in a new tab (default)
+                        tabManager.createTab(
+                            pendingRoute = Screen.Chat.createRoute(subSessionId),
+                            focus = true
+                        )
+                    } else {
+                        // Same tab (legacy behavior)
+                        navController.navigate(Screen.Chat.createRoute(subSessionId))
+                    }
                 },
                 onSessionLoaded = { sessionId, sessionTitle ->
                     // Update tab's session binding
@@ -245,6 +278,19 @@ fun TabNavHost(
             DiffViewerScreen(
                 diffContent = Uri.decode(encodedContent),
                 fileName = Uri.decode(encodedFileName).takeIf { it.isNotEmpty() },
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = Screen.SessionDiff.route,
+            arguments = listOf(
+                navArgument(Screen.SessionDiff.ARG_SESSION_ID) { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val sessionId = backStackEntry.arguments?.getString(Screen.SessionDiff.ARG_SESSION_ID).orEmpty()
+            SessionDiffScreen(
+                sessionId = sessionId,
                 onNavigateBack = { navController.popBackStack() }
             )
         }

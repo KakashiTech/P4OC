@@ -148,7 +148,7 @@ private fun TabIndicator(
     
     Surface(
         modifier = modifier
-            .height(22.dp)
+            .height(Sizing.tabHeight)
             .clickable(onClick = onClick, role = Role.Tab),
         shape = RectangleShape,
         color = backgroundColor

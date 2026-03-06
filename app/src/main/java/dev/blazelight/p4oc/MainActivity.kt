@@ -16,6 +16,7 @@ import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.ui.navigation.NavGraph
 import dev.blazelight.p4oc.ui.navigation.Screen
 import dev.blazelight.p4oc.ui.tabs.MainTabScreen
+import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.PocketCodeTheme
 import org.koin.android.ext.android.inject
 
@@ -39,7 +40,7 @@ class MainActivity : ComponentActivity() {
             PocketCodeTheme(themeName = themeName, darkTheme = darkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                    color = LocalOpenCodeTheme.current.background
                 ) {
                     // Use NavGraph for initial Server/Setup screens,
                     // then MainTabScreen takes over after connection

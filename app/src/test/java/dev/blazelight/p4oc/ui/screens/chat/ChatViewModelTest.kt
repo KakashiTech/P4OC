@@ -6,6 +6,8 @@ import dev.blazelight.p4oc.core.datastore.VisualSettings
 import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.network.ConnectionState
+import dev.blazelight.p4oc.core.network.Connection
+import dev.blazelight.p4oc.core.network.ServerConfig
 import dev.blazelight.p4oc.core.network.DirectoryManager
 import dev.blazelight.p4oc.core.network.OpenCodeApi
 import dev.blazelight.p4oc.core.network.OpenCodeEventSource
@@ -90,6 +92,16 @@ class ChatViewModelTest {
         every { connectionManager.getApi() } returns null
         every { connectionManager.getEventSource() } returns eventSource
         every { eventSource.events } returns events
+
+        // Mock connectionManager.connection with a Connection wrapping the test eventSource
+        // so that observeEvents() can flatMapLatest into the events flow
+        val mockApi = mockk<OpenCodeApi>()
+        val testConnection = Connection(
+            config = ServerConfig.LOCAL_DEFAULT,
+            api = mockApi,
+            eventSource = eventSource
+        )
+        every { connectionManager.connection } returns MutableStateFlow(testConnection)
 
         every { directoryManager.getDirectory() } returns null
         every { directoryManager.setDirectory(any()) } just runs

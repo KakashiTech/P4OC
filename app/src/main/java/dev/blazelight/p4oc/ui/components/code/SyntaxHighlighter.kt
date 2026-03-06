@@ -12,14 +12,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Spacing
 import androidx.compose.ui.unit.sp
@@ -443,7 +444,22 @@ fun SyntaxHighlightedCode(
     val highlightedCode = remember(code, highlighter) { highlighter.highlight(code) }
     
     val lines = code.lines()
-    val lineNumberWidth = (lines.size.toString().length * 10 + 16).dp
+    
+    // Measure actual glyph width instead of assuming 10dp per digit —
+    // respects system font scaling and different screen densities.
+    val textMeasurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val lineNumberWidth = remember(lines.size, fontSize) {
+        val widestLabel = lines.size.toString()  // e.g. "999" for a 999-line file
+        val measured = textMeasurer.measure(
+            text = widestLabel,
+            style = androidx.compose.ui.text.TextStyle(
+                fontSize = fontSize.sp,
+                fontFamily = FontFamily.Monospace
+            )
+        )
+        with(density) { (measured.size.width.toDp()) + Spacing.md + Spacing.md }  // measured + horizontal padding
+    }
     
     val verticalScrollState = rememberScrollState()
     val horizontalScrollState = rememberScrollState()

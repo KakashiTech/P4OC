@@ -23,6 +23,7 @@ import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.core.network.ApiResult
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.network.safeApiCall
+import dev.blazelight.p4oc.ui.components.TuiButton
 import dev.blazelight.p4oc.ui.components.TuiAlertDialog
 import dev.blazelight.p4oc.ui.components.TuiTextButton
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
@@ -174,7 +175,7 @@ fun AgentsConfigScreen(
                         style = MaterialTheme.typography.titleMedium,
                         color = theme.error
                     )
-                    Button(onClick = { viewModel.loadAgents() }) {
+                    TuiButton(onClick = { viewModel.loadAgents() }) {
                         Text(stringResource(R.string.retry))
                     }
                 }
@@ -317,6 +318,7 @@ private fun AgentCard(
                                             style = MaterialTheme.typography.labelSmall
                                         ) 
                                     },
+                                    shape = RectangleShape,
                                     modifier = Modifier.height(Sizing.iconLg)
                                 )
                             }

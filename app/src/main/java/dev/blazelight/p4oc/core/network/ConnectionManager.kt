@@ -70,7 +70,8 @@ class ConnectionManager constructor(
         _connectionState.value = ConnectionState.Connecting
 
         return try {
-            val okHttpClient = buildOkHttpClient(config, password)
+            val baseClient = buildBaseOkHttpClient(config, password)
+            val okHttpClient = buildOkHttpClient(baseClient)
             val retrofit = buildRetrofit(config.url, okHttpClient)
             val api = retrofit.create(OpenCodeApi::class.java)
 
@@ -85,7 +86,7 @@ class ConnectionManager constructor(
 
             AppLog.d(TAG, "Health check passed, starting SSE")
 
-            val sseClient = buildSseOkHttpClient(config, password)
+            val sseClient = buildSseOkHttpClient(baseClient)
             val eventSource = OpenCodeEventSource(
                 okHttpClient = sseClient,
                 json = json,
@@ -94,8 +95,8 @@ class ConnectionManager constructor(
                 directoryProvider = { directoryManager.getDirectory() }
             )
 
-            // Build and store the auth-aware WebSocket client
-            _authOkHttpClient.value = buildWebSocketOkHttpClient(config, password)
+            // Build and store the auth-aware WebSocket client (shares pool with base)
+            _authOkHttpClient.value = buildWebSocketOkHttpClient(baseClient)
 
             val connection = Connection(config, api, eventSource)
             _connection.value = connection
@@ -159,57 +160,49 @@ class ConnectionManager constructor(
         _connectionState.value = ConnectionState.Disconnected
     }
 
-    private fun buildOkHttpClient(config: ServerConfig, password: String?): OkHttpClient {
+    /**
+     * Build a shared base OkHttpClient with auth and common settings.
+     * Derived clients share its connection pool and dispatcher via newBuilder().
+     */
+    private fun buildBaseOkHttpClient(config: ServerConfig, password: String?): OkHttpClient {
         val builder = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+
+        if (config.username != null && password != null) {
+            builder.addInterceptor(createAuthInterceptor(config.username, password))
+        }
+
+        return builder.build()
+    }
+
+    private fun buildOkHttpClient(base: OkHttpClient): OkHttpClient =
+        base.newBuilder()
+            .readTimeout(60, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply {
                 level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE
                 redactHeader("Authorization")
             })
+            .build()
 
-        if (config.username != null && password != null) {
-            builder.addInterceptor(createAuthInterceptor(config.username, password))
-        }
-
-        return builder.build()
-    }
-
-    private fun buildSseOkHttpClient(config: ServerConfig, password: String?): OkHttpClient {
-        val builder = OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
+    private fun buildSseOkHttpClient(base: OkHttpClient): OkHttpClient =
+        base.newBuilder()
             .readTimeout(0, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply {
                 level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.HEADERS else HttpLoggingInterceptor.Level.NONE
                 redactHeader("Authorization")
             })
-
-        if (config.username != null && password != null) {
-            builder.addInterceptor(createAuthInterceptor(config.username, password))
-        }
-
-        return builder.build()
-    }
+            .build()
 
     /**
-     * Build an OkHttpClient configured for WebSocket use (long-lived, with auth).
+     * Build an OkHttpClient configured for WebSocket use (long-lived, with ping).
      * This is exposed to PtyWebSocketClient via [authOkHttpClient].
      */
-    private fun buildWebSocketOkHttpClient(config: ServerConfig, password: String?): OkHttpClient {
-        val builder = OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
+    private fun buildWebSocketOkHttpClient(base: OkHttpClient): OkHttpClient =
+        base.newBuilder()
             .readTimeout(0, TimeUnit.SECONDS)  // No timeout for WebSocket
-            .writeTimeout(30, TimeUnit.SECONDS)
             .pingInterval(30, TimeUnit.SECONDS)
-
-        if (config.username != null && password != null) {
-            builder.addInterceptor(createAuthInterceptor(config.username, password))
-        }
-
-        return builder.build()
-    }
+            .build()
 
     private fun createAuthInterceptor(username: String, password: String): Interceptor {
         return Interceptor { chain ->

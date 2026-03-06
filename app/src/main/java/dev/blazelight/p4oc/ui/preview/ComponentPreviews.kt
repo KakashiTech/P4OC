@@ -13,6 +13,7 @@ import androidx.compose.ui.tooling.preview.PreviewParameter
 import androidx.compose.ui.tooling.preview.PreviewParameterProvider
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.domain.model.Session
+import androidx.compose.ui.graphics.RectangleShape
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.PocketCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
@@ -153,7 +154,7 @@ private fun ErrorStatePreview() {
                     style = MaterialTheme.typography.titleMedium,
                     color = theme.error
                 )
-                Button(onClick = {}) {
+                Button(onClick = {}, shape = RectangleShape) {
                     Text("Retry")
                 }
             }

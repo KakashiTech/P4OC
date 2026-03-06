@@ -53,7 +53,8 @@ internal fun MessageBlockView(
     onToolAlways: (String) -> Unit,
     onOpenSubSession: ((String) -> Unit)? = null,
     defaultToolWidgetState: ToolWidgetState = ToolWidgetState.COMPACT,
-    pendingPermissionsByCallId: Map<String, Permission> = emptyMap()
+    pendingPermissionsByCallId: Map<String, Permission> = emptyMap(),
+    onRevert: ((String) -> Unit)? = null
 ) {
     when (block) {
         is MessageBlock.UserBlock -> {
@@ -64,7 +65,8 @@ internal fun MessageBlockView(
                 onToolAlways = onToolAlways,
                 onOpenSubSession = onOpenSubSession,
                 defaultToolWidgetState = defaultToolWidgetState,
-                pendingPermissionsByCallId = pendingPermissionsByCallId
+                pendingPermissionsByCallId = pendingPermissionsByCallId,
+                onRevert = onRevert
             )
         }
         is MessageBlock.AssistantBlock -> {
@@ -81,7 +83,8 @@ internal fun MessageBlockView(
                 onToolAlways = onToolAlways,
                 onOpenSubSession = onOpenSubSession,
                 defaultToolWidgetState = defaultToolWidgetState,
-                pendingPermissionsByCallId = pendingPermissionsByCallId
+                pendingPermissionsByCallId = pendingPermissionsByCallId,
+                onRevert = onRevert
             )
         }
     }

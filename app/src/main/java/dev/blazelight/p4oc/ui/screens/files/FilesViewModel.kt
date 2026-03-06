@@ -5,7 +5,9 @@ import androidx.lifecycle.viewModelScope
 import dev.blazelight.p4oc.core.network.ApiResult
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.network.safeApiCall
+import dev.blazelight.p4oc.data.remote.mapper.SymbolMapper
 import dev.blazelight.p4oc.domain.model.FileNode
+import dev.blazelight.p4oc.domain.model.Symbol
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,6 +21,9 @@ class FilesViewModel constructor(
 
     private val _uiState = MutableStateFlow(FilesUiState())
     val uiState: StateFlow<FilesUiState> = _uiState.asStateFlow()
+
+    private val _symbolResults = MutableStateFlow<List<Symbol>>(emptyList())
+    val symbolResults: StateFlow<List<Symbol>> = _symbolResults.asStateFlow()
 
     private val pathStack = mutableListOf<String>()
 
@@ -83,6 +88,21 @@ class FilesViewModel constructor(
                         it.copy(isLoading = false, error = filesResult.message)
                     }
                 }
+            }
+        }
+    }
+
+    fun searchSymbols(query: String) {
+        viewModelScope.launch {
+            _symbolResults.value = emptyList()
+            if (query.isBlank()) return@launch
+            val api = connectionManager.getApi() ?: return@launch
+            val result = safeApiCall { api.searchSymbols(query) }
+            when (result) {
+                is ApiResult.Success -> {
+                    _symbolResults.value = result.data.map { SymbolMapper.mapToDomain(it) }
+                }
+                is ApiResult.Error -> { /* Silently fail for search */ }
             }
         }
     }

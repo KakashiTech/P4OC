@@ -16,7 +16,11 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -34,10 +38,13 @@ import dev.blazelight.p4oc.ui.components.command.CommandPalette
 import dev.blazelight.p4oc.ui.components.question.InlineQuestionCard
 import dev.blazelight.p4oc.ui.components.todo.TodoTrackerSheet
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
+import dev.blazelight.p4oc.ui.components.TuiDropdownMenuItem
 import dev.blazelight.p4oc.ui.components.TuiTopBar
+import dev.blazelight.p4oc.ui.components.TuiConfirmDialog
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
 import dev.blazelight.p4oc.ui.components.TuiSnackbar
 import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.RectangleShape
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
@@ -49,6 +56,7 @@ fun ChatScreen(
     onNavigateBack: () -> Unit,
     onOpenTerminal: () -> Unit,
     onOpenFiles: () -> Unit,
+    onViewSessionDiff: ((String) -> Unit)? = null,
     onOpenSubSession: ((String) -> Unit)? = null,
     onSessionLoaded: ((sessionId: String, sessionTitle: String) -> Unit)? = null,
     onConnectionStateChanged: ((SessionConnectionState?) -> Unit)? = null,
@@ -57,6 +65,7 @@ fun ChatScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val branchName by viewModel.branchName.collectAsStateWithLifecycle()
     val sessionConnectionState by viewModel.sessionConnectionState.collectAsStateWithLifecycle()
     val visualSettings by viewModel.visualSettings.collectAsStateWithLifecycle()
 
@@ -102,6 +111,7 @@ fun ChatScreen(
     var showCommandPalette by remember { mutableStateOf(false) }
     var showTodoTracker by remember { mutableStateOf(false) }
     var showFilePicker by remember { mutableStateOf(false) }
+    var showRevertDialog by remember { mutableStateOf<String?>(null) }
     
     // Scroll UX state
     var userScrolledAway by remember { mutableStateOf(false) }
@@ -171,8 +181,12 @@ fun ChatScreen(
                     viewModel.loadCommands()
                     showCommandPalette = true
                 },
+                onViewChanges = {
+                    uiState.session?.id?.let { onViewSessionDiff?.invoke(it) }
+                },
                 onAbort = viewModel::abortSession,
                 isBusy = uiState.isBusy,
+                branchName = branchName,
                 todoCount = uiState.todos.count { it.status == "in_progress" || it.status == "pending" },
                 onTodos = {
                     viewModel.loadTodos()
@@ -181,47 +195,51 @@ fun ChatScreen(
             )
         },
         bottomBar = {
-            Column(
-                modifier = Modifier
-                    .imePadding()
-                    .navigationBarsPadding()
-            ) {
-                ModelAgentSelectorBar(
-                    availableAgents = availableAgents,
-                    selectedAgent = selectedAgent,
-                    onAgentSelected = viewModel.modelAgentManager::selectAgent,
-                    availableModels = availableModels,
-                    selectedModel = selectedModel,
-                    onModelSelected = viewModel.modelAgentManager::selectModel,
-                    favoriteModels = favoriteModels,
-                    recentModels = recentModels,
-                    onToggleFavorite = viewModel.modelAgentManager::toggleFavoriteModel
-                )
-                ChatInputBar(
-                    value = uiState.inputText,
-                    onValueChange = { text ->
-                        viewModel.updateInput(text)
-                        // Load commands when user starts typing /
-                        if (text.startsWith("/") && uiState.commands.isEmpty()) {
-                            viewModel.loadCommands()
-                        }
-                    },
-                    onSend = viewModel::sendMessage,
-                    isLoading = uiState.isSending,
-                    enabled = connectionState is ConnectionState.Connected,
-                    isBusy = uiState.isBusy,
-                    hasQueuedMessage = uiState.queuedMessage != null,
-                    onQueueMessage = viewModel::queueMessage,
-                    attachedFiles = attachedFiles,
-                    onAttachClick = {
-                        viewModel.filePickerManager.loadPickerFiles()
-                        showFilePicker = true
-                    },
-                    onRemoveAttachment = viewModel.filePickerManager::detachFile,
-                    commands = uiState.commands,
-                    onCommandSelected = { /* Command text is already updated via onValueChange */ },
-                    requestFocus = isActiveTab
-                )
+            // Sub-agent sessions are read-only — hide input bar and model selector
+            val isSubAgent = uiState.session?.parentID != null
+            if (!isSubAgent) {
+                Column(
+                    modifier = Modifier
+                        .imePadding()
+                        .navigationBarsPadding()
+                ) {
+                    ModelAgentSelectorBar(
+                        availableAgents = availableAgents,
+                        selectedAgent = selectedAgent,
+                        onAgentSelected = viewModel.modelAgentManager::selectAgent,
+                        availableModels = availableModels,
+                        selectedModel = selectedModel,
+                        onModelSelected = viewModel.modelAgentManager::selectModel,
+                        favoriteModels = favoriteModels,
+                        recentModels = recentModels,
+                        onToggleFavorite = viewModel.modelAgentManager::toggleFavoriteModel
+                    )
+                    ChatInputBar(
+                        value = uiState.inputText,
+                        onValueChange = { text ->
+                            viewModel.updateInput(text)
+                            // Load commands when user starts typing /
+                            if (text.startsWith("/") && uiState.commands.isEmpty()) {
+                                viewModel.loadCommands()
+                            }
+                        },
+                        onSend = viewModel::sendMessage,
+                        isLoading = uiState.isSending,
+                        enabled = connectionState is ConnectionState.Connected,
+                        isBusy = uiState.isBusy,
+                        hasQueuedMessage = uiState.queuedMessage != null,
+                        onQueueMessage = viewModel::queueMessage,
+                        attachedFiles = attachedFiles,
+                        onAttachClick = {
+                            viewModel.filePickerManager.loadPickerFiles()
+                            showFilePicker = true
+                        },
+                        onRemoveAttachment = viewModel.filePickerManager::detachFile,
+                        commands = uiState.commands,
+                        onCommandSelected = { /* Command text is already updated via onValueChange */ },
+                        requestFocus = isActiveTab
+                    )
+                }
             }
         }
     ) { padding ->
@@ -230,6 +248,35 @@ fun ChatScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // Revert active banner
+            uiState.session?.revert?.let {
+                val theme = LocalOpenCodeTheme.current
+                Surface(
+                    color = theme.warning.copy(alpha = 0.15f),
+                    shape = RectangleShape
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "\u21BA ${stringResource(R.string.revert_active_banner)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = theme.warning
+                        )
+                        Text(
+                            text = "[${stringResource(R.string.unrevert_all)}]",
+                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                            color = theme.accent,
+                            modifier = Modifier.clickable(role = Role.Button) { viewModel.unrevertSession() }
+                        )
+                    }
+                }
+            }
+
             val hasContent = messages.isNotEmpty() || uiState.isBusy
             
             if (!hasContent && !uiState.isLoading) {
@@ -287,7 +334,8 @@ fun ChatScreen(
                             onToolAlways = { viewModel.respondToPermission(it, "always") },
                             onOpenSubSession = onOpenSubSession,
                             defaultToolWidgetState = defaultToolWidgetState,
-                            pendingPermissionsByCallId = pendingPermissionsByCallId
+                            pendingPermissionsByCallId = pendingPermissionsByCallId,
+                            onRevert = { messageId -> showRevertDialog = messageId }
                         )
                     }
                 }
@@ -305,7 +353,7 @@ fun ChatScreen(
                         .align(Alignment.BottomCenter)
                         .padding(Spacing.md),
                     action = {
-                        TextButton(onClick = viewModel::clearError) {
+                        TextButton(onClick = viewModel::clearError, shape = RectangleShape) {
                             Text(stringResource(R.string.dismiss))
                         }
                     }
@@ -369,6 +417,18 @@ fun ChatScreen(
             onDismiss = { showFilePicker = false }
         )
     }
+
+    showRevertDialog?.let { messageId ->
+        TuiConfirmDialog(
+            onDismissRequest = { showRevertDialog = null },
+            onConfirm = { viewModel.revertMessage(messageId) },
+            title = stringResource(R.string.revert_confirm_title),
+            message = stringResource(R.string.revert_confirm_message),
+            confirmText = stringResource(R.string.revert_changes),
+            dismissText = stringResource(R.string.button_cancel),
+            isDestructive = true
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -380,77 +440,125 @@ private fun ChatTopBar(
     onTerminal: () -> Unit,
     onFiles: () -> Unit,
     onCommands: () -> Unit,
+    onViewChanges: () -> Unit,
     onAbort: () -> Unit,
     isBusy: Boolean,
+    branchName: String? = null,
     todoCount: Int = 0,
     onTodos: () -> Unit = {}
 ) {
     val theme = LocalOpenCodeTheme.current
+    var showOverflow by remember { mutableStateOf(false) }
+
     TuiTopBar(
         title = title,
         onNavigateBack = onBack,
         actions = {
-            ConnectionIndicator(state = connectionState)
+            // Compact status: connection dot + branch (no 40dp boxes)
+            ConnectionDot(state = connectionState)
+            branchName?.let { branch ->
+                Text(
+                    text = "${stringResource(R.string.vcs_branch_prefix)} $branch",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace
+                    ),
+                    color = theme.textMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .widthIn(max = Sizing.panelWidthSm)  // 80dp — tighter
+                        .padding(start = Spacing.xxs)
+                )
+            }
             
-            Spacer(Modifier.width(Spacing.md))
-            
+            Spacer(Modifier.width(Spacing.xs))
+            // Abort — only when busy (red ■ glyph)
             if (isBusy) {
                 IconButton(
                     onClick = onAbort,
                     modifier = Modifier.size(Sizing.iconButtonMd).testTag("chat_abort_button")
                 ) {
-                    Icon(
-                        Icons.Default.Stop,
-                        contentDescription = stringResource(R.string.cd_stop),
-                        tint = theme.error,
-                        modifier = Modifier.size(Sizing.iconAction)
+                    Text(
+                        text = "■",
+                        color = theme.error,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.titleMedium
                     )
                 }
             }
             
-            // Todo button with badge
+            // Todo count — only when there are todos (TUI glyph, no rounded badge)
             if (todoCount > 0) {
                 IconButton(
                     onClick = onTodos,
                     modifier = Modifier.size(Sizing.iconButtonMd)
                 ) {
-                    BadgedBox(
-                        badge = {
-                            Badge(
-                                containerColor = theme.accent
-                            ) {
-                                Text(todoCount.toString())
-                            }
-                        }
-                    ) {
-                        Icon(
-                            Icons.Default.Checklist,
-                            contentDescription = stringResource(R.string.cd_todos),
-                            modifier = Modifier.size(Sizing.iconAction)
-                        )
-                    }
+                    Text(
+                        text = "☐$todoCount",
+                        color = theme.accent,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelMedium
+                    )
                 }
             }
-            
-            IconButton(
-                onClick = onCommands,
-                modifier = Modifier.size(Sizing.iconButtonMd).testTag("chat_commands_button")
-            ) {
-                Icon(Icons.Default.Code, contentDescription = stringResource(R.string.cd_commands), modifier = Modifier.size(Sizing.iconAction))
-            }
-            IconButton(
-                onClick = onTerminal,
-                modifier = Modifier.size(Sizing.iconButtonMd)
-            ) {
-                Icon(Icons.Default.Terminal, contentDescription = stringResource(R.string.cd_terminal), modifier = Modifier.size(Sizing.iconAction))
-            }
-            IconButton(
-                onClick = onFiles,
-                modifier = Modifier.size(Sizing.iconButtonMd).testTag("chat_files_button")
-            ) {
-                Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.cd_files), modifier = Modifier.size(Sizing.iconAction))
+
+            // Single overflow glyph — navigation actions collapse into menu
+            Box {
+                IconButton(
+                    onClick = { showOverflow = true },
+                    modifier = Modifier.size(Sizing.iconButtonMd).testTag("chat_overflow_button")
+                ) {
+                    Text(
+                        text = "≡",
+                        color = theme.accent,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+                DropdownMenu(
+                    expanded = showOverflow,
+                    onDismissRequest = { showOverflow = false }
+                ) {
+                    TuiDropdownMenuItem(
+                        text = "± ${stringResource(R.string.sessions_view_changes)}",
+                        onClick = { showOverflow = false; onViewChanges() }
+                    )
+                    TuiDropdownMenuItem(
+                        text = "/ ${stringResource(R.string.cd_commands)}",
+                        onClick = { showOverflow = false; onCommands() }
+                    )
+                    TuiDropdownMenuItem(
+                        text = ">_ ${stringResource(R.string.cd_terminal)}",
+                        onClick = { showOverflow = false; onTerminal() }
+                    )
+                    TuiDropdownMenuItem(
+                        text = "▤ ${stringResource(R.string.cd_files)}",
+                        onClick = { showOverflow = false; onFiles() }
+                    )
+                }
             }
         }
+    )
+}
+
+/**
+ * Compact connection dot for the title subtitle row — just a colored text glyph.
+ * No 40dp bounding box, no dropdown. Tap the main ConnectionIndicator for details.
+ */
+@Composable
+private fun ConnectionDot(state: ConnectionState) {
+    val theme = LocalOpenCodeTheme.current
+    val color = when (state) {
+        ConnectionState.Connected -> theme.success
+        ConnectionState.Connecting -> theme.warning
+        ConnectionState.Disconnected -> theme.textMuted
+        is ConnectionState.Error -> theme.error
+    }
+    Text(
+        text = "●",
+        color = color,
+        fontFamily = FontFamily.Monospace,
+        style = MaterialTheme.typography.labelSmall
     )
 }
 

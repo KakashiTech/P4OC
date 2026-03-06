@@ -2,6 +2,7 @@ package dev.blazelight.p4oc.ui.components.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.ui.graphics.RectangleShape
@@ -15,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.R
@@ -35,6 +37,7 @@ fun ChatMessage(
     onOpenSubSession: ((String) -> Unit)? = null,
     defaultToolWidgetState: ToolWidgetState = ToolWidgetState.COMPACT,
     pendingPermissionsByCallId: Map<String, Permission> = emptyMap(),
+    onRevert: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val message = messageWithParts.message
@@ -53,7 +56,8 @@ fun ChatMessage(
                 onToolAlways = onToolAlways,
                 onOpenSubSession = onOpenSubSession,
                 defaultToolWidgetState = defaultToolWidgetState,
-                pendingPermissionsByCallId = pendingPermissionsByCallId
+                pendingPermissionsByCallId = pendingPermissionsByCallId,
+                onRevert = onRevert
             )
         }
     }
@@ -98,7 +102,8 @@ private fun UserMessage(messageWithParts: MessageWithParts) {
                     onLongClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         clipboardManager.setText(AnnotatedString(text))
-                    }
+                    },
+                    onLongClickLabel = "Copy message"
                 )
                 .padding(horizontal = Spacing.mdLg, vertical = Spacing.md)
         ) {
@@ -118,7 +123,8 @@ private fun AssistantMessage(
     onToolAlways: (String) -> Unit,
     onOpenSubSession: ((String) -> Unit)? = null,
     defaultToolWidgetState: ToolWidgetState = ToolWidgetState.COMPACT,
-    pendingPermissionsByCallId: Map<String, Permission> = emptyMap()
+    pendingPermissionsByCallId: Map<String, Permission> = emptyMap(),
+    onRevert: ((String) -> Unit)? = null
 ) {
     // Build ordered groups: consecutive tools get batched, non-tools rendered individually
     // Invisible parts (StepStart, StepFinish, Snapshot, etc.) don't break tool groups
@@ -192,6 +198,30 @@ private fun AssistantMessage(
                 }
             }
         }
+
+        // Revert action for messages with file-changing tools
+        val hasCompletedTools = messageWithParts.parts.any { it is Part.Tool && it.state is ToolState.Completed }
+        if (hasCompletedTools && onRevert != null) {
+            val messageId = (messageWithParts.message as? Message.Assistant)?.id
+            if (messageId != null) {
+                val theme = LocalOpenCodeTheme.current
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Text(
+                        text = "\u21BA ${stringResource(R.string.revert_changes)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.textMuted,
+                        modifier = Modifier.clickable(role = Role.Button) {
+                            onRevert(messageId)
+                        }
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -222,7 +252,8 @@ private fun TextPart(part: Part.Text) {
                     onLongClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         clipboardManager.setText(AnnotatedString(part.text))
-                    }
+                    },
+                    onLongClickLabel = "Copy text"
                 )
         ) {
             StreamingMarkdown(
@@ -312,7 +343,9 @@ private fun ReasoningPart(part: Part.Reasoning) {
                         onLongClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             clipboardManager.setText(AnnotatedString(part.text))
-                        }
+                        },
+                        onLongClickLabel = "Copy reasoning",
+                        role = Role.Button
                     )
                 ) {
                     TertiaryStreamingMarkdown(

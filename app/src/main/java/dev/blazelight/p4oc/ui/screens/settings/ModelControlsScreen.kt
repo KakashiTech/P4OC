@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -277,7 +278,7 @@ fun ModelControlsScreen(
         TuiSnackbar(
             modifier = Modifier.padding(Spacing.xl),
             action = {
-                TextButton(onClick = viewModel::clearError) {
+                TextButton(onClick = viewModel::clearError, shape = RectangleShape) {
                     Text(stringResource(R.string.dismiss))
                 }
             }
@@ -324,13 +325,15 @@ private fun ProviderFilterChips(
         FilterChip(
             selected = selected == null,
             onClick = { onSelect(null) },
-            label = { Text(stringResource(R.string.all)) }
+            label = { Text(stringResource(R.string.all)) },
+            shape = RectangleShape
         )
         providers.forEach { provider ->
             FilterChip(
                 selected = selected == provider,
                 onClick = { onSelect(if (selected == provider) null else provider) },
-                label = { Text(provider) }
+                label = { Text(provider) },
+                shape = RectangleShape
             )
         }
     }
@@ -406,6 +409,7 @@ private fun ModelCard(
                     AssistChip(
                         onClick = {},
                         label = { Text(stringResource(R.string.models_tools)) },
+                        shape = RectangleShape,
                         leadingIcon = {
                             Icon(
                                 Icons.Default.Build,
@@ -419,6 +423,7 @@ private fun ModelCard(
                     AssistChip(
                         onClick = {},
                         label = { Text(stringResource(R.string.models_reasoning)) },
+                        shape = RectangleShape,
                         leadingIcon = {
                             Icon(
                                 Icons.Default.Psychology,
