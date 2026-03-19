@@ -154,9 +154,16 @@ fun MainTabScreen(
         }
     }
     
-    // Build tab titles and icons from current routes (updated inside pager pages)
+    // Build tab titles and icons from current routes (updated inside pager pages).
+    // Seed from startRoute so titles are correct even when pages are off-screen.
     val tabTitles = remember { mutableStateMapOf<String, String>() }
     val tabIcons = remember { mutableStateMapOf<String, ImageVector>() }
+    tabs.forEach { tab ->
+        if (tab.id !in tabTitles) {
+            tabTitles[tab.id] = getTitleForRoute(tab.startRoute, tab.sessionTitle)
+            tabIcons[tab.id] = getIconForRoute(tab.startRoute)
+        }
+    }
     val tabConnectionStates = remember { mutableStateMapOf<String, SessionConnectionState>() }
     // Track current routes per tab (for PTY cleanup on tab close)
     val tabRoutes = remember { mutableStateMapOf<String, String>() }
@@ -174,6 +181,38 @@ fun MainTabScreen(
         }
     }
     
+    // Shared tab-close logic: PTY cleanup + state map cleanup + tabManager.closeTab.
+    // Used by both TabBar close button and TabNavHost BackHandler.
+    val closeTab: (String) -> Unit = remember(coroutineScope) {
+        { tabId: String ->
+            coroutineScope.launch {
+                // Check if it's a terminal tab and delete the PTY
+                val route = tabRoutes[tabId]
+                if (route != null && route.startsWith("terminal/")) {
+                    val ptyId = tabPtyIds[tabId]
+                    if (ptyId != null) {
+                        val api = connectionManager.getApi()
+                        if (api != null) {
+                            val result = safeApiCall { api.deletePtySession(ptyId) }
+                            if (result is ApiResult.Error) {
+                                AppLog.e(TAG, "Failed to delete PTY $ptyId: ${result.message}")
+                            }
+                        }
+                    }
+                }
+
+                // Clean up tracked state for this tab
+                tabRoutes.remove(tabId)
+                tabPtyIds.remove(tabId)
+                tabTitles.remove(tabId)
+                tabIcons.remove(tabId)
+                tabConnectionStates.remove(tabId)
+
+                tabManager.closeTab(tabId)
+            }
+        }
+    }
+
     // Snackbar for tab warning
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(showTabWarning) {
@@ -211,33 +250,7 @@ fun MainTabScreen(
                 onTabClick = { tabId ->
                     tabManager.focusTab(tabId)
                 },
-                onTabClose = { tabId ->
-                    coroutineScope.launch {
-                        // Check if it's a terminal tab and delete the PTY
-                        val route = tabRoutes[tabId]
-                        if (route != null && route.startsWith("terminal/")) {
-                            val ptyId = tabPtyIds[tabId]
-                            if (ptyId != null) {
-                                val api = connectionManager.getApi()
-                                if (api != null) {
-                                    val result = safeApiCall { api.deletePtySession(ptyId) }
-                                    if (result is ApiResult.Error) {
-                                        AppLog.e(TAG, "Failed to delete PTY $ptyId: ${result.message}")
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Clean up tracked state for this tab
-                        tabRoutes.remove(tabId)
-                        tabPtyIds.remove(tabId)
-                        tabTitles.remove(tabId)
-                        tabIcons.remove(tabId)
-                        tabConnectionStates.remove(tabId)
-                        
-                        tabManager.closeTab(tabId)
-                    }
-                },
+                onTabClose = closeTab,
                 onAddClick = {
                     tabManager.createTab(focus = true)
                 },
@@ -283,10 +296,12 @@ fun MainTabScreen(
                         val backStackEntry by navController.currentBackStackEntryAsState()
                         LaunchedEffect(backStackEntry?.destination?.route, tab.sessionTitle) {
                             val route = backStackEntry?.destination?.route
-                            tabTitles[tab.id] = getTitleForRoute(route, tab.sessionTitle)
-                            tabIcons[tab.id] = getIconForRoute(route)
-                            // Track route for PTY cleanup on tab close
+                            // Only update when route is resolved — avoids overwriting
+                            // seeded values with "Tab" during initial null-route composition
                             if (route != null) {
+                                tabTitles[tab.id] = getTitleForRoute(route, tab.sessionTitle)
+                                tabIcons[tab.id] = getIconForRoute(route)
+                                // Track route for PTY cleanup on tab close
                                 tabRoutes[tab.id] = route
                             }
                             // Track PTY ID if on a terminal route
@@ -302,9 +317,10 @@ fun MainTabScreen(
                             tabManager = tabManager,
                             tabId = tab.id,
                             onDisconnect = onDisconnect,
-                            pendingRoute = tab.pendingRoute,
+                            onCloseTab = { closeTab(tab.id) },
+                            startRoute = tab.startRoute,
                             onNewFilesTab = {
-                                tabManager.createTab(pendingRoute = Screen.Files.route, focus = true)
+                                tabManager.createTab(startRoute = Screen.Files.route, focus = true)
                             },
                             onNewTerminalTab = {
                                 coroutineScope.launch {
@@ -318,7 +334,7 @@ fun MainTabScreen(
                                         is ApiResult.Success -> {
                                             val ptyId = result.data.id
                                             tabManager.createTab(
-                                                pendingRoute = Screen.Terminal.createRoute(ptyId),
+                                                startRoute = Screen.Terminal.createRoute(ptyId),
                                                 focus = true
                                             )
                                         }

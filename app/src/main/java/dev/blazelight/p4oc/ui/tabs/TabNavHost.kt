@@ -1,12 +1,17 @@
 package dev.blazelight.p4oc.ui.tabs
 
 import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
 import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.core.datastore.VisualSettings
@@ -32,7 +37,8 @@ private const val ANIMATION_DURATION = 300
 /**
  * Per-tab navigation host.
  * Each tab has its own NavHost with independent navigation stack.
- * Start destination is Sessions list.
+ * The [startRoute] determines the initial screen — defaults to Sessions list,
+ * but can be a filled route like "terminal/abc123" or "files" for dedicated tabs.
  */
 @Composable
 fun TabNavHost(
@@ -42,8 +48,9 @@ fun TabNavHost(
     onDisconnect: () -> Unit,
     onNewFilesTab: () -> Unit = {},
     onNewTerminalTab: () -> Unit = {},
+    onCloseTab: () -> Unit = {},
     isActiveTab: Boolean = true,
-    pendingRoute: String? = null,
+    startRoute: String = Screen.Sessions.route,
     onConnectionStateChanged: ((SessionConnectionState?) -> Unit)? = null,
     modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier
 ) {
@@ -52,16 +59,31 @@ fun TabNavHost(
     val visualSettings by settingsDataStore.visualSettings.collectAsState(initial = VisualSettings())
     val openSubAgentInNewTab = visualSettings.openSubAgentInNewTab
 
-    // Navigate to pending route once the NavHost graph is set
-    LaunchedEffect(pendingRoute) {
-        pendingRoute?.let { route ->
-            navController.navigate(route)
+    // Double-back-to-close when at the root of any tab.
+    // Dedicated tabs (terminal, files, chat): closes the tab.
+    // Sessions tab: exits the app.
+    var backPressedAt by remember { mutableLongStateOf(0L) }
+    val context = LocalContext.current
+    val isDedicatedTab = startRoute != Screen.Sessions.route
+
+    BackHandler(enabled = navController.previousBackStackEntry == null) {
+        val now = System.currentTimeMillis()
+        if (now - backPressedAt < 2000L) {
+            if (isDedicatedTab) {
+                onCloseTab()
+            } else {
+                (context as? android.app.Activity)?.finish()
+            }
+        } else {
+            backPressedAt = now
+            val message = if (isDedicatedTab) "Press back again to close tab" else "Press back again to exit"
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         }
     }
 
     NavHost(
         navController = navController,
-        startDestination = Screen.Sessions.route,
+        startDestination = startRoute,
         modifier = modifier,
         enterTransition = {
             slideInHorizontally(
@@ -194,7 +216,7 @@ fun TabNavHost(
                     } else if (openSubAgentInNewTab) {
                         // Open in a new tab (default)
                         tabManager.createTab(
-                            pendingRoute = Screen.Chat.createRoute(subSessionId),
+                            startRoute = Screen.Chat.createRoute(subSessionId),
                             focus = true
                         )
                     } else {
@@ -363,4 +385,5 @@ fun TabNavHost(
             )
         }
     }
+
 }

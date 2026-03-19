@@ -168,7 +168,13 @@ class MdnsDiscoveryManager(private val context: Context) {
                 override fun onServiceResolved(info: NsdServiceInfo) {
                     val host = info.host
                     val port = info.port
-                    val hostAddress = host?.hostAddress ?: return
+                    val hostAddress = host?.hostAddress
+                    if (hostAddress == null) {
+                        AppLog.w(TAG, "Resolved ${info.serviceName} but hostAddress is null, skipping")
+                        isResolving = false
+                        processResolveQueue()
+                        return
+                    }
 
                     // Format IPv6 addresses with brackets for URL construction
                     val formattedHost = if (host is Inet6Address) {

@@ -8,6 +8,7 @@ import dev.blazelight.p4oc.core.network.safeApiCall
 import dev.blazelight.p4oc.data.remote.mapper.SymbolMapper
 import dev.blazelight.p4oc.domain.model.FileNode
 import dev.blazelight.p4oc.domain.model.Symbol
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +27,8 @@ class FilesViewModel constructor(
     val symbolResults: StateFlow<List<Symbol>> = _symbolResults.asStateFlow()
 
     private val pathStack = mutableListOf<String>()
+    private var loadFilesJob: Job? = null
+    private var loadContentJob: Job? = null
 
     init {
         loadFiles(".")
@@ -46,7 +49,8 @@ class FilesViewModel constructor(
     }
 
     private fun loadFiles(path: String) {
-        viewModelScope.launch {
+        loadFilesJob?.cancel()
+        loadFilesJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
 
             val api = connectionManager.getApi() ?: run {
@@ -108,7 +112,8 @@ class FilesViewModel constructor(
     }
 
     fun loadFileContent(path: String) {
-        viewModelScope.launch {
+        loadContentJob?.cancel()
+        loadContentJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, fileContent = null, error = null) }
 
             val api = connectionManager.getApi() ?: run {

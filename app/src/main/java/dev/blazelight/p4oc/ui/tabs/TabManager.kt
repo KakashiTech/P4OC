@@ -43,10 +43,10 @@ class TabManager {
      * Returns the created tab instance.
      */
     fun createTab(
-        pendingRoute: String? = null,
+        startRoute: String = "sessions",
         focus: Boolean = true
     ): TabInstance {
-        val tab = TabInstance(TabState(), pendingRoute = pendingRoute)
+        val tab = TabInstance(TabState(), startRoute = startRoute)
         
         _tabs.update { currentTabs ->
             val newTabs = currentTabs + tab

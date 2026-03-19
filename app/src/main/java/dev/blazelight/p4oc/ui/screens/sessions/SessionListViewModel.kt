@@ -65,25 +65,35 @@ class SessionListViewModel constructor(
     private fun loadSessionStatuses() {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: return@launch
-            val result = safeApiCall { api.getSessionStatuses(directoryManager.getDirectory()) }
-            when (result) {
-                is ApiResult.Success -> {
-                    val statuses = result.data.mapValues { (_, dto) ->
-                        when (dto.type) {
-                            "busy" -> SessionStatus.Busy
-                            "idle" -> SessionStatus.Idle
-                            "retry" -> SessionStatus.Retry(
-                                attempt = dto.attempt ?: 0,
-                                message = dto.message ?: "",
-                                next = dto.next ?: 0L
-                            )
-                            else -> SessionStatus.Idle
+            
+            // Fetch statuses from global scope + each known project directory
+            val projects = _uiState.value.projects
+            val directories = listOf<String?>(null) + projects.map { it.worktree }
+            
+            val allStatuses = mutableMapOf<String, SessionStatus>()
+            
+            directories.forEach { directory ->
+                val result = safeApiCall { api.getSessionStatuses(directory) }
+                when (result) {
+                    is ApiResult.Success -> {
+                        result.data.forEach { (sessionId, dto) ->
+                            allStatuses[sessionId] = when (dto.type) {
+                                "busy" -> SessionStatus.Busy
+                                "idle" -> SessionStatus.Idle
+                                "retry" -> SessionStatus.Retry(
+                                    attempt = dto.attempt ?: 0,
+                                    message = dto.message ?: "",
+                                    next = dto.next ?: 0L
+                                )
+                                else -> SessionStatus.Idle
+                            }
                         }
                     }
-                    _uiState.update { it.copy(sessionStatuses = statuses) }
+                    is ApiResult.Error -> {}
                 }
-                is ApiResult.Error -> {}
             }
+            
+            _uiState.update { it.copy(sessionStatuses = allStatuses) }
         }
     }
 
@@ -253,11 +263,11 @@ class SessionListViewModel constructor(
         _uiState.update { it.copy(newSessionId = null, newSessionDirectory = null) }
     }
 
-    fun renameSession(sessionId: String, newTitle: String) {
+    fun renameSession(sessionId: String, newTitle: String, directory: String? = null) {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: return@launch
             val result = safeApiCall {
-                api.updateSession(sessionId, UpdateSessionRequest(title = newTitle), directoryManager.getDirectory())
+                api.updateSession(sessionId, UpdateSessionRequest(title = newTitle), directory ?: directoryManager.getDirectory())
             }
             when (result) {
                 is ApiResult.Success -> {
@@ -275,10 +285,10 @@ class SessionListViewModel constructor(
         }
     }
 
-    fun shareSession(sessionId: String) {
+    fun shareSession(sessionId: String, directory: String? = null) {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: return@launch
-            val result = safeApiCall { api.shareSession(sessionId, directoryManager.getDirectory()) }
+            val result = safeApiCall { api.shareSession(sessionId, directory ?: directoryManager.getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
                     val updated = SessionMapper.mapToDomain(result.data)
@@ -298,10 +308,10 @@ class SessionListViewModel constructor(
         }
     }
 
-    fun unshareSession(sessionId: String) {
+    fun unshareSession(sessionId: String, directory: String? = null) {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: return@launch
-            val result = safeApiCall { api.unshareSession(sessionId, directoryManager.getDirectory()) }
+            val result = safeApiCall { api.unshareSession(sessionId, directory ?: directoryManager.getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
                     val updated = SessionMapper.mapToDomain(result.data)
@@ -322,13 +332,13 @@ class SessionListViewModel constructor(
         _uiState.update { it.copy(shareUrl = null) }
     }
 
-    fun summarizeSession(sessionId: String) {
+    fun summarizeSession(sessionId: String, directory: String? = null) {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: return@launch
 
             // Body is optional per SDK — let server use its own default provider/model
             val result = safeApiCall {
-                api.summarizeSession(sessionId, directoryManager.getDirectory())
+                api.summarizeSession(sessionId, directory ?: directoryManager.getDirectory())
             }
             when (result) {
                 is ApiResult.Success -> refresh()

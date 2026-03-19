@@ -225,16 +225,16 @@ fun SessionListScreen(
                                 onRenameSession = { showRenameDialog = it },
                                 onShareSession = { session ->
                                     if (session.shareUrl != null) {
-                                        viewModel.unshareSession(session.id)
+                                        viewModel.unshareSession(session.id, session.directory)
                                     } else {
-                                        viewModel.shareSession(session.id)
+                                        viewModel.shareSession(session.id, session.directory)
                                     }
                                 },
                                 onViewChanges = { session ->
                                     onViewChanges(session.id)
                                 },
                                 onSummarizeSession = { session ->
-                                    viewModel.summarizeSession(session.id)
+                                    viewModel.summarizeSession(session.id, session.directory)
                                 },
                                 onProjectClick = onProjectClick,
                                 onToggleExpand = { id ->
@@ -283,7 +283,7 @@ fun SessionListScreen(
     showDeleteDialog?.let { session ->
         TuiConfirmDialog(
             onDismissRequest = { showDeleteDialog = null },
-            onConfirm = { viewModel.deleteSession(session.id) },
+            onConfirm = { viewModel.deleteSession(session.id, session.directory) },
             title = stringResource(R.string.sessions_delete_title),
             message = stringResource(R.string.sessions_delete_confirm, session.title),
             confirmText = stringResource(R.string.sessions_delete),
@@ -296,7 +296,7 @@ fun SessionListScreen(
         TuiInputDialog(
             onDismissRequest = { showRenameDialog = null },
             onConfirm = { newTitle ->
-                viewModel.renameSession(session.id, newTitle)
+                viewModel.renameSession(session.id, newTitle, session.directory)
                 showRenameDialog = null
             },
             title = stringResource(R.string.sessions_rename_title),

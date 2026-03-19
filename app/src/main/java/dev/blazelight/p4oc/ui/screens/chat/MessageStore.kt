@@ -52,6 +52,7 @@ class MessageStore(
         messages.forEach { msg ->
             _messagesMap[msg.message.id] = msg
         }
+        _messagesVersion.value++
     }
 
     fun upsertMessage(message: Message) {
@@ -99,6 +100,39 @@ class MessageStore(
                 _messagesMap[messageId] = existing.copy(parts = updatedParts)
                 _messagesVersion.value++
                 AppLog.d(TAG, "upsertPart: partId=${part.id}, messageId=$messageId, delta=${delta?.length ?: 0} chars, partCount=${updatedParts.size}")
+            }
+        }
+    }
+
+    /**
+     * Remove a message entirely from the store.
+     * Called when the server sends a message.removed event.
+     */
+    fun removeMessage(messageId: String) {
+        scope.launch {
+            messagesMutex.withLock {
+                if (_messagesMap.remove(messageId) != null) {
+                    _messagesVersion.value++
+                    AppLog.d(TAG, "removeMessage: $messageId")
+                }
+            }
+        }
+    }
+
+    /**
+     * Remove a specific part from a message.
+     * Called when the server sends a message.part.removed event.
+     */
+    fun removePart(messageId: String, partId: String) {
+        scope.launch {
+            messagesMutex.withLock {
+                val existing = _messagesMap[messageId] ?: return@withLock
+                val updatedParts = existing.parts.filter { it.id != partId }
+                if (updatedParts.size != existing.parts.size) {
+                    _messagesMap[messageId] = existing.copy(parts = updatedParts)
+                    _messagesVersion.value++
+                    AppLog.d(TAG, "removePart: partId=$partId from messageId=$messageId")
+                }
             }
         }
     }

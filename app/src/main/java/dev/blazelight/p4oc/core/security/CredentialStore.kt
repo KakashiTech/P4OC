@@ -116,44 +116,6 @@ class CredentialStore(context: Context) {
         prefs.edit().remove(serverPasswordKey(serverUrl)).apply()
     }
 
-    // ── Migration ───────────────────────────────────────────────────────
-
-    /**
-     * Migrate a plaintext password from DataStore into encrypted storage.
-     * Idempotent: if the active password is already set, this is a no-op.
-     *
-     * @param plaintextPassword the password previously stored in DataStore
-     * @param serverUrl optional server URL to also store as a per-server password
-     */
-    fun migrateFromPlaintext(plaintextPassword: String?, serverUrl: String?) {
-        if (plaintextPassword.isNullOrBlank()) return
-
-        // Only migrate if there's no active password yet (idempotent)
-        if (getActivePassword() == null) {
-            AppLog.d(TAG, "Migrating active password to encrypted storage")
-            setActivePassword(plaintextPassword)
-        }
-
-        // Also store as per-server password if URL is provided
-        if (serverUrl != null && getServerPassword(serverUrl) == null) {
-            AppLog.d(TAG, "Migrating server password to encrypted storage")
-            setServerPassword(serverUrl, plaintextPassword)
-        }
-    }
-
-    /**
-     * Migrate passwords from RecentServer entries.
-     * Called during the migration phase — extracts passwords from the legacy
-     * JSON entries and stores them encrypted, keyed by server URL.
-     */
-    fun migrateRecentServerPassword(serverUrl: String, plaintextPassword: String?) {
-        if (plaintextPassword.isNullOrBlank()) return
-        if (getServerPassword(serverUrl) == null) {
-            AppLog.d(TAG, "Migrating recent server password")
-            setServerPassword(serverUrl, plaintextPassword)
-        }
-    }
-
     /**
      * Clear all stored credentials. Used for logout/clear-all scenarios.
      */

@@ -253,6 +253,16 @@ class ChatViewModel constructor(
                     messageStore.upsertPart(event.part, event.delta)
                 }
             }
+            is OpenCodeEvent.MessageRemoved -> {
+                if (event.sessionID == sessionId) {
+                    messageStore.removeMessage(event.messageID)
+                }
+            }
+            is OpenCodeEvent.PartRemoved -> {
+                if (event.sessionID == sessionId) {
+                    messageStore.removePart(event.messageID, event.partID)
+                }
+            }
             is OpenCodeEvent.PermissionRequested -> {
                 if (isOwnedSession(event.permission.sessionID)) {
                     dialogManager.enqueuePermission(event.permission)

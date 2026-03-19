@@ -18,6 +18,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * WebSocket client for PTY terminal I/O.
@@ -50,8 +51,15 @@ class PtyWebSocketClient constructor(
     
     // Track the last PTY ID for reconnection after background disconnect
     private var lastPtyId: String? = null
-    private var reconnectAttempts: Int = 0
+    private val reconnectAttempts = AtomicInteger(0)
+    @Volatile
     private var userDisconnected: Boolean = false
+    
+    // Generation counter to detect stale WebSocket callbacks.
+    // Incremented on each connect(); callbacks check their captured generation
+    // against the current value to avoid corrupting a newer connection.
+    @Volatile
+    private var generation: Long = 0L
     
     // Lock to prevent race conditions in connect/disconnect
     private val connectionLock = Any()
@@ -96,6 +104,7 @@ class PtyWebSocketClient constructor(
             currentPtyId = ptyId
             lastPtyId = ptyId
             userDisconnected = false
+            val gen = ++generation
 
             val baseUrl = connection.config.url
             // Convert http(s):// to ws(s)://
@@ -104,7 +113,7 @@ class PtyWebSocketClient constructor(
                 .replace("https://", "wss://")
                 .trimEnd('/') + "/pty/$ptyId/connect"
 
-            AppLog.d(TAG, "Connecting to WebSocket: $wsUrl")
+            AppLog.d(TAG, "Connecting to WebSocket: $wsUrl (gen=$gen)")
 
             val request = Request.Builder().url(wsUrl).build()
 
@@ -114,12 +123,20 @@ class PtyWebSocketClient constructor(
 
             currentWebSocket = wsClient.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    AppLog.d(TAG, "WebSocket connected to $ptyId")
-                    reconnectAttempts = 0
-                    _connectionState.value = ConnectionState.Connected(ptyId)
+                    synchronized(connectionLock) {
+                        if (generation != gen) {
+                            AppLog.d(TAG, "Stale onOpen (gen=$gen, current=$generation), ignoring")
+                            webSocket.close(1000, "Stale connection")
+                            return
+                        }
+                        AppLog.d(TAG, "WebSocket connected to $ptyId")
+                        reconnectAttempts.set(0)
+                        _connectionState.value = ConnectionState.Connected(ptyId)
+                    }
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    if (generation != gen) return
                     AppLog.v(TAG, "Received: ${text.take(100)}${if (text.length > 100) "..." else ""}")
                     scope.launch {
                         _output.emit(text)
@@ -132,9 +149,13 @@ class PtyWebSocketClient constructor(
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    AppLog.d(TAG, "WebSocket closed: $code $reason")
+                    AppLog.d(TAG, "WebSocket closed: $code $reason (gen=$gen)")
                     val ptyIdForReconnect: String?
                     synchronized(connectionLock) {
+                        if (generation != gen) {
+                            AppLog.d(TAG, "Stale onClosed (gen=$gen, current=$generation), ignoring")
+                            return
+                        }
                         currentWebSocket = null
                         ptyIdForReconnect = currentPtyId
                         currentPtyId = null
@@ -147,9 +168,13 @@ class PtyWebSocketClient constructor(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    AppLog.e(TAG, "WebSocket error: ${t.message}", t)
+                    AppLog.e(TAG, "WebSocket error: ${t.message} (gen=$gen)", t)
                     val ptyIdForReconnect: String?
                     synchronized(connectionLock) {
+                        if (generation != gen) {
+                            AppLog.d(TAG, "Stale onFailure (gen=$gen, current=$generation), ignoring")
+                            return
+                        }
                         currentWebSocket = null
                         ptyIdForReconnect = currentPtyId
                         currentPtyId = null
@@ -175,18 +200,19 @@ class PtyWebSocketClient constructor(
     }
 
     private fun scheduleReconnect(ptyId: String) {
-        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        val attempts = reconnectAttempts.get()
+        if (attempts >= MAX_RECONNECT_ATTEMPTS) {
             AppLog.w(TAG, "Max reconnect attempts reached for $ptyId, giving up")
-            reconnectAttempts = 0
+            reconnectAttempts.set(0)
             return
         }
-        val delayMs = RECONNECT_DELAYS_MS[reconnectAttempts.coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)]
-        reconnectAttempts++
-        AppLog.d(TAG, "Scheduling reconnect attempt $reconnectAttempts for $ptyId in ${delayMs}ms")
+        val delayMs = RECONNECT_DELAYS_MS[attempts.coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)]
+        reconnectAttempts.incrementAndGet()
+        AppLog.d(TAG, "Scheduling reconnect attempt ${attempts + 1} for $ptyId in ${delayMs}ms")
         scope.launch {
             delay(delayMs)
             if (!userDisconnected && currentWebSocket == null) {
-                AppLog.d(TAG, "Attempting reconnect to $ptyId (attempt $reconnectAttempts)")
+                AppLog.d(TAG, "Attempting reconnect to $ptyId (attempt ${reconnectAttempts.get()})")
                 connect(ptyId)
             }
         }
@@ -208,7 +234,7 @@ class PtyWebSocketClient constructor(
         }
         AppLog.d(TAG, "reconnect() to last PTY: $ptyId")
         userDisconnected = false
-        reconnectAttempts = 0
+        reconnectAttempts.set(0)
         connect(ptyId)
     }
 
@@ -216,7 +242,8 @@ class PtyWebSocketClient constructor(
         synchronized(connectionLock) {
             AppLog.d(TAG, "Disconnecting from $currentPtyId")
             userDisconnected = true
-            reconnectAttempts = 0
+            reconnectAttempts.set(0)
+            generation++ // Invalidate any pending callbacks
             currentWebSocket?.close(1000, "User disconnected")
             currentWebSocket = null
             currentPtyId = null
