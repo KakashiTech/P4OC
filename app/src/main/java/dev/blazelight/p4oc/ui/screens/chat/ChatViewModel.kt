@@ -26,6 +26,8 @@ import dev.blazelight.p4oc.ui.components.chat.AbortSummary
 import dev.blazelight.p4oc.ui.components.chat.InterruptedTool
 import dev.blazelight.p4oc.ui.components.chat.SelectedFile
 import dev.blazelight.p4oc.ui.navigation.Screen
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
@@ -129,12 +131,10 @@ class ChatViewModel constructor(
     }
 
     init {
-        loadSession()
-        loadMessages()
+        loadSessionAndMessages()
         modelAgentManager.loadAgents()
         modelAgentManager.loadModels()
         observeEvents()
-        loadVcsInfo()
     }
 
     // --- Public API (delegating) ---
@@ -156,57 +156,51 @@ class ChatViewModel constructor(
     private fun getDirectory(): String? =
         sessionDirectory ?: _uiState.value.session?.directory ?: directoryManager.getDirectory()
 
-    private fun loadSession() {
-        viewModelScope.launch {
-            val api = connectionManager.getApi() ?: run {
-                _uiState.update { it.copy(error = "Not connected") }
-                return@launch
-            }
-            val result = safeApiCall { api.getSession(sessionId, sessionDirectory ?: directoryManager.getDirectory()) }
-            when (result) {
-                is ApiResult.Success -> {
-                    val session = SessionMapper.mapToDomain(result.data)
-                    _uiState.update { it.copy(session = session) }
-                    if (sessionDirectory == null && session.directory.isNotBlank()) {
-                        directoryManager.setDirectory(session.directory)
-                    }
-                    // Reload VCS now that we have the canonical session directory
-                    loadVcsInfo()
-                }
-                is ApiResult.Error -> {
-                    _uiState.update { it.copy(error = "Failed to load session") }
-                }
-            }
-        }
-    }
-
-    private fun loadMessages() {
+    private fun loadSessionAndMessages() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
-            AppLog.d(TAG, "loadMessages() called for session: $sessionId")
-
             val api = connectionManager.getApi() ?: run {
                 _uiState.update { it.copy(isLoading = false, error = "Not connected") }
                 return@launch
             }
+            val dir = sessionDirectory ?: directoryManager.getDirectory()
+            coroutineScope {
+                // Fire both requests in parallel
+                val sessionDeferred = async { safeApiCall { api.getSession(sessionId, dir) } }
+                val messagesDeferred = async { safeApiCall { api.getMessages(sessionId, limit = null, directory = dir) } }
 
-            val directory = getDirectory()
-            val result = safeApiCall { api.getMessages(sessionId, limit = null, directory = directory) }
+                val sessionResult = sessionDeferred.await()
+                val messagesResult = messagesDeferred.await()
 
-            when (result) {
-                is ApiResult.Success -> {
-                    AppLog.d(TAG, "Loaded ${result.data.size} messages")
-                    val mapped = result.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
-                    messageStore.loadInitial(mapped)
-                    _uiState.update { it.copy(isLoading = false) }
-                }
-                is ApiResult.Error -> {
-                    AppLog.e(TAG, "Failed to load messages: ${result.message}", result.throwable)
-                    _uiState.update {
-                        it.copy(isLoading = false, error = "Failed to load messages")
+                when (sessionResult) {
+                    is ApiResult.Success -> {
+                        val session = SessionMapper.mapToDomain(sessionResult.data)
+                        _uiState.update { it.copy(session = session) }
+                        if (sessionDirectory == null && session.directory.isNotBlank()) {
+                            directoryManager.setDirectory(session.directory)
+                        }
+                    }
+                    is ApiResult.Error -> {
+                        _uiState.update { it.copy(error = "Failed to load session") }
                     }
                 }
+
+                when (messagesResult) {
+                    is ApiResult.Success -> {
+                        AppLog.d(TAG, "Loaded ${messagesResult.data.size} messages")
+                        val mapped = messagesResult.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
+                        messageStore.loadInitial(mapped)
+                    }
+                    is ApiResult.Error -> {
+                        AppLog.e(TAG, "Failed to load messages: ${messagesResult.message}")
+                        _uiState.update { it.copy(error = "Failed to load messages") }
+                    }
+                }
+
+                _uiState.update { it.copy(isLoading = false) }
             }
+            // VCS after session dir is known
+            loadVcsInfo()
         }
     }
 
@@ -572,6 +566,14 @@ class ChatViewModel constructor(
         }
     }
 
+    private suspend fun refreshSession() {
+        val api = connectionManager.getApi() ?: return
+        val result = safeApiCall { api.getSession(sessionId, getDirectory()) }
+        if (result is ApiResult.Success) {
+            _uiState.update { it.copy(session = SessionMapper.mapToDomain(result.data)) }
+        }
+    }
+
     // --- Revert / Unrevert ---
 
     fun revertMessage(messageId: String) {
@@ -581,7 +583,7 @@ class ChatViewModel constructor(
             val result = safeApiCall { api.revertSession(sessionId, request, getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
-                    loadSession()  // Refresh to get updated revert state
+                    refreshSession()
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(error = "Failed to revert: ${result.message}") }
@@ -596,7 +598,7 @@ class ChatViewModel constructor(
             val result = safeApiCall { api.unrevertSession(sessionId, getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
-                    loadSession()  // Refresh to clear revert state
+                    refreshSession()
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(error = "Failed to unrevert: ${result.message}") }

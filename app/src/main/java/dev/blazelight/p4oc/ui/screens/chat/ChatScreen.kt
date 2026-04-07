@@ -207,6 +207,7 @@ fun ChatScreen(
                     modifier = Modifier
                         .imePadding()
                         .navigationBarsPadding()
+                        .background(LocalOpenCodeTheme.current.backgroundElement)
                 ) {
                     ModelAgentSelectorBar(
                         availableAgents = availableAgents,

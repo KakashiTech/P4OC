@@ -298,7 +298,7 @@ private fun ReasoningPart(part: Part.Reasoning) {
 
     Box(
         modifier = Modifier
-            .fillMaxWidth()
+            .widthIn(min = 140.dp, max = 320.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(theme.warning.copy(alpha = 0.07f))
             .border(1.dp, theme.warning.copy(alpha = 0.2f), RoundedCornerShape(8.dp))

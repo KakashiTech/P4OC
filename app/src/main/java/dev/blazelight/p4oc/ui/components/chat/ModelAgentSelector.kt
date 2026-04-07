@@ -82,12 +82,12 @@ fun ModelAgentSelectorBar(
             ?.second?.name ?: selectedModel.modelID
     }
 
+    Column(modifier = modifier.fillMaxWidth()) {
     Row(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
-            .background(theme.backgroundElement)
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .padding(horizontal = 12.dp, vertical = 7.dp)
             .testTag("agent_selector"),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -163,6 +163,14 @@ fun ModelAgentSelectorBar(
             }
         }
     }
+    // Thin divider line separating agent/model row from input field
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(theme.border.copy(alpha = 0.4f))
+    )
+    } // end Column
 
     if (showModelPicker) {
         ModelPickerDialog(

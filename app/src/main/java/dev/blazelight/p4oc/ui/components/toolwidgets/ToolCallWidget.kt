@@ -5,14 +5,18 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.domain.model.Part
@@ -95,13 +99,14 @@ fun ToolCallOneline(
 ) {
     val theme = LocalOpenCodeTheme.current
     val (icon, color) = getToolStateIcon(tool.state, theme)
-    
+
     Row(
         modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(theme.backgroundPanel.copy(alpha = 0.5f))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .background(theme.backgroundPanel.copy(alpha = 0.3f))
-            .padding(horizontal = Spacing.md, vertical = Spacing.xs),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -122,8 +127,6 @@ fun ToolCallOneline(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        
-        // Running indicator
         if (tool.state is ToolState.Running) {
             TuiLoadingIndicator()
         }
@@ -145,24 +148,33 @@ fun ToolCallCompact(
     val theme = LocalOpenCodeTheme.current
     val (icon, color) = getToolStateIcon(tool.state, theme)
     val description = getToolCompactDescription(tool)
-    
+    val cardShape = RoundedCornerShape(8.dp)
+
     Row(
         modifier = modifier
+            .clip(cardShape)
+            .background(theme.backgroundPanel.copy(alpha = 0.6f))
+            .border(1.dp, color.copy(alpha = 0.2f), cardShape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .background(theme.backgroundPanel.copy(alpha = 0.4f))
-            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = icon,
-            style = MaterialTheme.typography.labelMedium.copy(
-                fontFamily = FontFamily.Monospace,
-                fontSize = TuiCodeFontSize.xl
-            ),
-            color = color
-        )
-        
+        // State icon badge
+        Box(
+            modifier = Modifier
+                .size(20.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(color.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = icon,
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = color
+            )
+        }
+
         Text(
             text = description,
             style = MaterialTheme.typography.labelMedium.copy(
@@ -174,23 +186,25 @@ fun ToolCallCompact(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
-        
+
         // Running indicator
         if (tool.state is ToolState.Running) {
             TuiLoadingIndicator()
         }
-        
+
         // Diff stats for edit tools
         getDiffStats(tool)?.let { (added, removed) ->
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     text = "+$added",
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    fontWeight = FontWeight.Medium,
                     color = theme.success
                 )
                 Text(
                     text = "-$removed",
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    fontWeight = FontWeight.Medium,
                     color = theme.error
                 )
             }
