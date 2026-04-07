@@ -1,15 +1,32 @@
 package dev.blazelight.p4oc.core.network
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.LinkAddress
+import android.net.LinkProperties
+import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import dev.blazelight.p4oc.core.log.AppLog
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import java.net.Inet4Address
 import java.net.Inet6Address
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 private const val TAG = "MdnsDiscovery"
 private const val SERVICE_TYPE = "_http._tcp."
@@ -60,6 +77,19 @@ class MdnsDiscoveryManager(private val context: Context) {
     private var isResolving = false
 
     private var activeListener: NsdManager.DiscoveryListener? = null
+
+    // Extended sweep state (for VPN/Ethernet/Wi‑Fi subnets)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile
+    private var sweepActive = false
+    private var sweepJob: Job? = null
+    private val probeClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(300, TimeUnit.MILLISECONDS)
+            .readTimeout(300, TimeUnit.MILLISECONDS)
+            .callTimeout(700, TimeUnit.MILLISECONDS)
+            .build()
+    }
 
     /**
      * Start browsing for OpenCode servers on the local network.
@@ -122,6 +152,9 @@ class MdnsDiscoveryManager(private val context: Context) {
             activeListener = null
             _discoveryState.value = DiscoveryState.ERROR
         }
+
+        // Start extended sweep in parallel (useful over VPN/Ethernet as mDNS may not traverse)
+        startExtendedSweep()
     }
 
     /**
@@ -140,6 +173,10 @@ class MdnsDiscoveryManager(private val context: Context) {
 
         resolveQueue.clear()
         isResolving = false
+        // Stop any extended sweep
+        sweepActive = false
+        sweepJob?.cancel()
+        sweepJob = null
         _discoveryState.value = DiscoveryState.IDLE
     }
 
@@ -213,4 +250,142 @@ class MdnsDiscoveryManager(private val context: Context) {
             processResolveQueue()
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Extended discovery over VPN/Ethernet/Wi‑Fi: fast HTTP health probes
+    // -------------------------------------------------------------------------
+    private fun startExtendedSweep() {
+        if (sweepActive) return
+        sweepActive = true
+
+        sweepJob = scope.launch {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val targets = mutableSetOf<String>()
+
+            cm.allNetworks.forEach { network ->
+                val caps = cm.getNetworkCapabilities(network)
+                val lp: LinkProperties = cm.getLinkProperties(network) ?: return@forEach
+
+                val isVpn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                val isEth = caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
+                val isWifi = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+
+                if (isVpn || isEth || isWifi) {
+                    lp.linkAddresses.forEach { la ->
+                        addIpv4PrefixTargets(la, targets)
+                    }
+                }
+            }
+
+            if (targets.isEmpty()) {
+                AppLog.d(TAG, "Extended sweep: no IPv4 targets derived")
+                sweepActive = false
+                return@launch
+            }
+
+            // Cap total hosts to avoid heavy scans
+            val capped = targets.take(512)
+            val semaphore = Semaphore(32)
+
+            AppLog.d(TAG, "Extended sweep: probing ${capped.size} hosts")
+
+            val jobs = capped.map { ip ->
+                async {
+                    semaphore.acquire()
+                    try {
+                        probeIp(ip)
+                    } finally {
+                        semaphore.release()
+                    }
+                }
+            }
+
+            jobs.awaitAll()
+            sweepActive = false
+            AppLog.d(TAG, "Extended sweep: completed")
+        }
+    }
+
+    private fun addIpv4PrefixTargets(la: LinkAddress, out: MutableSet<String>) {
+        val addr = la.address as? Inet4Address ?: return
+        val prefix = la.prefixLength
+        if (!isPrivateIpv4(addr)) return
+        // Only probe small-ish subnets to keep cost bounded (/24.. /30)
+        if (prefix < 24 || prefix > 30) return
+
+        val base = ipv4ToInt(addr) and subnetMask(prefix)
+        val low = base + 1
+        val high = (base or invMask(prefix)) - 1
+
+        var count = 0
+        var ipInt = low
+        while (ipInt <= high && count < 256) {
+            out.add(intToIpv4(ipInt))
+            ipInt += 1
+            count += 1
+        }
+    }
+
+    private suspend fun probeIp(ip: String) {
+        val url = "http://$ip:4096/global/health"
+        val req = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .build()
+
+        withContext(Dispatchers.IO) {
+            runCatching {
+                probeClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use
+                    val body = resp.body?.string() ?: return@use
+                    if (body.contains("\"healthy\":true")) {
+                        val server = DiscoveredServer(
+                            serviceName = "opencode-$ip",
+                            host = ip,
+                            port = 4096,
+                            url = "http://$ip:4096"
+                        )
+                        _discoveredServers.update { servers ->
+                            if (servers.any { it.url == server.url }) servers else servers + server
+                        }
+                        AppLog.d(TAG, "Extended sweep: $url healthy")
+                    }
+                }
+            }.onFailure {
+                // Ignore failures – host not an OpenCode server or unreachable
+            }
+        }
+    }
+
+    // IPv4 helpers
+    private fun isPrivateIpv4(addr: Inet4Address): Boolean {
+        val b = addr.address
+        val b0 = b[0].toInt() and 0xFF
+        val b1 = b[1].toInt() and 0xFF
+        return when (b0) {
+            10 -> true // 10.0.0.0/8
+            172 -> b1 in 16..31 // 172.16.0.0/12
+            192 -> b1 == 168 // 192.168.0.0/16
+            else -> false
+        }
+    }
+
+    private fun ipv4ToInt(addr: Inet4Address): Int {
+        val b = addr.address
+        return ((b[0].toInt() and 0xFF) shl 24) or
+               ((b[1].toInt() and 0xFF) shl 16) or
+               ((b[2].toInt() and 0xFF) shl 8) or
+               (b[3].toInt() and 0xFF)
+    }
+
+    private fun intToIpv4(v: Int): String {
+        val b0 = (v ushr 24) and 0xFF
+        val b1 = (v ushr 16) and 0xFF
+        val b2 = (v ushr 8) and 0xFF
+        val b3 = v and 0xFF
+        return "$b0.$b1.$b2.$b3"
+    }
+
+    private fun subnetMask(prefix: Int): Int = if (prefix == 0) 0 else -1 shl (32 - prefix)
+    private fun invMask(prefix: Int): Int = subnetMask(prefix).inv()
 }
