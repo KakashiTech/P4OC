@@ -83,20 +83,20 @@ private fun UserMessage(messageWithParts: MessageWithParts) {
     // Don't render anything if there's no visible text
     if (text.isBlank()) return
 
-    // User message bubble — aligned right with accent left-border chip look
+    // User message bubble — aligned right, max 80% width
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp, horizontal = 4.dp),
+            .padding(vertical = 4.dp, horizontal = 8.dp),
         horizontalArrangement = Arrangement.End
     ) {
+        val bubbleShape = RoundedCornerShape(topStart = 14.dp, topEnd = 4.dp, bottomStart = 14.dp, bottomEnd = 14.dp)
         Box(
             modifier = Modifier
-                .widthIn(max = 300.dp)
-                .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 4.dp, bottomStart = 12.dp, bottomEnd = 12.dp))
-                .background(theme.primary.copy(alpha = 0.18f))
-                .border(1.dp, theme.primary.copy(alpha = 0.3f),
-                    RoundedCornerShape(topStart = 12.dp, topEnd = 4.dp, bottomStart = 12.dp, bottomEnd = 12.dp))
+                .fillMaxWidth(0.82f)
+                .clip(bubbleShape)
+                .background(theme.primary.copy(alpha = 0.16f))
+                .border(1.dp, theme.primary.copy(alpha = 0.28f), bubbleShape)
                 .combinedClickable(
                     onClick = {},
                     onLongClick = {
@@ -157,8 +157,9 @@ private fun AssistantMessage(
     
     Column(
         modifier = Modifier
-            .fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(1.dp)  // 1.dp = minimal spacing, no token for this
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         // Render part groups in order
         partGroups.forEach { group ->

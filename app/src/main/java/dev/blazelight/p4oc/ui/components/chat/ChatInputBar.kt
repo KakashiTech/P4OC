@@ -114,9 +114,15 @@ fun ChatInputBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
                 .background(theme.backgroundElement)
         ) {
+            // Thin top accent line instead of rounded clip (avoids visible edge cut)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(theme.border.copy(alpha = 0.5f))
+            )
             // ── Queued message chip ─────────────────────────────────────────
             AnimatedVisibility(
                 visible = hasQueuedMessage && queuedMessagePreview != null,

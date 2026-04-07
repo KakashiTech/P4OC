@@ -308,8 +308,8 @@ fun ChatScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize().testTag("message_list"),
-                    contentPadding = PaddingValues(vertical = Spacing.xxs, horizontal = Spacing.xs),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.hairline),
+                    contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                     reverseLayout = true
                 ) {
                     // Inline question card at the bottom (top in reversed layout)
@@ -482,59 +482,78 @@ private fun ChatTopBar(
         title = title,
         onNavigateBack = onBack,
         actions = {
-            // Compact status: connection dot + branch (no 40dp boxes)
+            // Connection + branch info
             ConnectionDot(state = connectionState)
             branchName?.let { branch ->
-                Text(
-                    text = "${stringResource(R.string.vcs_branch_prefix)} $branch",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace
-                    ),
-                    color = theme.textMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                Box(
                     modifier = Modifier
-                        .widthIn(max = Sizing.panelWidthSm)  // 80dp — tighter
-                        .padding(start = Spacing.xxs)
-                )
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(theme.backgroundElement)
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "⏷ $branch",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        color = theme.textMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = Sizing.panelWidthSm)
+                    )
+                }
             }
-            
-            Spacer(Modifier.width(Spacing.xs))
-            // Abort — only when busy (red ■ glyph)
+
+            Spacer(Modifier.width(4.dp))
+
+            // Abort — red stop button when busy
             if (isBusy) {
-                IconButton(
-                    onClick = onAbort,
-                    modifier = Modifier.size(Sizing.iconButtonMd).testTag("chat_abort_button")
+                Box(
+                    modifier = Modifier
+                        .size(Sizing.iconButtonMd)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(theme.error.copy(alpha = 0.12f))
+                        .clickable(role = Role.Button) { onAbort() }
+                        .testTag("chat_abort_button"),
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = "■",
                         color = theme.error,
                         fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-            }
-            
-            // Todo count — only when there are todos (TUI glyph, no rounded badge)
-            if (todoCount > 0) {
-                IconButton(
-                    onClick = onTodos,
-                    modifier = Modifier.size(Sizing.iconButtonMd)
-                ) {
-                    Text(
-                        text = "☐$todoCount",
-                        color = theme.accent,
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelMedium
+                        style = MaterialTheme.typography.labelLarge
                     )
                 }
             }
 
-            // Single overflow glyph — navigation actions collapse into menu
+            // Todos badge
+            if (todoCount > 0) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(theme.accent.copy(alpha = 0.12f))
+                        .clickable(role = Role.Button) { onTodos() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "☐ $todoCount",
+                        color = theme.accent,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+
+            // Overflow menu
             Box {
-                IconButton(
-                    onClick = { showOverflow = true },
-                    modifier = Modifier.size(Sizing.iconButtonMd).testTag("chat_overflow_button")
+                Box(
+                    modifier = Modifier
+                        .size(Sizing.iconButtonMd)
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable(role = Role.Button) { showOverflow = true }
+                        .testTag("chat_overflow_button"),
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = "≡",
