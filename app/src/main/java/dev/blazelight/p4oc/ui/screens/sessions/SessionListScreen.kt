@@ -1,14 +1,24 @@
 package dev.blazelight.p4oc.ui.screens.sessions
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -17,11 +27,14 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.border
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
@@ -49,6 +62,12 @@ import dev.blazelight.p4oc.ui.components.TuiCard
 import dev.blazelight.p4oc.ui.components.TuiSnackbar
 import android.content.Intent
 import androidx.compose.ui.platform.LocalContext
+
+// Corner radius tokens matching ServerScreen
+private val CardRadius = 8.dp
+private val BadgeRadius = 4.dp
+private val DotRadius = 2.dp
+private val ButtonRadius = 6.dp
 
 private data class SessionNode(
     val sessionWithProject: SessionWithProject,
@@ -119,28 +138,42 @@ fun SessionListScreen(
                 title = projectName ?: stringResource(R.string.sessions_title_default),
                 onNavigateBack = onNavigateBack,
                 actions = {
-                    // Always show folder icon for project navigation
                     IconButton(
                         onClick = onProjects,
                         modifier = Modifier.size(Sizing.iconButtonMd)
                     ) {
-                        Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.cd_projects), modifier = Modifier.size(Sizing.iconAction))
+                        Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.cd_projects), modifier = Modifier.size(Sizing.iconAction), tint = theme.textMuted)
                     }
                     IconButton(
                         onClick = viewModel::refresh,
                         modifier = Modifier.size(Sizing.iconButtonMd)
                     ) {
-                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.cd_refresh), modifier = Modifier.size(Sizing.iconAction))
+                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.cd_refresh), modifier = Modifier.size(Sizing.iconAction), tint = theme.textMuted)
                     }
                     IconButton(
                         onClick = onSettings,
                         modifier = Modifier.size(Sizing.iconButtonMd).testTag("sessions_settings_button")
                     ) {
-                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.cd_settings), modifier = Modifier.size(Sizing.iconAction))
+                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.cd_settings), modifier = Modifier.size(Sizing.iconAction), tint = theme.textMuted)
                     }
                 }
             )
         },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { showNewSessionDialog = true },
+                shape = RoundedCornerShape(ButtonRadius),
+                containerColor = theme.accent,
+                contentColor = theme.background,
+                modifier = Modifier.testTag("fab_new_session")
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = stringResource(R.string.sessions_new),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
     ) { padding ->
         Box(
             modifier = Modifier
@@ -160,54 +193,42 @@ fun SessionListScreen(
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().testTag("sessions_list"),
-                    contentPadding = PaddingValues(Spacing.md),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     // Pinned quick actions (only on unfiltered list)
                     if (filterProjectId == null) {
-                        item(key = "quick_action_global") {
-                            QuickActionCard(
-                                icon = "\u25C6",
-                                title = stringResource(R.string.sessions_quick_global),
-                                subtitle = stringResource(R.string.sessions_quick_global_desc),
-                                onClick = {
-                                    viewModel.createSession(title = null, directory = null)
-                                },
-                                modifier = Modifier.testTag("quick_action_global")
-                            )
-                        }
-
-                        item(key = "quick_action_custom") {
-                            QuickActionCard(
-                                icon = "\u25C7",
-                                title = stringResource(R.string.sessions_quick_custom),
-                                subtitle = stringResource(R.string.sessions_quick_custom_desc),
-                                onClick = {
-                                    showNewSessionCustomDir = true
-                                    showNewSessionDialog = true
-                                },
-                                modifier = Modifier.testTag("quick_action_custom")
-                            )
+                        item(key = "quick_actions_row") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                QuickActionCard(
+                                    icon = Icons.Default.PlayArrow,
+                                    label = stringResource(R.string.sessions_quick_global),
+                                    onClick = { viewModel.createSession(title = null, directory = null) },
+                                    modifier = Modifier.weight(1f).testTag("quick_action_global")
+                                )
+                                QuickActionCard(
+                                    icon = Icons.Default.CreateNewFolder,
+                                    label = stringResource(R.string.sessions_quick_custom),
+                                    onClick = {
+                                        showNewSessionCustomDir = true
+                                        showNewSessionDialog = true
+                                    },
+                                    modifier = Modifier.weight(1f).testTag("quick_action_custom")
+                                )
+                            }
                         }
                     }
 
                     if (displayedSessions.isEmpty() && filterProjectId == null) {
                         item(key = "empty_hint") {
-                            Text(
-                                text = stringResource(R.string.sessions_empty_hint),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = theme.textMuted,
-                                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.lg)
-                            )
+                            EmptySessionsHint(stringResource(R.string.sessions_empty_hint))
                         }
                     } else if (displayedSessions.isEmpty()) {
                         item(key = "empty_hint") {
-                            Text(
-                                text = stringResource(R.string.sessions_empty_title),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = theme.textMuted,
-                                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.lg)
-                            )
+                            EmptySessionsHint(stringResource(R.string.sessions_empty_title))
                         }
                     } else {
                         items(
@@ -250,14 +271,17 @@ fun SessionListScreen(
                 TuiSnackbar(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(Spacing.md),
+                        .padding(16.dp),
                     action = {
-                        TextButton(onClick = viewModel::clearError, shape = RectangleShape) {
-                            Text(stringResource(R.string.sessions_dismiss))
+                        TextButton(onClick = viewModel::clearError, shape = RoundedCornerShape(4.dp)) {
+                            Text(
+                                stringResource(R.string.sessions_dismiss),
+                                fontFamily = FontFamily.Monospace
+                            )
                         }
                     }
                 ) {
-                    Text(error)
+                    Text(error, fontFamily = FontFamily.Monospace)
                 }
             }
         }
@@ -368,12 +392,12 @@ private fun SessionTreeNode(
         
         AnimatedVisibility(
             visible = isExpanded && hasChildren,
-            enter = expandVertically(),
-            exit = shrinkVertically()
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut()
         ) {
             Column(
-                modifier = Modifier.padding(top = Spacing.md),
-                verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                modifier = Modifier.padding(top = 8.dp, start = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 node.children.forEach { child ->
                     SessionTreeNode(
@@ -423,7 +447,19 @@ private fun SessionCard(
     val isRetrying = status is SessionStatus.Retry
     var showContextMenu by remember { mutableStateOf(false) }
 
-    Surface(
+    val cardColor = when {
+        isBusy    -> theme.accent.copy(alpha = 0.08f)
+        isRetrying -> theme.error.copy(alpha = 0.08f)
+        isSubAgent -> theme.backgroundElement.copy(alpha = 0.6f)
+        else      -> theme.backgroundElement
+    }
+    val indicatorColor = when {
+        isBusy    -> theme.accent
+        isRetrying -> theme.error
+        else      -> theme.success
+    }
+
+    Card(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
@@ -431,93 +467,92 @@ private fun SessionCard(
                 onLongClick = { showContextMenu = true },
                 role = Role.Button
             ),
-        color = when {
-            isBusy -> theme.accent.copy(alpha = 0.1f)
-            isRetrying -> theme.error.copy(alpha = 0.1f)
-            isSubAgent -> theme.backgroundElement.copy(alpha = 0.7f)
-            else -> theme.backgroundElement
-        },
-        shape = RectangleShape
+        shape = RoundedCornerShape(CardRadius),
+        colors = CardDefaults.cardColors(containerColor = cardColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isBusy) 2.dp else 1.dp)
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = Spacing.md, vertical = Spacing.sm)
+                .padding(horizontal = 14.dp, vertical = 12.dp)
                 .fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Selection indicator
-            Text(
-                text = if (isBusy) "▶" else if (isRetrying) "!" else ">",
-                style = MaterialTheme.typography.bodyMedium,
-                color = when {
-                    isBusy -> theme.accent
-                    isRetrying -> theme.error
-                    else -> theme.accent.copy(alpha = 0.3f)
-                }
-            )
-            
-            Spacer(Modifier.width(Spacing.sm))
-            
-            // Expand/collapse or subagent indicator
+            // Status indicator dot / busy spinner
+            if (isBusy) {
+                BusyDot(color = theme.accent)
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(indicatorColor.copy(alpha = if (isSubAgent) 0.5f else 1f))
+                )
+            }
+
+            // Expand toggle (parent sessions with children)
             if (onExpandToggle != null) {
-                IconButton(
-                    onClick = onExpandToggle,
-                    modifier = Modifier.size(Sizing.chipHeight)
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(theme.backgroundElement)
+                        .clickable(role = Role.Button) { onExpandToggle() },
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                         contentDescription = if (isExpanded) stringResource(R.string.cd_collapse) else stringResource(R.string.cd_expand),
-                        modifier = Modifier.size(Sizing.iconSm),
+                        modifier = Modifier.size(14.dp),
                         tint = theme.textMuted
                     )
                 }
             } else if (isSubAgent) {
                 Text(
-                    text = "└",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = "╰",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
                     color = theme.textMuted
                 )
-                Spacer(modifier = Modifier.width(Spacing.xs))
             }
-            
-            // Main content column
+
+            // Main content
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(Spacing.xxs)
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                // Title
                 Text(
                     text = session.title,
                     style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
                     color = theme.text,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
-                
-                // Metadata row
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (childCount > 0) {
-                        Text(
-                            text = "[$childCount sub]",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.info
-                        )
-                    }
                     SessionStatusIndicator(status = status)
                     Text(
                         text = formatDateTime(session.updatedAt),
                         style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
                         color = theme.textMuted
                     )
-                    
+                    if (childCount > 0) {
+                        MetaBadge(
+                            text = "$childCount sub",
+                            color = theme.info
+                        )
+                    }
                     session.summary?.let { summary ->
                         if (summary.additions > 0) {
                             Text(
                                 text = "+${summary.additions}",
                                 style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
                                 color = theme.success
                             )
                         }
@@ -525,20 +560,17 @@ private fun SessionCard(
                             Text(
                                 text = "-${summary.deletions}",
                                 style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
                                 color = theme.error
                             )
                         }
                     }
                     if (session.shareUrl != null) {
-                        Text(
-                            text = "◈ ${stringResource(R.string.sessions_shared_badge)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.info
-                        )
+                        MetaBadge(text = stringResource(R.string.sessions_shared_badge), color = theme.info)
                     }
                 }
             }
-            
+
             // Project chip on far right
             if (showProjectChip && projectId != null && !projectName.isNullOrEmpty()) {
                 ProjectChip(
@@ -547,9 +579,19 @@ private fun SessionCard(
                     onClick = { onProjectClick(projectId) }
                 )
             }
+
+            // More icon hint
+            Icon(
+                Icons.Default.MoreVert,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(16.dp)
+                    .clickable(role = Role.Button) { showContextMenu = true },
+                tint = theme.textMuted.copy(alpha = 0.5f)
+            )
         }
     }
-    
+
     // Long-press context menu
     DropdownMenu(
         expanded = showContextMenu,
@@ -557,60 +599,38 @@ private fun SessionCard(
     ) {
         TuiDropdownMenuItem(
             text = stringResource(R.string.sessions_rename),
-            onClick = {
-                showContextMenu = false
-                onRename()
-            },
+            onClick = { showContextMenu = false; onRename() },
             leadingIcon = Icons.Default.Edit
         )
         TuiDropdownMenuItem(
             text = stringResource(R.string.sessions_view_changes),
-            onClick = {
-                showContextMenu = false
-                onViewChanges()
-            },
+            onClick = { showContextMenu = false; onViewChanges() },
             leadingIcon = Icons.Default.Description
         )
         TuiDropdownMenuItem(
             text = stringResource(R.string.sessions_summarize),
-            onClick = {
-                showContextMenu = false
-                onSummarize()
-            },
+            onClick = { showContextMenu = false; onSummarize() },
             leadingIcon = Icons.Default.Summarize
         )
         if (isShared) {
             TuiDropdownMenuItem(
                 text = stringResource(R.string.sessions_unshare),
-                onClick = {
-                    showContextMenu = false
-                    onShare()
-                },
+                onClick = { showContextMenu = false; onShare() },
                 leadingIcon = Icons.Default.LinkOff
             )
         } else {
             TuiDropdownMenuItem(
                 text = stringResource(R.string.sessions_share),
-                onClick = {
-                    showContextMenu = false
-                    onShare()
-                },
+                onClick = { showContextMenu = false; onShare() },
                 leadingIcon = Icons.Default.Share
             )
         }
         HorizontalDivider(color = theme.borderSubtle)
         DropdownMenuItem(
-            text = { Text(stringResource(R.string.sessions_delete), color = theme.error) },
-            onClick = {
-                showContextMenu = false
-                onDelete()
-            },
+            text = { Text(stringResource(R.string.sessions_delete), color = theme.error, fontFamily = FontFamily.Monospace) },
+            onClick = { showContextMenu = false; onDelete() },
             leadingIcon = {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = stringResource(R.string.sessions_delete),
-                    tint = theme.error
-                )
+                Icon(Icons.Default.Delete, contentDescription = null, tint = theme.error)
             }
         )
     }
@@ -622,27 +642,64 @@ private fun ProjectChip(
     projectName: String,
     onClick: () -> Unit
 ) {
-    Surface(
-        onClick = onClick,
-        shape = RectangleShape,
-        color = ProjectColors.colorForProject(projectId),
+    val bgColor = ProjectColors.colorForProject(projectId)
+    val textColor = ProjectColors.textColorForProject(projectId)
+    Box(
         modifier = Modifier
-            .padding(start = Spacing.md)
+            .clip(RoundedCornerShape(BadgeRadius))
+            .background(bgColor)
+            .clickable(role = Role.Button, onClick = onClick)
             .widthIn(max = Sizing.chipMaxWidth)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.md)
-        ) {
-            Text(
-                text = projectName,
-                style = MaterialTheme.typography.labelMedium,
-                color = ProjectColors.textColorForProject(projectId),
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-            )
-        }
+        Text(
+            text = projectName,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Medium,
+            color = textColor,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
     }
+}
+
+@Composable
+private fun MetaBadge(text: String, color: androidx.compose.ui.graphics.Color) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(BadgeRadius))
+            .background(color.copy(alpha = 0.12f))
+            .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(BadgeRadius))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            color = color,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun BusyDot(color: androidx.compose.ui.graphics.Color) {
+    val transition = rememberInfiniteTransition(label = "busyDot")
+    val alpha by transition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+        label = "alpha"
+    )
+    Box(
+        modifier = Modifier
+            .size(10.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .alpha(alpha)
+            .background(color)
+    )
 }
 
 @Composable
@@ -651,20 +708,21 @@ private fun SessionStatusIndicator(status: SessionStatus?) {
     when (status) {
         is SessionStatus.Busy -> {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TuiLoadingIndicator()
                 Text(
                     text = stringResource(R.string.session_working),
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
                     color = theme.accent
                 )
             }
         }
         is SessionStatus.Retry -> {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
@@ -675,72 +733,98 @@ private fun SessionStatusIndicator(status: SessionStatus?) {
                 )
                 Text(
                     text = stringResource(R.string.session_retry_format, status.attempt),
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
                     color = theme.error
                 )
             }
         }
         is SessionStatus.Idle -> {
-            Text(
-                text = "●",
-                style = MaterialTheme.typography.labelSmall,
-                color = theme.success
-            )
+            // idle — dot handled by SessionCard indicator
         }
         null -> {}
     }
 }
 
 @Composable
+private fun EmptySessionsHint(text: String) {
+    val theme = LocalOpenCodeTheme.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(theme.backgroundElement),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.ChatBubbleOutline,
+                    contentDescription = null,
+                    tint = theme.textMuted,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = theme.textMuted
+            )
+        }
+    }
+}
+
+@Composable
 private fun QuickActionCard(
-    icon: String,
-    title: String,
-    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalOpenCodeTheme.current
-    Surface(
+    Card(
         modifier = modifier
-            .fillMaxWidth()
+            .clip(RoundedCornerShape(CardRadius))
             .clickable(role = Role.Button, onClick = onClick),
-        color = theme.background,
-        shape = RectangleShape
+        shape = RoundedCornerShape(CardRadius),
+        colors = CardDefaults.cardColors(containerColor = theme.backgroundElement),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        Row(
+        Column(
             modifier = Modifier
-                .border(Sizing.strokeThin, theme.accent, RectangleShape)
-                .padding(horizontal = Spacing.md, vertical = Spacing.sm)
-                .fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = "+",
-                style = MaterialTheme.typography.bodyMedium,
-                color = theme.accent
-            )
-            Text(
-                text = icon,
-                style = MaterialTheme.typography.bodyMedium,
-                color = theme.accent
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = theme.text
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = theme.textMuted
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(theme.accent.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = theme.accent,
+                    modifier = Modifier.size(18.dp)
                 )
             }
             Text(
-                text = "\u2192",
-                style = MaterialTheme.typography.bodyMedium,
-                color = theme.textMuted
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+                color = theme.text
             )
         }
     }
