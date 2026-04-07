@@ -136,14 +136,17 @@ fun SessionListScreen(
         containerColor = theme.background,
         topBar = {
             TuiTopBar(
-                title = projectName ?: stringResource(R.string.sessions_title_default),
+                title = projectName ?: "", // No title when showing all sessions (tab already shows "Sessions")
                 onNavigateBack = onNavigateBack,
                 actions = {
-                    IconButton(
-                        onClick = onProjects,
-                        modifier = Modifier.size(Sizing.iconButtonMd)
-                    ) {
-                        Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.cd_projects), modifier = Modifier.size(Sizing.iconAction), tint = theme.textMuted)
+                    if (projectName != null) {
+                        // Only show folder button when not in project view
+                        IconButton(
+                            onClick = onProjects,
+                            modifier = Modifier.size(Sizing.iconButtonMd)
+                        ) {
+                            Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.cd_projects), modifier = Modifier.size(Sizing.iconAction), tint = theme.textMuted)
+                        }
                     }
                     IconButton(
                         onClick = viewModel::refresh,
