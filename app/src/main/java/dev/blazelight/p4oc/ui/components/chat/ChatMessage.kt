@@ -83,7 +83,7 @@ private fun UserMessage(messageWithParts: MessageWithParts) {
     // Don't render anything if there's no visible text
     if (text.isBlank()) return
 
-    // User message bubble — aligned right, max 80% width
+    // User message bubble — aligned right, wraps to content width
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -93,7 +93,7 @@ private fun UserMessage(messageWithParts: MessageWithParts) {
         val bubbleShape = RoundedCornerShape(topStart = 14.dp, topEnd = 4.dp, bottomStart = 14.dp, bottomEnd = 14.dp)
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.82f)
+                .widthIn(min = 48.dp, max = 300.dp)
                 .clip(bubbleShape)
                 .background(theme.primary.copy(alpha = 0.16f))
                 .border(1.dp, theme.primary.copy(alpha = 0.28f), bubbleShape)
@@ -109,7 +109,7 @@ private fun UserMessage(messageWithParts: MessageWithParts) {
         ) {
             StreamingMarkdown(
                 text = text,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.wrapContentWidth()
             )
         }
     }
@@ -296,82 +296,100 @@ private fun ReasoningPart(part: Part.Reasoning) {
     
     val isThinking = part.time?.end == null
 
+    // Collapsed pill — tiny, wraps to content
+    val collapsedShape = RoundedCornerShape(20.dp)
+    val expandedShape = RoundedCornerShape(10.dp)
+    val cardShape = if (expanded) expandedShape else collapsedShape
+
     Box(
         modifier = Modifier
-            .widthIn(min = 140.dp, max = 320.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(theme.warning.copy(alpha = 0.07f))
-            .border(1.dp, theme.warning.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+            .then(
+                if (expanded) Modifier.fillMaxWidth()
+                else Modifier.wrapContentWidth()
+            )
+            .clip(cardShape)
+            .background(theme.warning.copy(alpha = if (expanded) 0.07f else 0.1f))
+            .border(1.dp, theme.warning.copy(alpha = if (expanded) 0.2f else 0.35f), cardShape)
             .clickable(role = Role.Button) { expanded = !expanded }
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
-        Column {
+        if (!expanded) {
+            // Pill mode: compact single line
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 if (isThinking) {
                     TuiLoadingIndicator()
                 } else {
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(theme.warning.copy(alpha = 0.2f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Psychology,
-                            contentDescription = stringResource(R.string.models_reasoning),
-                            modifier = Modifier.size(10.dp),
-                            tint = theme.warning
-                        )
-                    }
+                    Icon(
+                        Icons.Default.Psychology,
+                        contentDescription = null,
+                        modifier = Modifier.size(12.dp),
+                        tint = theme.warning
+                    )
                 }
                 Text(
-                    text = if (isThinking) "Thinking..." else "Reasoning",
+                    text = if (isThinking) "Thinking..." else "Reasoning${thinkingDuration?.let { " · $it" } ?: ""}",
                     style = MaterialTheme.typography.labelSmall,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Medium,
-                    color = theme.warning,
-                    modifier = Modifier.weight(1f)
+                    color = theme.warning
                 )
-                thinkingDuration?.let { duration ->
-                    Text(
-                        text = duration,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = theme.textMuted.copy(alpha = 0.7f)
-                    )
-                }
                 Icon(
-                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (expanded) "Collapse" else "Expand",
-                    modifier = Modifier.size(14.dp),
-                    tint = theme.textMuted
+                    Icons.Default.ExpandMore,
+                    contentDescription = "Expand",
+                    modifier = Modifier.size(12.dp),
+                    tint = theme.warning.copy(alpha = 0.7f)
                 )
             }
-            if (expanded && part.text.isNotEmpty()) {
-                HorizontalDivider(
-                    modifier = Modifier.padding(vertical = 6.dp),
-                    color = theme.border.copy(alpha = 0.5f)
-                )
-                Box(
-                    modifier = Modifier.combinedClickable(
-                        onClick = { expanded = !expanded },
-                        onLongClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            clipboardManager.setText(AnnotatedString(part.text))
-                        },
-                        onLongClickLabel = "Copy reasoning",
-                        role = Role.Button
-                    )
+        } else {
+            // Expanded mode: full reasoning text
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    TertiaryStreamingMarkdown(
-                        text = part.text,
-                        modifier = Modifier.fillMaxWidth()
+                    Icon(
+                        Icons.Default.Psychology,
+                        contentDescription = null,
+                        modifier = Modifier.size(12.dp),
+                        tint = theme.warning
                     )
+                    Text(
+                        text = "Reasoning${thinkingDuration?.let { " · $it" } ?: ""}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Medium,
+                        color = theme.warning,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        Icons.Default.ExpandLess,
+                        contentDescription = "Collapse",
+                        modifier = Modifier.size(12.dp),
+                        tint = theme.warning.copy(alpha = 0.7f)
+                    )
+                }
+                if (part.text.isNotEmpty()) {
+                    HorizontalDivider(color = theme.warning.copy(alpha = 0.2f))
+                    Box(
+                        modifier = Modifier.combinedClickable(
+                            onClick = { expanded = !expanded },
+                            onLongClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                clipboardManager.setText(AnnotatedString(part.text))
+                            },
+                            onLongClickLabel = "Copy reasoning",
+                            role = Role.Button
+                        )
+                    ) {
+                        TertiaryStreamingMarkdown(
+                            text = part.text,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
         }

@@ -1,10 +1,12 @@
 package dev.blazelight.p4oc.ui.components.toolwidgets
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -12,12 +14,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.Part
 import dev.blazelight.p4oc.domain.model.ToolState
@@ -43,69 +49,83 @@ fun BashWidgetExpanded(
 ) {
     val theme = LocalOpenCodeTheme.current
     val state = tool.state
-    val (icon, color) = getStateIconColor(state, theme)
-    
-    // Extract command from input
+    val (_, stateColor) = getStateIconColor(state, theme)
+    val terminalBg = Color(0xFF0D1117)  // near-black terminal background
+    val terminalFg = Color(0xFFE6EDF3)  // terminal text color
+    val promptColor = stateColor
+    val cardShape = RoundedCornerShape(10.dp)
+
     val command = extractJsonParam(state.input, "command") ?: "bash"
-    
-    // Extract output from result
     val output = when (state) {
-        is ToolState.Completed -> state.output.take(2000)
-        is ToolState.Running -> state.title ?: ""
-        is ToolState.Error -> state.error
+        is ToolState.Completed -> state.output.take(3000).trimEnd()
+        is ToolState.Running -> state.title?.trimEnd() ?: ""
+        is ToolState.Error -> state.error.trimEnd()
         else -> null
     }
-    
+
     Column(
         modifier = modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .border(1.dp, promptColor.copy(alpha = 0.25f), cardShape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .background(theme.backgroundPanel.copy(alpha = 0.5f))
-            .padding(Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
-        // Header: icon + command
+        // Terminal prompt bar
         Row(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(terminalBg)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Traffic light dots (decorative terminal look)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Box(Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFFFF5F57)))
+                Box(Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFFFFBD2E)))
+                Box(Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF28CA41)))
+            }
+            // Prompt prefix
             Text(
-                text = icon,
-                style = MaterialTheme.typography.labelMedium,
-                color = color
+                text = "$ ",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp
+                ),
+                color = promptColor,
+                fontWeight = FontWeight.Bold
             )
             Text(
                 text = command,
-                style = MaterialTheme.typography.labelMedium.copy(
+                style = MaterialTheme.typography.labelSmall.copy(
                     fontFamily = FontFamily.Monospace,
-                    fontSize = TuiCodeFontSize.lg
+                    fontSize = 11.sp
                 ),
-                color = theme.text,
+                color = terminalFg,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            if (state is ToolState.Running) {
-                TuiLoadingIndicator()
-            }
+            if (state is ToolState.Running) TuiLoadingIndicator()
         }
-        
-        // Output preview (scrollable, max height ~100dp)
+
+        // Output pane
         if (!output.isNullOrBlank()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 100.dp)
-                    .background(theme.backgroundElement)
-                    .padding(Spacing.sm)
+                    .heightIn(max = 160.dp)
+                    .background(terminalBg.copy(alpha = 0.85f))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = output,
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.sm,
-                        lineHeight = TuiCodeFontSize.xxl
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp
                     ),
-                    color = if (state is ToolState.Error) theme.error else theme.textMuted,
+                    color = if (state is ToolState.Error) theme.error else terminalFg.copy(alpha = 0.85f),
                     modifier = Modifier
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
@@ -113,13 +133,20 @@ fun BashWidgetExpanded(
                 )
             }
         }
-        
-        // Pending approval buttons
+
+        // Pending approval
         if (state is ToolState.Pending) {
-            PendingApprovalButtons(
-                onApprove = { onToolApprove(tool.callID) },
-                onDeny = { onToolDeny(tool.callID) }
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(theme.secondary.copy(alpha = 0.08f))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                PendingApprovalButtons(
+                    onApprove = { onToolApprove(tool.callID) },
+                    onDeny = { onToolDeny(tool.callID) }
+                )
+            }
         }
     }
 }
@@ -153,70 +180,51 @@ fun ReadWidgetExpanded(
         else -> null
     }
     
+    val cardShape = RoundedCornerShape(10.dp)
     Column(
         modifier = modifier
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
+            .fillMaxWidth()
+            .clip(cardShape)
+            .border(1.dp, color.copy(alpha = 0.2f), cardShape)
             .background(theme.backgroundPanel.copy(alpha = 0.5f))
-            .padding(Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
     ) {
-        // Header: icon + file path
+        // Header
         Row(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = icon,
-                style = MaterialTheme.typography.labelMedium,
-                color = color
-            )
-            Text(
-                text = stringResource(R.string.read_file, fileName),
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = TuiCodeFontSize.lg
-                ),
-                color = theme.text
-            )
-            Spacer(Modifier.weight(1f))
-            if (state is ToolState.Running) {
-                TuiLoadingIndicator()
-            }
-        }
-        
-        // Full path (muted)
-        Text(
-            text = filePath,
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontFamily = FontFamily.Monospace,
-                fontSize = TuiCodeFontSize.sm
-            ),
-            color = theme.textMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        
-        // Content preview (scrollable, max height ~100dp)
-        if (!content.isNullOrBlank()) {
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 100.dp)
+                modifier = Modifier.size(18.dp).clip(RoundedCornerShape(4.dp)).background(color.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) { Text(text = icon, style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace), color = color) }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.read_file, fileName),
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.lg),
+                    color = theme.text, maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = filePath,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.sm),
+                    color = theme.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (state is ToolState.Running) TuiLoadingIndicator()
+        }
+        if (!content.isNullOrBlank()) {
+            HorizontalDivider(color = theme.border.copy(alpha = 0.3f))
+            Box(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 120.dp)
                     .background(theme.backgroundElement)
-                    .padding(Spacing.sm)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = content,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.sm,
-                        lineHeight = TuiCodeFontSize.xxl
-                    ),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.sm, lineHeight = TuiCodeFontSize.xxl),
                     color = if (state is ToolState.Error) theme.error else theme.text,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .horizontalScroll(rememberScrollState())
+                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState())
                 )
             }
         }
@@ -249,83 +257,59 @@ fun EditWidgetExpanded(
     val newString = extractJsonParam(state.input, "newString")
     val codeEdit = extractJsonParam(state.input, "code_edit")
     
+    val cardShape = RoundedCornerShape(10.dp)
+    val previewContent = when {
+        codeEdit != null -> codeEdit.take(500)
+        oldString != null && newString != null -> "- ${oldString.take(100)}\n+ ${newString.take(100)}"
+        else -> null
+    }
     Column(
         modifier = modifier
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
+            .fillMaxWidth()
+            .clip(cardShape)
+            .border(1.dp, color.copy(alpha = 0.2f), cardShape)
             .background(theme.backgroundPanel.copy(alpha = 0.5f))
-            .padding(Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
     ) {
-        // Header: icon + file name + diff stats
         Row(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = icon,
-                style = MaterialTheme.typography.labelMedium,
-                color = color
-            )
-            Text(
-                text = stringResource(R.string.edit_file, fileName),
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = TuiCodeFontSize.lg
-                ),
-                color = theme.text
-            )
-            Spacer(Modifier.weight(1f))
-            
-            // Show diff stats if available
-            getDiffStatsFromTool(tool)?.let { (added, removed) ->
-                Text("+$added", style = MaterialTheme.typography.labelSmall, color = theme.success)
-                Text("-$removed", style = MaterialTheme.typography.labelSmall, color = theme.error)
-            }
-            
-            if (state is ToolState.Running) {
-                TuiLoadingIndicator()
-            }
-        }
-        
-        // Full path (muted)
-        Text(
-            text = filePath,
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontFamily = FontFamily.Monospace,
-                fontSize = TuiCodeFontSize.sm
-            ),
-            color = theme.textMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        
-        // Show edit preview (old → new or code_edit)
-        val previewContent = when {
-            codeEdit != null -> codeEdit.take(500)
-            oldString != null && newString != null -> 
-                "- ${oldString.take(100)}\n+ ${newString.take(100)}"
-            else -> null
-        }
-        
-        if (previewContent != null) {
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 80.dp)
+                modifier = Modifier.size(18.dp).clip(RoundedCornerShape(4.dp)).background(color.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) { Text(text = icon, style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace), color = color) }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.edit_file, fileName),
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.lg),
+                    color = theme.text, maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = filePath,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.sm),
+                    color = theme.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+            }
+            getDiffStatsFromTool(tool)?.let { (added, removed) ->
+                Text("+$added", style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium), color = theme.success)
+                Text("-$removed", style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium), color = theme.error)
+            }
+            if (state is ToolState.Running) TuiLoadingIndicator()
+        }
+        if (previewContent != null) {
+            HorizontalDivider(color = theme.border.copy(alpha = 0.3f))
+            Box(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 100.dp)
                     .background(theme.backgroundElement)
-                    .padding(Spacing.sm)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = previewContent,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.sm,
-                        lineHeight = TuiCodeFontSize.xxl
-                    ),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.sm, lineHeight = TuiCodeFontSize.xxl),
                     color = theme.textMuted,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
+                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
                 )
             }
         }
@@ -356,82 +340,63 @@ fun DefaultWidgetExpanded(
         else -> null
     }
     
+    val cardShape = RoundedCornerShape(10.dp)
+    val inputPreview = state.input.entries.take(2).joinToString("  ") { (k, v) -> "$k=${v.toString().take(28)}" }
     Column(
         modifier = modifier
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
+            .fillMaxWidth()
+            .clip(cardShape)
+            .border(1.dp, color.copy(alpha = 0.2f), cardShape)
             .background(theme.backgroundPanel.copy(alpha = 0.5f))
-            .padding(Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
     ) {
-        // Header
         Row(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = icon,
-                style = MaterialTheme.typography.labelMedium,
-                color = color
-            )
-            Text(
-                text = tool.toolName,
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = TuiCodeFontSize.lg
-                ),
-                color = theme.text
-            )
-            Spacer(Modifier.weight(1f))
-            if (state is ToolState.Running) {
-                TuiLoadingIndicator()
-            }
-        }
-        
-        // Input preview (show first few params)
-        val inputPreview = state.input.entries.take(2).joinToString(", ") { (k, v) ->
-            "$k: ${v.toString().take(30)}"
-        }
-        if (inputPreview.isNotEmpty()) {
-            Text(
-                text = inputPreview,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = TuiCodeFontSize.sm
-                ),
-                color = theme.textMuted,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        
-        // Output preview
-        if (!output.isNullOrBlank()) {
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 80.dp)
+                modifier = Modifier.size(18.dp).clip(RoundedCornerShape(4.dp)).background(color.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) { Text(text = icon, style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace), color = color) }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = tool.toolName,
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.lg),
+                    color = theme.text
+                )
+                if (inputPreview.isNotEmpty()) {
+                    Text(
+                        text = inputPreview,
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.sm),
+                        color = theme.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            if (state is ToolState.Running) TuiLoadingIndicator()
+        }
+        if (!output.isNullOrBlank()) {
+            HorizontalDivider(color = theme.border.copy(alpha = 0.3f))
+            Box(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 80.dp)
                     .background(theme.backgroundElement)
-                    .padding(Spacing.sm)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = output,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.sm,
-                        lineHeight = TuiCodeFontSize.xxl
-                    ),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.sm, lineHeight = TuiCodeFontSize.xxl),
                     color = if (state is ToolState.Error) theme.error else theme.text,
-                    modifier = Modifier.verticalScroll(rememberScrollState())
+                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
                 )
             }
         }
-        
-        // Pending approval buttons
         if (state is ToolState.Pending) {
-            PendingApprovalButtons(
-                onApprove = { onToolApprove(tool.callID) },
-                onDeny = { onToolDeny(tool.callID) }
-            )
+            Box(modifier = Modifier.fillMaxWidth().background(theme.secondary.copy(alpha = 0.08f)).padding(horizontal = 12.dp, vertical = 8.dp)) {
+                PendingApprovalButtons(
+                    onApprove = { onToolApprove(tool.callID) },
+                    onDeny = { onToolDeny(tool.callID) }
+                )
+            }
         }
     }
 }
@@ -466,107 +431,82 @@ fun TaskWidgetExpanded(
         else -> null
     }
     
+    val cardShape = RoundedCornerShape(10.dp)
     Column(
         modifier = modifier
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
+            .fillMaxWidth()
+            .clip(cardShape)
+            .border(1.dp, color.copy(alpha = 0.2f), cardShape)
             .background(theme.backgroundPanel.copy(alpha = 0.5f))
-            .padding(Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
     ) {
-        // Header: icon + "Task" + agent type badge
         Row(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = icon,
-                style = MaterialTheme.typography.labelMedium,
-                color = color
-            )
+            Box(
+                modifier = Modifier.size(18.dp).clip(RoundedCornerShape(4.dp)).background(color.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) { Text(text = icon, style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace), color = color) }
             Text(
                 text = "Task",
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = TuiCodeFontSize.lg
-                ),
+                style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.lg),
                 color = theme.text
             )
-            Surface(
-                color = theme.secondary.copy(alpha = 0.2f),
-                shape = RectangleShape
-            ) {
-                Text(
-                    text = subagentType,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = theme.secondary,
-                    modifier = Modifier.padding(horizontal = Spacing.xs, vertical = Spacing.xxs)
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            if (state is ToolState.Running) {
-                TuiLoadingIndicator()
-            }
-        }
-        
-        // Description
-        Text(
-            text = description,
-            style = MaterialTheme.typography.bodySmall.copy(
-                fontSize = TuiCodeFontSize.md
-            ),
-            color = theme.text,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis
-        )
-        
-        // Output preview (if completed or error)
-        if (!output.isNullOrBlank() && state !is ToolState.Running) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 60.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(theme.secondary.copy(alpha = 0.15f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(text = subagentType, style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace), color = theme.secondary)
+            }
+            Spacer(Modifier.weight(1f))
+            if (state is ToolState.Running) TuiLoadingIndicator()
+        }
+        HorizontalDivider(color = theme.border.copy(alpha = 0.3f))
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = TuiCodeFontSize.md),
+            color = theme.text, maxLines = 3, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        )
+        if (!output.isNullOrBlank() && state !is ToolState.Running) {
+            HorizontalDivider(color = theme.border.copy(alpha = 0.3f))
+            Box(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 60.dp)
                     .background(theme.backgroundElement)
-                    .padding(Spacing.sm)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = output,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.sm,
-                        lineHeight = TuiCodeFontSize.xxl
-                    ),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.sm, lineHeight = TuiCodeFontSize.xxl),
                     color = if (state is ToolState.Error) theme.error else theme.textMuted,
-                    modifier = Modifier.verticalScroll(rememberScrollState())
+                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
                 )
             }
         }
-        
-        // Open in Tab button (if session_id available)
         if (sessionId != null && onOpenSubSession != null) {
-            OutlinedButton(
-                onClick = { onOpenSubSession(sessionId) },
+            HorizontalDivider(color = theme.border.copy(alpha = 0.3f))
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(Sizing.buttonHeightSm),
-                shape = RectangleShape,
-                contentPadding = PaddingValues(horizontal = Spacing.md)
+                    .clip(RoundedCornerShape(bottomStart = 10.dp, bottomEnd = 10.dp))
+                    .background(theme.accent.copy(alpha = 0.08f))
+                    .clickable(role = Role.Button) { onOpenSubSession(sessionId) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.OpenInNew,
-                    contentDescription = stringResource(R.string.cd_open_sub_agent),
-                    modifier = Modifier.size(Sizing.iconSm)
-                )
-                Spacer(Modifier.width(Spacing.sm))
-                Text(stringResource(R.string.open_sub_agent), style = MaterialTheme.typography.labelSmall)
+                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = stringResource(R.string.cd_open_sub_agent), modifier = Modifier.size(12.dp), tint = theme.accent)
+                Text(stringResource(R.string.open_sub_agent), style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace), color = theme.accent)
             }
         }
-        
-        // Pending approval buttons
         if (state is ToolState.Pending) {
-            PendingApprovalButtons(
-                onApprove = { onToolApprove(tool.callID) },
-                onDeny = { onToolDeny(tool.callID) }
-            )
+            Box(modifier = Modifier.fillMaxWidth().background(theme.secondary.copy(alpha = 0.08f)).padding(horizontal = 12.dp, vertical = 8.dp)) {
+                PendingApprovalButtons(onApprove = { onToolApprove(tool.callID) }, onDeny = { onToolDeny(tool.callID) })
+            }
         }
     }
 }
@@ -580,27 +520,23 @@ private fun PendingApprovalButtons(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         OutlinedButton(
             onClick = onDeny,
-            modifier = Modifier
-                .weight(1f)
-                .height(Sizing.buttonHeightSm),
-            shape = RectangleShape,
+            modifier = Modifier.weight(1f).height(Sizing.buttonHeightSm),
+            shape = RoundedCornerShape(8.dp),
             contentPadding = PaddingValues(horizontal = Spacing.md)
         ) {
-            Text(stringResource(R.string.deny), style = MaterialTheme.typography.labelSmall)
+            Text(stringResource(R.string.deny), style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace))
         }
         Button(
             onClick = onApprove,
-            modifier = Modifier
-                .weight(1f)
-                .height(Sizing.buttonHeightSm),
-            shape = RectangleShape,
+            modifier = Modifier.weight(1f).height(Sizing.buttonHeightSm),
+            shape = RoundedCornerShape(8.dp),
             contentPadding = PaddingValues(horizontal = Spacing.md)
         ) {
-            Text(stringResource(R.string.allow), style = MaterialTheme.typography.labelSmall)
+            Text(stringResource(R.string.allow), style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace))
         }
     }
 }
