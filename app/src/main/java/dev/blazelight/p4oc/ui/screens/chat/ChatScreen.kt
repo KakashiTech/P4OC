@@ -44,7 +44,12 @@ import dev.blazelight.p4oc.ui.components.TuiConfirmDialog
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
 import dev.blazelight.p4oc.ui.components.TuiSnackbar
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.text.font.FontWeight
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
@@ -218,7 +223,6 @@ fun ChatScreen(
                         value = uiState.inputText,
                         onValueChange = { text ->
                             viewModel.updateInput(text)
-                            // Load commands when user starts typing /
                             if (text.startsWith("/") && uiState.commands.isEmpty()) {
                                 viewModel.loadCommands()
                             }
@@ -229,6 +233,8 @@ fun ChatScreen(
                         isBusy = uiState.isBusy,
                         hasQueuedMessage = uiState.queuedMessage != null,
                         onQueueMessage = viewModel::queueMessage,
+                        onCancelQueue = viewModel::cancelQueuedMessage,
+                        queuedMessagePreview = uiState.queuedMessage?.text,
                         attachedFiles = attachedFiles,
                         onAttachClick = {
                             viewModel.filePickerManager.loadPickerFiles()
@@ -236,7 +242,7 @@ fun ChatScreen(
                         },
                         onRemoveAttachment = viewModel.filePickerManager::detachFile,
                         commands = uiState.commands,
-                        onCommandSelected = { /* Command text is already updated via onValueChange */ },
+                        onCommandSelected = { },
                         requestFocus = isActiveTab
                     )
                 }
@@ -251,27 +257,40 @@ fun ChatScreen(
             // Revert active banner
             uiState.session?.revert?.let {
                 val theme = LocalOpenCodeTheme.current
-                Surface(
-                    color = theme.warning.copy(alpha = 0.15f),
-                    shape = RectangleShape
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
+                        .background(theme.warning.copy(alpha = 0.12f))
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        Text(text = "↺", color = theme.warning, fontFamily = FontFamily.Monospace)
                         Text(
-                            text = "\u21BA ${stringResource(R.string.revert_active_banner)}",
+                            text = stringResource(R.string.revert_active_banner),
                             style = MaterialTheme.typography.labelMedium,
+                            fontFamily = FontFamily.Monospace,
                             color = theme.warning
                         )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(theme.warning.copy(alpha = 0.15f))
+                            .clickable(role = Role.Button) { viewModel.unrevertSession() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
                         Text(
-                            text = "[${stringResource(R.string.unrevert_all)}]",
-                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-                            color = theme.accent,
-                            modifier = Modifier.clickable(role = Role.Button) { viewModel.unrevertSession() }
+                            text = stringResource(R.string.unrevert_all),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            color = theme.warning
                         )
                     }
                 }
@@ -357,14 +376,17 @@ fun ChatScreen(
                 TuiSnackbar(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(Spacing.md),
+                        .padding(16.dp),
                     action = {
-                        TextButton(onClick = viewModel::clearError, shape = RectangleShape) {
-                            Text(stringResource(R.string.dismiss))
+                        TextButton(onClick = viewModel::clearError, shape = RoundedCornerShape(4.dp)) {
+                            Text(
+                                stringResource(R.string.dismiss),
+                                fontFamily = FontFamily.Monospace
+                            )
                         }
                     }
                 ) {
-                    Text(error)
+                    Text(error, fontFamily = FontFamily.Monospace)
                 }
             }
             
@@ -625,21 +647,54 @@ private fun EmptyChatView(modifier: Modifier = Modifier) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Spacing.md)
     ) {
-        Text(
-            text = "◇",
-            style = MaterialTheme.typography.displayMedium,
-            color = theme.textMuted
-        )
+        Box(
+            modifier = androidx.compose.ui.Modifier
+                .size(64.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(theme.backgroundElement),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "◇",
+                style = MaterialTheme.typography.headlineMedium,
+                color = theme.textMuted
+            )
+        }
         Text(
             text = stringResource(R.string.chat_empty_title),
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.titleMedium,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Medium,
             color = theme.text
         )
         Text(
             text = stringResource(R.string.chat_empty_description),
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
             color = theme.textMuted
         )
+        // Tip chips row
+        val theme2 = theme
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf("/compact", "/clear", "/help").forEach { cmd ->
+                Box(
+                    modifier = androidx.compose.ui.Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(theme2.backgroundElement)
+                        .border(1.dp, theme2.border, RoundedCornerShape(6.dp))
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        text = cmd,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = theme2.accent
+                    )
+                }
+            }
+        }
     }
 }
 

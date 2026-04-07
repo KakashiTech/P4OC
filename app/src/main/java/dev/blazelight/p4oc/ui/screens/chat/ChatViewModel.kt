@@ -403,6 +403,16 @@ class ChatViewModel constructor(
         AppLog.d(TAG, "queueMessage: Queued message with ${text.length} chars, ${attachedFiles.size} files")
     }
 
+    fun cancelQueuedMessage() {
+        val queued = _uiState.value.queuedMessage ?: return
+        _uiState.update { it.copy(
+            queuedMessage = null,
+            inputText = queued.text
+        ) }
+        filePickerManager.restoreAttachedFiles(queued.attachedFiles)
+        AppLog.d(TAG, "cancelQueuedMessage: restored queued message to input")
+    }
+
     private fun sendQueuedMessageIfAny() {
         val queued = _uiState.value.queuedMessage ?: return
 
