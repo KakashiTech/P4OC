@@ -1,10 +1,13 @@
 package dev.blazelight.p4oc.ui.components.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -18,6 +21,8 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.*
@@ -78,25 +83,20 @@ private fun UserMessage(messageWithParts: MessageWithParts) {
     // Don't render anything if there's no visible text
     if (text.isBlank()) return
 
-    // TUI style: Distinct background with accent left border for user messages
+    // User message bubble — aligned right with accent left-border chip look
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = Spacing.xs)
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        horizontalArrangement = Arrangement.End
     ) {
-        // Accent left border (thicker for user messages)
         Box(
             modifier = Modifier
-                .width(Spacing.xs)
-                .fillMaxHeight()
-                .background(theme.primary)
-        )
-        
-        // Content with distinct background - use primary tint for better contrast
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(theme.primary.copy(alpha = 0.12f))
+                .widthIn(max = 300.dp)
+                .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 4.dp, bottomStart = 12.dp, bottomEnd = 12.dp))
+                .background(theme.primary.copy(alpha = 0.18f))
+                .border(1.dp, theme.primary.copy(alpha = 0.3f),
+                    RoundedCornerShape(topStart = 12.dp, topEnd = 4.dp, bottomStart = 12.dp, bottomEnd = 12.dp))
                 .combinedClickable(
                     onClick = {},
                     onLongClick = {
@@ -105,7 +105,7 @@ private fun UserMessage(messageWithParts: MessageWithParts) {
                     },
                     onLongClickLabel = "Copy message"
                 )
-                .padding(horizontal = Spacing.mdLg, vertical = Spacing.md)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             StreamingMarkdown(
                 text = text,
@@ -208,17 +208,25 @@ private fun AssistantMessage(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    Text(
-                        text = "\u21BA ${stringResource(R.string.revert_changes)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = theme.textMuted,
-                        modifier = Modifier.clickable(role = Role.Button) {
-                            onRevert(messageId)
-                        }
-                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(theme.warning.copy(alpha = 0.1f))
+                            .border(1.dp, theme.warning.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
+                            .clickable(role = Role.Button) { onRevert(messageId) }
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "↺ ${stringResource(R.string.revert_changes)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            color = theme.warning
+                        )
+                    }
                 }
             }
         }
@@ -287,55 +295,66 @@ private fun ReasoningPart(part: Part.Reasoning) {
     
     val isThinking = part.time?.end == null
 
-    Surface(
-        onClick = { expanded = !expanded },
-        color = theme.warning.copy(alpha = 0.1f),
-        shape = RectangleShape
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(theme.warning.copy(alpha = 0.07f))
+            .border(1.dp, theme.warning.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button) { expanded = !expanded }
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        Column(modifier = Modifier.padding(Spacing.sm)) {
+        Column {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 if (isThinking) {
                     TuiLoadingIndicator()
                 } else {
-                    Icon(
-                        Icons.Default.Psychology,
-                        contentDescription = stringResource(R.string.models_reasoning),
-                        modifier = Modifier.size(Sizing.iconXs),
-                        tint = theme.warning
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(theme.warning.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Psychology,
+                            contentDescription = stringResource(R.string.models_reasoning),
+                            modifier = Modifier.size(10.dp),
+                            tint = theme.warning
+                        )
+                    }
                 }
-                
                 Text(
                     text = if (isThinking) "Thinking..." else "Reasoning",
                     style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
                     color = theme.warning,
                     modifier = Modifier.weight(1f)
                 )
-                
                 thinkingDuration?.let { duration ->
                     Text(
                         text = duration,
                         style = MaterialTheme.typography.labelSmall,
-                        color = theme.textMuted
+                        fontFamily = FontFamily.Monospace,
+                        color = theme.textMuted.copy(alpha = 0.7f)
                     )
                 }
-                
                 Icon(
                     if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = if (expanded) "Collapse" else "Expand",
-                    modifier = Modifier.size(Sizing.iconXs),
+                    modifier = Modifier.size(14.dp),
                     tint = theme.textMuted
                 )
             }
-            
             if (expanded && part.text.isNotEmpty()) {
                 HorizontalDivider(
-                    modifier = Modifier.padding(vertical = Spacing.xs),
-                    color = theme.border
+                    modifier = Modifier.padding(vertical = 6.dp),
+                    color = theme.border.copy(alpha = 0.5f)
                 )
                 Box(
                     modifier = Modifier.combinedClickable(
@@ -361,33 +380,43 @@ private fun ReasoningPart(part: Part.Reasoning) {
 @Composable
 private fun FilePart(part: Part.File) {
     val theme = LocalOpenCodeTheme.current
-    Surface(
-        color = theme.backgroundElement,
-        shape = RectangleShape
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(theme.backgroundElement)
+            .border(1.dp, theme.border, RoundedCornerShape(8.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier.padding(Spacing.sm),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(theme.accent.copy(alpha = 0.1f)),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
-                Icons.Default.AttachFile, 
+                Icons.Default.AttachFile,
                 contentDescription = stringResource(R.string.cd_attach_file),
-                modifier = Modifier.size(Sizing.iconXs),
-                tint = theme.textMuted
+                modifier = Modifier.size(14.dp),
+                tint = theme.accent
             )
-            Column {
-                Text(
-                    text = part.filename ?: "File",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = theme.text
-                )
-                Text(
-                    text = part.mime,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = theme.textMuted
-                )
-            }
+        }
+        Column {
+            Text(
+                text = part.filename ?: "File",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+                color = theme.text
+            )
+            Text(
+                text = part.mime,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = theme.textMuted
+            )
         }
     }
 }
@@ -397,50 +426,61 @@ private fun CompactPatchPart(part: Part.Patch) {
     val theme = LocalOpenCodeTheme.current
     var expanded by remember { mutableStateOf(false) }
     
-    Surface(
-        onClick = { expanded = !expanded },
-        color = theme.backgroundElement,
-        shape = RectangleShape
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(theme.backgroundElement)
+            .border(1.dp, theme.accent.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button) { expanded = !expanded }
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        Column(modifier = Modifier.padding(Spacing.sm)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(
-                    Icons.Default.Description, 
-                    contentDescription = stringResource(R.string.cd_diff_icon),
-                    modifier = Modifier.size(Sizing.iconXs),
-                    tint = theme.accent
-                )
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(theme.accent.copy(alpha = 0.1f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(text = "±", fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall, color = theme.accent)
+                }
                 Text(
-                    text = "Patch: ${part.files.size} file(s)",
+                    text = "${part.files.size} file(s) modified",
                     style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
                     color = theme.text,
                     modifier = Modifier.weight(1f)
                 )
                 Icon(
                     if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = if (expanded) "Collapse" else "Expand",
-                    modifier = Modifier.size(Sizing.iconXs),
+                    modifier = Modifier.size(14.dp),
                     tint = theme.textMuted
                 )
             }
-            
             if (expanded) {
                 part.files.forEach { file ->
                     Text(
                         text = "  $file",
                         style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
                         color = theme.textMuted
                     )
                 }
             } else if (part.files.isNotEmpty()) {
                 val firstFile = part.files.firstOrNull() ?: return@Column
                 Text(
-                    text = "  $firstFile" + if (part.files.size > 1) " ..." else "",
+                    text = "  $firstFile" + if (part.files.size > 1) " +${part.files.size - 1} more" else "",
                     style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
                     color = theme.textMuted
                 )
             }

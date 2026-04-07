@@ -240,10 +240,11 @@ fun ChatInputBar(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "⊞",
+                        text = "+",
                         color = if (enabled) theme.accent else theme.textMuted,
                         fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.titleSmall
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
                 }
 

@@ -1,5 +1,7 @@
 package dev.blazelight.p4oc.ui.components.chat
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -7,15 +9,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -76,81 +82,83 @@ fun ModelAgentSelectorBar(
             ?.second?.name ?: selectedModel.modelID
     }
 
-    Surface(
-        modifier = modifier.fillMaxWidth().testTag("agent_selector"),
-        color = theme.backgroundElement
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(theme.backgroundElement)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("agent_selector"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (availableAgents.isNotEmpty()) {
-                val currentAgent = availableAgents.find { it.name == selectedAgent }
-                val agentColor = getAgentColor(currentAgent)
-                
-                Surface(
-                    onClick = {
+        if (availableAgents.isNotEmpty()) {
+            val currentAgent = availableAgents.find { it.name == selectedAgent }
+            val agentColor = getAgentColor(currentAgent)
+
+            Box(
+                modifier = Modifier
+                    .height(Sizing.buttonHeightMd)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(agentColor.copy(alpha = 0.12f))
+                    .border(1.dp, agentColor.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .clickable(role = Role.Button) {
                         val currentIndex = availableAgents.indexOfFirst { it.name == selectedAgent }
                         val nextIndex = (currentIndex + 1) % availableAgents.size
                         onAgentSelected(availableAgents[nextIndex].name)
-                    },
-                    shape = androidx.compose.ui.graphics.RectangleShape,
-                    color = agentColor.copy(alpha = 0.1f),
-                    border = androidx.compose.foundation.BorderStroke(Sizing.strokeMd, agentColor.copy(alpha = 0.4f)),
-                    modifier = Modifier.height(Sizing.buttonHeightMd)
-                ) {
-                    Box(
-                        modifier = Modifier.padding(horizontal = Spacing.lg),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "@${(selectedAgent ?: "build").lowercase()}",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            color = agentColor
-                        )
                     }
-                }
-            }
-
-            if (availableAgents.isNotEmpty() && availableModels.isNotEmpty()) {
-                VerticalDivider(
-                    modifier = Modifier.height(Sizing.iconLg),
-                    color = theme.border
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "@${(selectedAgent ?: "build").lowercase()}",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    color = agentColor
                 )
             }
+        }
 
-            if (availableModels.isNotEmpty()) {
-                Surface(
-                    onClick = { showModelPicker = true },
-                    shape = androidx.compose.ui.graphics.RectangleShape,
-                    color = theme.background,
-                    border = androidx.compose.foundation.BorderStroke(Sizing.strokeMd, theme.border),
-                    modifier = Modifier.height(Sizing.buttonHeightMd)
+        if (availableAgents.isNotEmpty() && availableModels.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .height(16.dp)
+                    .width(1.dp)
+                    .background(theme.border)
+            )
+        }
+
+        if (availableModels.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .height(Sizing.buttonHeightMd)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(theme.background)
+                    .border(1.dp, theme.border, RoundedCornerShape(8.dp))
+                    .clickable(role = Role.Button) { showModelPicker = true }
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = Spacing.lg),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-                    ) {
-                        Text(
-                            text = selectedModelName,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            color = theme.text,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.widthIn(max = Sizing.panelWidthLg)
-                        )
-                        Text(
-                            text = "▾",
-                            color = theme.textMuted,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                    }
+                    Text(
+                        text = selectedModelName,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = theme.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = Sizing.panelWidthLg)
+                    )
+                    Text(
+                        text = "▾",
+                        color = theme.textMuted,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall
+                    )
                 }
             }
         }
