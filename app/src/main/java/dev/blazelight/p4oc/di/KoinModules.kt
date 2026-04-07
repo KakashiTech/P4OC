@@ -66,7 +66,7 @@ val networkModule = module {
     single { DirectoryManager(get()) }
     single { MdnsDiscoveryManager(androidContext()) }
     factory { PtyWebSocketClient(get()) }
-    single { ConnectionManager(get(), get(), get()) }
+    single { ConnectionManager(androidContext(), get(), get(), get()) }
 }
 
 val viewModelModule = module {

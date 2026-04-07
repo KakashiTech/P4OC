@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import android.content.Context
+import okhttp3.Cache
 import okhttp3.Credentials
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -20,9 +22,11 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.util.concurrent.TimeUnit
+import java.io.File
 
 
 class ConnectionManager constructor(
+    private val context: Context,
     private val json: Json,
     private val eventMapper: EventMapper,
     private val directoryManager: DirectoryManager
@@ -165,9 +169,20 @@ class ConnectionManager constructor(
      * Derived clients share its connection pool and dispatcher via newBuilder().
      */
     private fun buildBaseOkHttpClient(config: ServerConfig, password: String?): OkHttpClient {
+        val cacheDir = File(context.cacheDir, "http_cache")
+        val cache = Cache(cacheDir, 20L * 1024L * 1024L)
+
         val builder = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            .cache(cache)
+            .addInterceptor { chain ->
+                val original = chain.request()
+                val req = original.newBuilder()
+                    .header("Accept", "application/json")
+                    .build()
+                chain.proceed(req)
+            }
 
         if (config.username != null && password != null) {
             builder.addInterceptor(createAuthInterceptor(config.username, password))

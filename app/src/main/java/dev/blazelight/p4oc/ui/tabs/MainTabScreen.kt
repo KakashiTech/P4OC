@@ -1,7 +1,6 @@
 @file:Suppress("DEPRECATION") // LocalLifecycleOwner – platform version until lifecycle-runtime-compose upgrade
 package dev.blazelight.p4oc.ui.tabs
 
-import dev.blazelight.p4oc.core.log.AppLog
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -19,6 +18,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.core.network.ApiResult
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.network.ConnectionState
@@ -29,10 +29,8 @@ import dev.blazelight.p4oc.core.datastore.ConnectionSettings
 import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.ui.navigation.Screen
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
-import kotlin.random.Random
 
 private const val TAG = "MainTabScreen"
 
@@ -62,100 +60,16 @@ fun MainTabScreen(
     
     var wasEverConnected by remember { mutableStateOf(false) }
 
-fun jitterDelay(baseMs: Long, jitterRatio: Double = 0.2): Long {
-    if (baseMs <= 0) return 0
-    val min = (baseMs * (1.0 - jitterRatio)).toLong().coerceAtLeast(0)
-    val max = (baseMs * (1.0 + jitterRatio)).toLong().coerceAtLeast(min + 1)
-    return Random.nextLong(min, max)
-}
-    var reconnectAttempted by remember { mutableStateOf(false) }
-
-    // Foreground resume: lightweight SSE reconnect without isConnected guard.
-    // When the app returns from background, the SSE connection is likely dead.
-    // We reset error counters and attempt reconnect before the error cascade fires.
-    LaunchedEffect(lifecycleOwner) {
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            val eventSource = connectionManager.getEventSource()
-            val state = connectionManager.connectionState.value
-            if (eventSource != null && state !is ConnectionState.Connected && state !is ConnectionState.Connecting) {
-                AppLog.d(TAG, "Foreground resume: SSE state is $state, attempting reconnect")
-                eventSource.resetConsecutiveErrors()
-                connectionManager.reconnectSse(reason = "app_foreground")
-            }
-        }
-    }
-
-    // Connection state error handling with reconnect grace period.
-    // Instead of navigating away immediately on Disconnected/Error,
-    // we attempt SSE reconnection first and only escalate after failure.
+    // Navegar fuera cuando el core escale a Disconnected tras agotar reintentos
     LaunchedEffect(connectionState) {
         if (connectionState is ConnectionState.Connected) {
             wasEverConnected = true
-            reconnectAttempted = false
             return@LaunchedEffect
         }
         if (!wasEverConnected) return@LaunchedEffect
-
-        when (connectionState) {
-            is ConnectionState.Disconnected -> {
-                // SSE exhausted all retries. If we have a connection object,
-                // try one last SSE reconnect before giving up.
-                if (tabs.isNotEmpty()) {
-                    if (!reconnectAttempted && connectionManager.hasConnection && connSettings.autoReconnect) {
-                        reconnectAttempted = true
-                        val waitMs = jitterDelay(20_000)
-                        AppLog.w(TAG, "Disconnected state – attempting final SSE reconnect after ${waitMs}ms (jitter)")
-                        connectionManager.reconnectSse(reason = "disconnected_recovery")
-                        delay(waitMs)
-                        val currentState = connectionManager.connectionState.value
-                        if (currentState !is ConnectionState.Connected) {
-                            AppLog.e(TAG, "Final reconnect failed (state=$currentState), navigating to server screen")
-                            connectionManager.disconnect()
-                            onDisconnect()
-                        }
-                    } else {
-                        // Already tried recovery or no connection object — give up
-                        connectionManager.disconnect()
-                        onDisconnect()
-                    }
-                }
-            }
-
-            is ConnectionState.Error -> {
-                if (!connSettings.autoReconnect) {
-                    // Auto-reconnect disabled — disconnect immediately
-                    connectionManager.disconnect()
-                    onDisconnect()
-                    return@LaunchedEffect
-                }
-                // Transient error — SSE library is auto-retrying.
-                // Wait for the configured timeout (with jitter) before escalating.
-                val baseMs = connSettings.reconnectTimeoutSeconds * 1000L
-                val waitMs = jitterDelay(baseMs)
-                AppLog.d(TAG, "Error state – waiting ${waitMs}ms (jitter from ${baseMs}ms) before escalation")
-                delay(waitMs)
-                val currentState = connectionManager.connectionState.value
-                if (currentState is ConnectionState.Error || currentState is ConnectionState.Disconnected) {
-                    // Still failing — try one explicit reconnect
-                    if (connectionManager.hasConnection) {
-                        val retryWait = jitterDelay(10_000)
-                        connectionManager.reconnectSse(reason = "error_recovery")
-                        delay(retryWait)
-                        val finalState = connectionManager.connectionState.value
-                        if (finalState !is ConnectionState.Connected) {
-                            connectionManager.disconnect()
-                            onDisconnect()
-                        }
-                    } else {
-                        connectionManager.disconnect()
-                        onDisconnect()
-                    }
-                }
-                // If state recovered to Connected during the delay, this coroutine
-                // will be cancelled by the LaunchedEffect(connectionState) relaunch.
-            }
-
-            else -> { /* Connected or Connecting - do nothing */ }
+        if (connectionState is ConnectionState.Disconnected) {
+            connectionManager.disconnect()
+            onDisconnect()
         }
     }
     

@@ -19,6 +19,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.random.Random
 
 /**
  * WebSocket client for PTY terminal I/O.
@@ -206,7 +207,8 @@ class PtyWebSocketClient constructor(
             reconnectAttempts.set(0)
             return
         }
-        val delayMs = RECONNECT_DELAYS_MS[attempts.coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)]
+        val base = RECONNECT_DELAYS_MS[attempts.coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)]
+        val delayMs = jitter(base)
         reconnectAttempts.incrementAndGet()
         AppLog.d(TAG, "Scheduling reconnect attempt ${attempts + 1} for $ptyId in ${delayMs}ms")
         scope.launch {
@@ -216,6 +218,13 @@ class PtyWebSocketClient constructor(
                 connect(ptyId)
             }
         }
+    }
+
+    private fun jitter(baseMs: Long, ratio: Double = 0.2): Long {
+        if (baseMs <= 0) return 0
+        val min = (baseMs * (1.0 - ratio)).toLong().coerceAtLeast(0)
+        val max = (baseMs * (1.0 + ratio)).toLong().coerceAtLeast(min + 1)
+        return Random.nextLong(min, max)
     }
 
     /**

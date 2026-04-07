@@ -282,8 +282,8 @@ fun ChatScreen(
             if (!hasContent && !uiState.isLoading) {
                 EmptyChatView(modifier = Modifier.align(Alignment.Center))
             } else {
-                val messageBlocks = remember(messages) {
-                    groupMessagesIntoBlocks(messages)
+                val messageBlocks by remember {
+                    derivedStateOf { groupMessagesIntoBlocks(messages) }
                 }
                 
                 LazyColumn(
@@ -324,6 +324,12 @@ fun ChatScreen(
                             when (block) {
                                 is MessageBlock.UserBlock -> block.message.message.id
                                 is MessageBlock.AssistantBlock -> block.messages.first().message.id
+                            }
+                        },
+                        contentType = { block ->
+                            when (block) {
+                                is MessageBlock.UserBlock -> "user"
+                                is MessageBlock.AssistantBlock -> "assistant"
                             }
                         }
                     ) { block ->
