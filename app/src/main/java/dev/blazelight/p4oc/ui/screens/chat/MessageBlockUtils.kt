@@ -11,7 +11,7 @@ import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
  * Sealed class representing a block of messages for display.
  * User messages are their own block. Consecutive assistant messages are merged.
  */
-internal sealed class MessageBlock {
+sealed class MessageBlock {
     data class UserBlock(val message: MessageWithParts) : MessageBlock()
     data class AssistantBlock(val messages: List<MessageWithParts>) : MessageBlock()
 }
@@ -19,7 +19,7 @@ internal sealed class MessageBlock {
 /**
  * Group messages into blocks: user messages standalone, consecutive assistant messages merged.
  */
-internal fun groupMessagesIntoBlocks(messages: List<MessageWithParts>): List<MessageBlock> {
+fun groupMessagesIntoBlocks(messages: List<MessageWithParts>): List<MessageBlock> {
     if (messages.isEmpty()) return emptyList()
     
     val blocks = mutableListOf<MessageBlock>()

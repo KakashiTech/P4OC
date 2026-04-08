@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -40,7 +41,7 @@ class MessageStore(
     private val pendingMutex = Mutex()
     private val pendingUpdates = mutableMapOf<String, MutableMap<String, PendingDelta>>() // messageId -> (partId -> delta)
     private var flushJob: Job? = null
-    @Volatile private var flushDelayMs: Long = 16L
+    @Volatile private var flushDelayMs: Long = 50L // Conservative, less recomposition
 
     /**
      * Optimized messages flow with better performance.
@@ -51,11 +52,13 @@ class MessageStore(
         _messagesVersion.value
         // Map stable order to current map values
         messageOrder.mapNotNull { id -> _messagesMap[id] }
-    }.stateIn(
-        scope = scope,
-        started = SharingStarted.WhileSubscribed(5000), // Stop when not subscribed for 5s
-        initialValue = emptyList()
-    )
+    }
+        .conflate() // Skip intermediate values if processing backlog
+        .stateIn(
+            scope = scope,
+            started = SharingStarted.WhileSubscribed(5000), // Stop when not subscribed for 5s
+            initialValue = emptyList()
+        )
 
     /**
      * Load initial messages from API response.
@@ -286,7 +289,7 @@ class MessageStore(
      * Slightly slower during scroll reduces layout thrash while keeping streaming responsive.
      */
     fun setFlushDelayWhileScrolling(isScrolling: Boolean) {
-        flushDelayMs = if (isScrolling) 80L else 32L
+        flushDelayMs = if (isScrolling) 100L else 50L // More conservative during scroll
     }
 
     /** Directly control flush delay (used for speed-adaptive tuning). */

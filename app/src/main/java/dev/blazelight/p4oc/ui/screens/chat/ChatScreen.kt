@@ -337,69 +337,65 @@ fun ChatScreen(
             }
 
             val hasContent = messages.isNotEmpty() || uiState.isBusy
-            
+            // Use pre-computed blocks from ViewModel (computed on Default dispatcher)
+            val messageBlocks by viewModel.messageBlocks.collectAsStateWithLifecycle()
+
             if (!hasContent && !uiState.isLoading) {
                 EmptyChatView(modifier = Modifier.align(Alignment.Center))
             } else {
-                val messageBlocks = remember(messages) { groupMessagesIntoBlocks(messages) }
-                val blocksReversed = remember(messageBlocks) { messageBlocks.asReversed() }
-
                 // Single list-level fade-in on initial load — zero per-item cost
                 var listVisible by remember { mutableStateOf(false) }
-                LaunchedEffect(Unit) { listVisible = true }
+                LaunchedEffect(messageBlocks) {
+                    if (messageBlocks.isNotEmpty()) listVisible = true
+                }
                 val listAlpha by animateFloatAsState(
                     targetValue = if (listVisible) 1f else 0f,
-                    animationSpec = tween(200),
-                    label = "list_fade"
+                    animationSpec = tween(150), // Fast 150ms fade
+                    label = "session_fade"
                 )
 
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize().testTag("message_list").alpha(listAlpha),
-                    contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("message_list")
+                        .alpha(listAlpha),
+                    // Lite: no contentPadding, no spacedBy — less re-layout work
                     reverseLayout = true
                 ) {
-                    // Inline question card at the bottom (top in reversed layout)
+                    // Inline question card
                     pendingQuestion?.let { questionRequest ->
-                        item(key = "pending_question_${questionRequest.id}") {
+                        item(key = "q_${questionRequest.id}") {
                             InlineQuestionCard(
                                 questionData = dev.blazelight.p4oc.domain.model.QuestionData(questionRequest.questions),
                                 onDismiss = viewModel::dismissQuestion,
-                                onSubmit = { answers ->
-                                    viewModel.respondToQuestion(questionRequest.id, answers)
-                                },
-                                modifier = Modifier.padding(vertical = Spacing.xs)
+                                onSubmit = { viewModel.respondToQuestion(questionRequest.id, it) },
+                                modifier = Modifier.padding(vertical = 4.dp)
                             )
                         }
                     }
 
-                    // Abort summary card (shows after user hits Stop)
+                    // Abort summary card
                     uiState.abortSummary?.let { summary ->
-                        item(key = "abort_summary_${summary.abortedAt}") {
-                            AbortSummaryCard(
-                                summary = summary,
-                                modifier = Modifier.padding(vertical = Spacing.xs)
-                            )
+                        item(key = "abort_${summary.abortedAt}") {
+                            AbortSummaryCard(summary = summary, modifier = Modifier.padding(vertical = 4.dp))
                         }
                     }
-                    
-                    // All messages - stable keys ensure only changed items recompose
+
+                    // Messages — simple keys, no contentType, no per-item animations
+                    val blocks = messageBlocks.asReversed()
                     items(
-                        items = blocksReversed,
-                        key = { block -> 
+                        count = blocks.size,
+                        key = { index ->
+                            val block = blocks[index]
                             when (block) {
-                                is MessageBlock.UserBlock -> block.message.message.id
-                                is MessageBlock.AssistantBlock -> block.messages.first().message.id
-                            }
-                        },
-                        contentType = { block ->
-                            when (block) {
-                                is MessageBlock.UserBlock -> "user"
-                                is MessageBlock.AssistantBlock -> "assistant"
+                                is MessageBlock.UserBlock -> "u_${block.message.message.id}"
+                                is MessageBlock.AssistantBlock -> "a_${block.messages.first().message.id}"
                             }
                         }
-                    ) { block ->
+                    ) { index ->
+                        val block = blocks[index]
+                        // Lite: direct render, no animation wrappers
                         MessageBlockView(
                             block = block,
                             onToolApprove = { viewModel.respondToPermission(it, "once") },
@@ -408,7 +404,7 @@ fun ChatScreen(
                             onOpenSubSession = onOpenSubSession,
                             defaultToolWidgetState = defaultToolWidgetState,
                             pendingPermissionsByCallId = pendingPermissionsByCallId,
-                            onRevert = { messageId -> showRevertDialog = messageId }
+                            onRevert = { showRevertDialog = it }
                         )
                     }
 

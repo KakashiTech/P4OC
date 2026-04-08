@@ -31,6 +31,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 /**
@@ -74,6 +76,19 @@ class ChatViewModel constructor(
 
     /** Convenience alias — ChatScreen reads this directly. */
     val messages: StateFlow<List<MessageWithParts>> = messageStore.messages
+
+    /**
+     * Pre-computed message blocks on Default dispatcher.
+     * Heavy computation off the main thread for 60 FPS scroll.
+     */
+    val messageBlocks: StateFlow<List<MessageBlock>> = messageStore.messages
+        .mapLatest { msgs ->
+            withContext(Dispatchers.Default) {
+                groupMessagesIntoBlocks(msgs)
+            }
+        }
+        .conflate() // Skip intermediate values if backlog
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val connectionState: StateFlow<ConnectionState> = connectionManager.connectionState
 
