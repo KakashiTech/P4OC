@@ -178,9 +178,12 @@ class ConnectionManager constructor(
             .cache(cache)
             .addInterceptor { chain ->
                 val original = chain.request()
-                val req = original.newBuilder()
-                    .header("Accept", "application/json")
-                    .build()
+                // Only add Accept header if not already provided (avoid affecting SSE)
+                val builderReq = original.newBuilder()
+                if (original.header("Accept") == null) {
+                    builderReq.header("Accept", "application/json")
+                }
+                val req = builderReq.build()
                 chain.proceed(req)
             }
 
@@ -195,7 +198,8 @@ class ConnectionManager constructor(
         base.newBuilder()
             .readTimeout(60, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE
+                // Reduce payload logging to lower overhead on large responses
+                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
                 redactHeader("Authorization")
             })
             .build()

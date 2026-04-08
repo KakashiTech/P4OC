@@ -30,11 +30,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
@@ -135,32 +137,12 @@ fun SessionListScreen(
     Scaffold(
         containerColor = theme.background,
         topBar = {
-            TuiTopBar(
-                title = projectName ?: "", // No title when showing all sessions (tab already shows "Sessions")
+            SessionsTopBar(
+                projectName = projectName,
                 onNavigateBack = onNavigateBack,
-                actions = {
-                    if (projectName != null) {
-                        // Only show folder button when not in project view
-                        IconButton(
-                            onClick = onProjects,
-                            modifier = Modifier.size(Sizing.iconButtonMd)
-                        ) {
-                            Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.cd_projects), modifier = Modifier.size(Sizing.iconAction), tint = theme.textMuted)
-                        }
-                    }
-                    IconButton(
-                        onClick = viewModel::refresh,
-                        modifier = Modifier.size(Sizing.iconButtonMd)
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.cd_refresh), modifier = Modifier.size(Sizing.iconAction), tint = theme.textMuted)
-                    }
-                    IconButton(
-                        onClick = onSettings,
-                        modifier = Modifier.size(Sizing.iconButtonMd).testTag("sessions_settings_button")
-                    ) {
-                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.cd_settings), modifier = Modifier.size(Sizing.iconAction), tint = theme.textMuted)
-                    }
-                }
+                onProjects = onProjects,
+                onRefresh = viewModel::refresh,
+                onSettings = onSettings
             )
         },
         floatingActionButton = {
@@ -980,6 +962,170 @@ private fun NewSessionDialog(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+@Composable
+private fun SessionsTopBar(
+    projectName: String?,
+    onNavigateBack: (() -> Unit)?,
+    onProjects: () -> Unit,
+    onRefresh: () -> Unit,
+    onSettings: () -> Unit
+) {
+    val theme = LocalOpenCodeTheme.current
+    
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = theme.backgroundElement,
+        tonalElevation = 0.dp
+    ) {
+        Column {
+            Spacer(Modifier.windowInsetsPadding(WindowInsets.statusBars))
+            
+            // Main content area with better spacing and visual hierarchy
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Back button - only when navigation is available
+                if (onNavigateBack != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(theme.background.copy(alpha = 0.6f))
+                            .clickable(role = Role.Button) { onNavigateBack() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.cd_back),
+                            modifier = Modifier.size(20.dp),
+                            tint = theme.text
+                        )
+                    }
+                }
+                
+                // Title/Project area
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    if (!projectName.isNullOrEmpty()) {
+                        Text(
+                            text = projectName,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = theme.text,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = stringResource(R.string.sessions_title_default),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            color = theme.textMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    } else {
+                        // When in main sessions view, show app name
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = theme.text,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                
+                // Action buttons group
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Projects button - only show when not in project view
+                    if (projectName.isNullOrEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(theme.background.copy(alpha = 0.6f))
+                                .clickable(role = Role.Button) { onProjects() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Folder,
+                                contentDescription = stringResource(R.string.cd_projects),
+                                modifier = Modifier.size(18.dp),
+                                tint = theme.textMuted
+                            )
+                        }
+                    }
+                    
+                    // Refresh button
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(theme.background.copy(alpha = 0.6f))
+                            .clickable(role = Role.Button) { onRefresh() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = stringResource(R.string.cd_refresh),
+                            modifier = Modifier.size(18.dp),
+                            tint = theme.textMuted
+                        )
+                    }
+                    
+                    // Settings button
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(theme.accent.copy(alpha = 0.15f))
+                            .clickable(role = Role.Button) { onSettings() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.cd_settings),
+                            modifier = Modifier.size(18.dp),
+                            tint = theme.accent
+                        )
+                    }
+                }
+            }
+            
+            // Elegant bottom separator with gradient effect
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(
+                        brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+                            colors = listOf(
+                                theme.border.copy(alpha = 0.1f),
+                                theme.border.copy(alpha = 0.4f),
+                                theme.border.copy(alpha = 0.1f)
+                            )
+                        )
+                    )
+            )
+        }
     }
 }
 

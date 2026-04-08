@@ -273,4 +273,15 @@ object SemanticColors {
         val number: Color @Composable get() = LocalOpenCodeTheme.current.syntaxNumber
         val background: Color @Composable get() = LocalOpenCodeTheme.current.backgroundElement
     }
+    
+    // Common UI colors - prevent hardcoding
+    object Common {
+        val transparent: Color @Composable get() = Color.Transparent
+        val pressed: Color @Composable get() = LocalOpenCodeTheme.current.backgroundElement.copy(alpha = 0.6f)
+        val selected: Color @Composable get() = LocalOpenCodeTheme.current.accent.copy(alpha = 0.1f)
+        val hover: Color @Composable get() = LocalOpenCodeTheme.current.backgroundElement.copy(alpha = 0.3f)
+        val disabled: Color @Composable get() = LocalOpenCodeTheme.current.textMuted.copy(alpha = 0.5f)
+        val border: Color @Composable get() = LocalOpenCodeTheme.current.border.copy(alpha = 0.2f)
+        val borderActive: Color @Composable get() = LocalOpenCodeTheme.current.borderActive.copy(alpha = 0.4f)
+    }
 }

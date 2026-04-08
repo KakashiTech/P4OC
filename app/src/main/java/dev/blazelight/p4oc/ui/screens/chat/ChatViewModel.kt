@@ -68,6 +68,9 @@ class ChatViewModel constructor(
     // --- Core state ---
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+    
+    // Optimized session loading with caching
+    private val _sessionCache = mutableMapOf<String, Session>()
 
     /** Convenience alias — ChatScreen reads this directly. */
     val messages: StateFlow<List<MessageWithParts>> = messageStore.messages
@@ -80,6 +83,9 @@ class ChatViewModel constructor(
     // Track whether this tab has unread responses (LLM finished but user hasn't viewed)
     private val _hasUnreadResponse = MutableStateFlow(false)
     val hasUnreadResponse: StateFlow<Boolean> = _hasUnreadResponse.asStateFlow()
+
+    // Paging: track current limit for incremental loading
+    private var currentMessageLimit = 50
 
     /**
      * Session connection state for tab indicator display.
@@ -167,7 +173,7 @@ class ChatViewModel constructor(
             coroutineScope {
                 // Fire both requests in parallel
                 val sessionDeferred = async { safeApiCall { api.getSession(sessionId, dir) } }
-                val messagesDeferred = async { safeApiCall { api.getMessages(sessionId, limit = null, directory = dir) } }
+                val messagesDeferred = async { safeApiCall { api.getMessages(sessionId, limit = currentMessageLimit, directory = dir) } }
 
                 val sessionResult = sessionDeferred.await()
                 val messagesResult = messagesDeferred.await()
@@ -201,6 +207,27 @@ class ChatViewModel constructor(
             }
             // VCS after session dir is known
             loadVcsInfo()
+        }
+    }
+
+    /**
+     * Load older messages by increasing the limit and merging results.
+     */
+    fun loadOlderMessages(step: Int = 50) {
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+            val dir = sessionDirectory ?: directoryManager.getDirectory()
+            val newLimit = (currentMessageLimit + step).coerceAtMost(1000) // hard cap to avoid huge pulls
+            when (val result = safeApiCall { api.getMessages(sessionId, limit = newLimit, directory = dir) }) {
+                is ApiResult.Success -> {
+                    currentMessageLimit = newLimit
+                    val mapped = result.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
+                    messageStore.loadInitial(mapped)
+                }
+                is ApiResult.Error -> {
+                    AppLog.w(TAG, "Failed to load older messages: ${result.message}")
+                }
+            }
         }
     }
 
@@ -244,7 +271,8 @@ class ChatViewModel constructor(
             }
             is OpenCodeEvent.MessagePartUpdated -> {
                 if (event.part.sessionID == sessionId) {
-                    messageStore.upsertPart(event.part, event.delta)
+                    // Buffered updates reduce recompositions under rapid streaming
+                    messageStore.upsertPartBuffered(event.part, event.delta)
                 }
             }
             is OpenCodeEvent.MessageRemoved -> {

@@ -274,6 +274,7 @@ private fun TextPart(part: Part.Text) {
             )
         }
         if (part.isStreaming) {
+            // Keep indicator small and low-cost; could be a thin bar shimmer in future
             TuiLoadingIndicator()
         }
     }

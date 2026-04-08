@@ -32,6 +32,7 @@ import dev.blazelight.p4oc.domain.model.SessionStateColors
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
+import dev.blazelight.p4oc.core.performance.rememberOptimizedPulse
 
 /**
  * Tab bar showing all open tabs with indicators and close buttons.
@@ -137,16 +138,10 @@ private fun TabIndicator(
 ) {
     val theme = LocalOpenCodeTheme.current
     
-    // Pulse animation for BUSY and AWAITING_INPUT states
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.6f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = EaseInOut),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseAlpha"
+    // Optimized pulse animation for BUSY and AWAITING_INPUT states
+    val pulseAlpha by rememberOptimizedPulse(
+        key = "tab_pulse_${connectionState?.name}",
+        fast = false
     )
     
     val shouldPulse = connectionState?.shouldPulse == true

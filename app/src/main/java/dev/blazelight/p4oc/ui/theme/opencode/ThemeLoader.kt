@@ -23,8 +23,8 @@ object ThemeLoader {
         val jsonString = try {
             context.assets.open("themes/$themeName.json").bufferedReader().use { it.readText() }
         } catch (e: Exception) {
-            // Fallback to catppuccin if theme not found
-            context.assets.open("themes/catppuccin.json").bufferedReader().use { it.readText() }
+            // Fallback to opencode if theme not found
+            context.assets.open("themes/opencode.json").bufferedReader().use { it.readText() }
         }
         return parseTheme(jsonString, themeName, isDark)
     }

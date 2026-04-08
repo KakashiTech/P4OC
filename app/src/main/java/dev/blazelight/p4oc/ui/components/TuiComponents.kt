@@ -6,12 +6,19 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.material3.ripple
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.ripple
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,7 +26,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -29,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
+import dev.blazelight.p4oc.core.performance.rememberOptimizedLoadingRotation
 
 // =============================================================================
 // CARDS
@@ -740,27 +750,34 @@ fun TuiDropdownMenuItem(
 // =============================================================================
 
 /**
- * TUI-style loading indicator with optional text.
+ * TUI-style loading indicator with no padding for perfect alignment in buttons.
  */
 @Composable
 fun TuiLoadingIndicator(
     modifier: Modifier = Modifier,
     text: String? = null
 ) {
+    val theme = LocalOpenCodeTheme.current
+    
     Row(
-        modifier = modifier.padding(Spacing.cardPadding),
+        modifier = modifier, // NO PADDING - crucial for button alignment
         horizontalArrangement = Arrangement.spacedBy(Spacing.inlineSpacing),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Perfectly centered CircularProgressIndicator
         CircularProgressIndicator(
             modifier = Modifier.size(Sizing.iconMd),
-            strokeWidth = Sizing.strokeMd
+            strokeWidth = Sizing.strokeThin,
+            color = theme.accent,
+            trackColor = theme.backgroundElement,
+            strokeCap = StrokeCap.Round
         )
+        
         text?.let {
             Text(
                 text = it,
                 style = MaterialTheme.typography.bodyMedium,
-                color = LocalOpenCodeTheme.current.textMuted
+                color = theme.textMuted
             )
         }
     }

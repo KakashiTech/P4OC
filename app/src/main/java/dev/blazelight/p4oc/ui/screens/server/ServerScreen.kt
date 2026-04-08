@@ -4,12 +4,19 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,6 +35,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -38,6 +46,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import kotlinx.coroutines.delay
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,6 +57,7 @@ import dev.blazelight.p4oc.core.network.DiscoveryState
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
+import dev.blazelight.p4oc.ui.theme.opencode.OptimizedThemeLoader
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
 
 // Corner radius tokens - moderado, no exagerado
@@ -68,10 +78,8 @@ fun ServerScreen(
     val theme = LocalOpenCodeTheme.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    DisposableEffect(Unit) {
-        viewModel.startDiscovery()
-        onDispose { viewModel.stopDiscovery() }
-    }
+    // NO iniciar conexión automática inmediatamente
+    // La conexión se iniciará solo después de que el tema esté cargado
 
     LaunchedEffect(uiState.navigationDestination) {
         when (uiState.navigationDestination) {
@@ -87,13 +95,18 @@ fun ServerScreen(
         }
     }
 
-    LaunchedEffect(uiState.remoteUrl) {
-        val url = uiState.remoteUrl.trim()
-        if (url.isNotEmpty() && !uiState.isConnecting) {
-            viewModel.stopDiscovery()
-            delay(150)
-            viewModel.startDiscovery()
+    // Only start connection after theme is ready
+    LaunchedEffect(Unit) {
+        // Wait for theme to be ready AND user theme is loaded before starting discovery
+        while (!OptimizedThemeLoader.isThemeReady()) {
+            delay(50) // Check every 50ms
         }
+        
+        // Additional delay to ensure user theme is completely loaded and entrance animation can complete
+        delay(260)
+        
+        // Now start discovery after theme is ready
+        viewModel.startDiscovery()
     }
 
     Scaffold(
@@ -138,51 +151,158 @@ fun ServerScreen(
         },
         containerColor = theme.background
     ) { padding ->
+        var started by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { started = true }
+        val enterSpringDp = spring<Dp>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+        val enterSpringFloat = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+        val alpha by animateFloatAsState(
+            targetValue = if (started) 1f else 0f,
+            animationSpec = tween(220, easing = FastOutSlowInEasing),
+            label = "server_enter_alpha"
+        )
+        val offsetY by animateDpAsState(
+            targetValue = if (started) 0.dp else (-8).dp,
+            animationSpec = enterSpringDp,
+            label = "server_enter_offset"
+        )
+        val scaleMain by animateFloatAsState(
+            targetValue = if (started) 1f else 0.985f,
+            animationSpec = enterSpringFloat,
+            label = "server_enter_scale"
+        )
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .alpha(alpha)
+                .offset(y = offsetY)
+                .graphicsLayer { scaleX = scaleMain; scaleY = scaleMain },
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Discovered servers section
+            // Staggered section animations: lightweight alpha + small offset
+            var showDiscover by remember { mutableStateOf(false) }
+            var showRecent by remember { mutableStateOf(false) }
+            var showRemote by remember { mutableStateOf(false) }
+            var showHelp by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                // Tiny, non-blocking delays to stagger appearance
+                delay(20)
+                showDiscover = true
+                delay(40)
+                showRecent = true
+                delay(40)
+                showRemote = true
+                delay(40)
+                showHelp = true
+            }
+
             if (uiState.discoveredServers.isNotEmpty() || uiState.discoveryState == DiscoveryState.SCANNING) {
-                DiscoveredServersSection(
-                    servers = uiState.discoveredServers,
-                    discoveryState = uiState.discoveryState,
-                    isConnecting = uiState.isConnecting,
-                    onServerClick = viewModel::connectToDiscoveredServer,
-                    onStopClick = viewModel::stopDiscovery
+                val dAlpha by animateFloatAsState(
+                    targetValue = if (showDiscover) 1f else 0f,
+                    animationSpec = tween(200, easing = FastOutSlowInEasing),
+                    label = "discover_alpha"
                 )
+                val dOffset by animateDpAsState(
+                    targetValue = if (showDiscover) 0.dp else (-6).dp,
+                    animationSpec = enterSpringDp,
+                    label = "discover_offset"
+                )
+                val dScale by animateFloatAsState(
+                    targetValue = if (showDiscover) 1f else 0.995f,
+                    animationSpec = enterSpringFloat,
+                    label = "discover_scale"
+                )
+                Column(modifier = Modifier.alpha(dAlpha).offset(y = dOffset).graphicsLayer { scaleX = dScale; scaleY = dScale }) {
+                    DiscoveredServersSection(
+                        servers = uiState.discoveredServers,
+                        discoveryState = uiState.discoveryState,
+                        isConnecting = uiState.isConnecting,
+                        onServerClick = viewModel::connectToDiscoveredServer,
+                        onStopClick = viewModel::stopDiscovery
+                    )
+                }
             }
 
             if (uiState.recentServers.isNotEmpty()) {
-                RecentServersSection(
-                    servers = uiState.recentServers,
-                    isConnecting = uiState.isConnecting,
-                    onServerClick = viewModel::connectToRecentServer,
-                    onRemoveServer = viewModel::removeRecentServer
+                val rAlpha by animateFloatAsState(
+                    targetValue = if (showRecent) 1f else 0f,
+                    animationSpec = tween(200, easing = FastOutSlowInEasing),
+                    label = "recent_alpha"
                 )
+                val rOffset by animateDpAsState(
+                    targetValue = if (showRecent) 0.dp else (-6).dp,
+                    animationSpec = enterSpringDp,
+                    label = "recent_offset"
+                )
+                val rScale by animateFloatAsState(
+                    targetValue = if (showRecent) 1f else 0.995f,
+                    animationSpec = enterSpringFloat,
+                    label = "recent_scale"
+                )
+                Column(modifier = Modifier.alpha(rAlpha).offset(y = rOffset).graphicsLayer { scaleX = rScale; scaleY = rScale }) {
+                    RecentServersSection(
+                        servers = uiState.recentServers,
+                        isConnecting = uiState.isConnecting,
+                        onServerClick = viewModel::connectToRecentServer,
+                        onRemoveServer = viewModel::removeRecentServer
+                    )
+                }
             }
 
-            RemoteServerSection(
-                url = uiState.remoteUrl,
-                username = uiState.username,
-                password = uiState.password,
-                isConnecting = uiState.isConnecting,
-                onUrlChange = viewModel::setRemoteUrl,
-                onUsernameChange = viewModel::setUsername,
-                onPasswordChange = viewModel::setPassword,
-                onConnect = viewModel::connectToRemote
+            val fAlpha by animateFloatAsState(
+                targetValue = if (showRemote) 1f else 0f,
+                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                label = "form_alpha"
             )
+            val fOffset by animateDpAsState(
+                targetValue = if (showRemote) 0.dp else (-6).dp,
+                animationSpec = enterSpringDp,
+                label = "form_offset"
+            )
+            val fScale by animateFloatAsState(
+                targetValue = if (showRemote) 1f else 0.995f,
+                animationSpec = enterSpringFloat,
+                label = "form_scale"
+            )
+            Column(modifier = Modifier.alpha(fAlpha).offset(y = fOffset).graphicsLayer { scaleX = fScale; scaleY = fScale }) {
+                RemoteServerSection(
+                    url = uiState.remoteUrl,
+                    username = uiState.username,
+                    password = uiState.password,
+                    isConnecting = uiState.isConnecting,
+                    onUrlChange = viewModel::setRemoteUrl,
+                    onUsernameChange = viewModel::setUsername,
+                    onPasswordChange = viewModel::setPassword,
+                    onConnect = viewModel::connectToRemote
+                )
+            }
 
             uiState.error?.let { error ->
                 ErrorBanner(error = error)
             }
 
-            ServerSetupHelpSection()
+            val hAlpha by animateFloatAsState(
+                targetValue = if (showHelp) 1f else 0f,
+                animationSpec = tween(200, easing = FastOutSlowInEasing),
+                label = "help_alpha"
+            )
+            val hOffset by animateDpAsState(
+                targetValue = if (showHelp) 0.dp else (-6).dp,
+                animationSpec = enterSpringDp,
+                label = "help_offset"
+            )
+            val hScale by animateFloatAsState(
+                targetValue = if (showHelp) 1f else 0.995f,
+                animationSpec = enterSpringFloat,
+                label = "help_scale"
+            )
+            Column(modifier = Modifier.alpha(hAlpha).offset(y = hOffset).graphicsLayer { scaleX = hScale; scaleY = hScale }) {
+                ServerSetupHelpSection()
+            }
         }
     }
 }

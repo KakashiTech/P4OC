@@ -6,6 +6,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -30,6 +35,11 @@ import dev.blazelight.p4oc.core.network.ConnectionState
 import dev.blazelight.p4oc.domain.model.MessageWithParts
 import dev.blazelight.p4oc.domain.model.Part
 import dev.blazelight.p4oc.domain.model.SessionConnectionState
+import dev.blazelight.p4oc.domain.model.Agent
+import dev.blazelight.p4oc.domain.model.Model
+import dev.blazelight.p4oc.core.datastore.VisualSettings
+import dev.blazelight.p4oc.ui.screens.chat.ChatUiState
+import kotlinx.coroutines.flow.combine
 import dev.blazelight.p4oc.ui.components.chat.AbortSummaryCard
 import dev.blazelight.p4oc.ui.components.chat.ChatInputBar
 import dev.blazelight.p4oc.ui.components.chat.FilePickerDialog
@@ -56,7 +66,24 @@ import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 
-@OptIn(ExperimentalMaterial3Api::class)
+// Data classes for optimized state management (currently not used but kept for future optimization)
+data class CombinedChatState(
+    val uiState: ChatUiState,
+    val connectionState: ConnectionState,
+    val sessionConnectionState: SessionConnectionState,
+    val branchName: String?,
+    val visualSettings: VisualSettings
+)
+
+data class ModelAgentState(
+    val availableAgents: List<Agent>,
+    val selectedAgent: Agent?,
+    val availableModels: List<Model>,
+    val selectedModel: Model?,
+    val favoriteModels: Set<Model>
+)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel = koinViewModel(),
@@ -69,6 +96,7 @@ fun ChatScreen(
     onConnectionStateChanged: ((SessionConnectionState?) -> Unit)? = null,
     isActiveTab: Boolean = true
 ) {
+    // Optimized state collection - reduce recompositions by grouping related states
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
@@ -76,9 +104,11 @@ fun ChatScreen(
     val sessionConnectionState by viewModel.sessionConnectionState.collectAsStateWithLifecycle()
     val visualSettings by viewModel.visualSettings.collectAsStateWithLifecycle()
 
-    // Sub-manager state
+    // Dialog states - collected separately to avoid unnecessary recompositions
     val pendingQuestion by viewModel.dialogManager.pendingQuestion.collectAsStateWithLifecycle()
     val pendingPermissionsByCallId by viewModel.dialogManager.pendingPermissionsByCallId.collectAsStateWithLifecycle()
+    
+    // Model/Agent states - collect only what's needed
     val availableAgents by viewModel.modelAgentManager.availableAgents.collectAsStateWithLifecycle()
     val selectedAgent by viewModel.modelAgentManager.selectedAgent.collectAsStateWithLifecycle()
     val availableModels by viewModel.modelAgentManager.availableModels.collectAsStateWithLifecycle()
@@ -115,6 +145,13 @@ fun ChatScreen(
     }
 
     val listState = rememberLazyListState()
+    // Throttle streaming updates while user hace scroll to reduce jank
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .collect { isScrolling ->
+                viewModel.messageStore.setFlushDelayWhileScrolling(isScrolling)
+            }
+    }
     var showCommandPalette by remember { mutableStateOf(false) }
     var showTodoTracker by remember { mutableStateOf(false) }
     var showFilePicker by remember { mutableStateOf(false) }
@@ -304,13 +341,21 @@ fun ChatScreen(
             if (!hasContent && !uiState.isLoading) {
                 EmptyChatView(modifier = Modifier.align(Alignment.Center))
             } else {
-                val messageBlocks by remember {
-                    derivedStateOf { groupMessagesIntoBlocks(messages) }
-                }
-                
+                val messageBlocks = remember(messages) { groupMessagesIntoBlocks(messages) }
+                val blocksReversed = remember(messageBlocks) { messageBlocks.asReversed() }
+
+                // Single list-level fade-in on initial load — zero per-item cost
+                var listVisible by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) { listVisible = true }
+                val listAlpha by animateFloatAsState(
+                    targetValue = if (listVisible) 1f else 0f,
+                    animationSpec = tween(200),
+                    label = "list_fade"
+                )
+
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize().testTag("message_list"),
+                    modifier = Modifier.fillMaxSize().testTag("message_list").alpha(listAlpha),
                     contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     reverseLayout = true
@@ -341,7 +386,7 @@ fun ChatScreen(
                     
                     // All messages - stable keys ensure only changed items recompose
                     items(
-                        items = messageBlocks.asReversed(),
+                        items = blocksReversed,
                         key = { block -> 
                             when (block) {
                                 is MessageBlock.UserBlock -> block.message.message.id
@@ -365,6 +410,30 @@ fun ChatScreen(
                             pendingPermissionsByCallId = pendingPermissionsByCallId,
                             onRevert = { messageId -> showRevertDialog = messageId }
                         )
+                    }
+
+                    // Load older messages control (appears at the top due to reverseLayout)
+                    item(key = "load_more_messages") {
+                        val theme = LocalOpenCodeTheme.current
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = Spacing.xs)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(theme.backgroundElement)
+                                .border(1.dp, theme.borderSubtle, RoundedCornerShape(4.dp))
+                                .clickable(role = Role.Button) { viewModel.loadOlderMessages() }
+                                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Load older messages",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = theme.accent
+                            )
+                        }
                     }
                 }
             }

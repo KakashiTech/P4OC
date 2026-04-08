@@ -57,19 +57,29 @@ fun FileExplorerScreen(
 ) {
     val theme = LocalOpenCodeTheme.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
     val symbolResults by viewModel.symbolResults.collectAsStateWithLifecycle()
+    
+    // Search state declaration before use
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
     var isSymbolMode by remember { mutableStateOf(false) }
     var symbolQuery by remember { mutableStateOf("") }
-
-    val filteredFiles = remember(uiState.files, searchQuery) {
-        if (searchQuery.isBlank()) {
-            uiState.files.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-        } else {
-            uiState.files
-                .filter { it.name.contains(searchQuery, ignoreCase = true) }
-                .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+    
+    // Optimized derived state for file filtering to reduce recompositions
+    val filteredFiles by remember(searchQuery) {
+        derivedStateOf {
+            when {
+                searchQuery.isNotEmpty() -> {
+                    uiState.files.filter { file ->
+                        file.name.contains(searchQuery, ignoreCase = true)
+                    }.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+                }
+                else -> {
+                    uiState.files.filter { !it.name.startsWith(".") }
+                        .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+                }
+            }
         }
     }
 

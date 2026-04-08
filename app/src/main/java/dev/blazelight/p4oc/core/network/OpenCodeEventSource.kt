@@ -57,8 +57,8 @@ class OpenCodeEventSource(
 
     private val _events = MutableSharedFlow<OpenCodeEvent>(
         replay = 0,
-        extraBufferCapacity = 256,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
+        extraBufferCapacity = 128, // Reduced buffer size for better memory management
+        onBufferOverflow = BufferOverflow.SUSPEND // Better than DROP_OLDEST for performance
     )
     val events: SharedFlow<OpenCodeEvent> = _events.asSharedFlow()
 

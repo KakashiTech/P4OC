@@ -13,6 +13,12 @@ import dev.blazelight.p4oc.ui.components.TermuxTerminalView
 import dev.blazelight.p4oc.ui.theme.SemanticColors
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
 
+// Data class for optimized modifier state management
+data class ModifierState(
+    val ctrlActive: Boolean,
+    val altActive: Boolean
+)
+
 @Composable
 fun TerminalScreen(
     viewModel: TerminalViewModel = koinViewModel(),
@@ -21,12 +27,17 @@ fun TerminalScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     
-    // Modifier key state (hoisted for use by both keyboard and extra keys bar)
+    // Optimized modifier key state with derived state to reduce recompositions
     var ctrlActive by remember { mutableStateOf(false) }
     var altActive by remember { mutableStateOf(false) }
     
-    // Wrapped input handler that processes CTRL/ALT modifiers
-    val wrappedKeyInput: (String) -> Unit = remember(ctrlActive, altActive) {
+    // Derived state for modifier combinations to optimize performance
+    val modifierState by remember {
+        derivedStateOf { ModifierState(ctrlActive, altActive) }
+    }
+    
+    // Wrapped input handler optimized with derived state
+    val wrappedKeyInput: (String) -> Unit = remember(modifierState) {
         { input ->
             when {
                 // CTRL + lowercase letter (a-z) -> control character (0x01-0x1A)

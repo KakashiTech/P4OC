@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
@@ -13,11 +14,16 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import android.content.Intent
 import android.net.Uri
 import org.koin.androidx.compose.koinViewModel
@@ -70,6 +76,12 @@ fun SettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
         ) {
+            // Connection Section
+            SettingsSectionHeader(
+                title = "Connection",
+                icon = Icons.Default.Cloud
+            )
+            
             // Server info (non-clickable)
             SettingsItem(
                 icon = if (uiState.isLocal) Icons.Default.PhoneAndroid else Icons.Default.Cloud,
@@ -117,6 +129,14 @@ fun SettingsScreen(
                 enabled = isConnected
             )
 
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // App Settings Section
+            SettingsSectionHeader(
+                title = "App Settings",
+                icon = Icons.Default.Settings
+            )
+
             // These don't require connection
             SettingsItem(
                 icon = Icons.Default.Palette,
@@ -143,6 +163,14 @@ fun SettingsScreen(
                 onClick = onConnectionSettings,
                 showChevron = true,
                 testTag = "settings_connection_item"
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // About Section
+            SettingsSectionHeader(
+                title = "About",
+                icon = Icons.Default.Info
             )
 
             SettingsItem(
@@ -248,9 +276,11 @@ private fun SettingsItem(
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
-        color = theme.background,
-        shape = RectangleShape
+        color = theme.backgroundElement,
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = if (onClick != null && enabled) 2.dp else 0.dp
     ) {
         Row(
             modifier = Modifier
@@ -260,20 +290,32 @@ private fun SettingsItem(
                         Modifier.clickable(role = Role.Button, onClick = onClick)
                     } else Modifier
                 )
-                .padding(horizontal = Spacing.lg, vertical = Spacing.mdLg),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.lg)
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Icon(
-                icon,
-                contentDescription = title,
-                modifier = Modifier.size(Sizing.iconMd),
-                tint = iconColor
-            )
+            // Modern icon container
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(iconColor.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = title,
+                    modifier = Modifier.size(20.dp),
+                    tint = iconColor
+                )
+            }
+            
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.Medium
+                    ),
                     color = titleColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -283,25 +325,54 @@ private fun SettingsItem(
                         text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = theme.textMuted.copy(alpha = contentAlpha),
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
             }
+            
             if (showChevron) {
-                Text(
-                    text = "→",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = theme.textMuted.copy(alpha = contentAlpha)
+                Icon(
+                    Icons.Default.KeyboardArrowRight,
+                    contentDescription = "Navigate",
+                    modifier = Modifier.size(20.dp),
+                    tint = theme.textMuted.copy(alpha = contentAlpha * 0.7f)
                 )
             }
         }
     }
-    // Thin separator
-    HorizontalDivider(
-        thickness = Sizing.dividerThickness,
-        color = theme.borderSubtle
-    )
 }
 
 
+
+@Composable
+private fun SettingsSectionHeader(
+    title: String,
+    icon: ImageVector
+) {
+    val theme = LocalOpenCodeTheme.current
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = theme.accent
+        )
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge.copy(
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace
+            ),
+            color = theme.textMuted,
+            letterSpacing = 0.5.sp
+        )
+    }
+}

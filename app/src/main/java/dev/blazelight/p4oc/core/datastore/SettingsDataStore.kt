@@ -11,12 +11,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
@@ -34,7 +38,7 @@ class SettingsDataStore constructor(
         private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
         private val KEY_THEME_NAME = stringPreferencesKey("theme_name")
         
-        const val DEFAULT_THEME_NAME = "catppuccin"
+        const val DEFAULT_THEME_NAME = "dracula"
         private val KEY_ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
         private val KEY_LAST_SESSION_ID = stringPreferencesKey("last_session_id")
         private val KEY_RECENT_SERVERS = stringPreferencesKey("recent_servers")
@@ -86,21 +90,30 @@ class SettingsDataStore constructor(
     private var cachedServerUrl: String = DEFAULT_LOCAL_URL
     @Volatile
     private var cachedUsername: String? = null
+    @Volatile
+    private var cachedThemeMode: String = THEME_SYSTEM
+    @Volatile
+    private var cachedThemeName: String = DEFAULT_THEME_NAME
 
     init {
-        scope.launch {
-            try {
+        // Load cached values synchronously to ensure they're available immediately
+        try {
+            runBlocking {
                 val prefs = context.dataStore.data.first()
                 cachedServerUrl = prefs[KEY_SERVER_URL] ?: DEFAULT_LOCAL_URL
                 cachedUsername = prefs[KEY_USERNAME]
-            } catch (e: Exception) {
-                AppLog.e(TAG, "Error during init", e)
+                cachedThemeMode = prefs[KEY_THEME_MODE] ?: THEME_SYSTEM
+                cachedThemeName = prefs[KEY_THEME_NAME] ?: DEFAULT_THEME_NAME
             }
+        } catch (e: Exception) {
+            AppLog.e(TAG, "Error during init", e)
         }
     }
 
     fun getCachedServerUrl(): String = cachedServerUrl
     fun getCachedUsername(): String? = cachedUsername
+    fun getCachedThemeMode(): String = cachedThemeMode
+    fun getCachedThemeName(): String = cachedThemeName
 
     val serverUrl: Flow<String> = context.dataStore.data.map { prefs ->
         (prefs[KEY_SERVER_URL] ?: DEFAULT_LOCAL_URL).also { cachedServerUrl = it }
@@ -121,11 +134,13 @@ class SettingsDataStore constructor(
     // password Flow REMOVED — use credentialStore.getActivePassword() instead
 
     val themeMode: Flow<String> = context.dataStore.data.map { prefs ->
-        prefs[KEY_THEME_MODE] ?: THEME_SYSTEM
+        (prefs[KEY_THEME_MODE] ?: THEME_SYSTEM).also { cachedThemeMode = it }
     }
 
     val themeName: Flow<String> = context.dataStore.data.map { prefs ->
-        prefs[KEY_THEME_NAME] ?: DEFAULT_THEME_NAME
+        val savedTheme = prefs[KEY_THEME_NAME]
+        android.util.Log.d("DATASTORE_DEBUG", "themeName Flow - savedTheme: $savedTheme")
+        (savedTheme ?: DEFAULT_THEME_NAME).also { cachedThemeName = it }
     }
 
     val onboardingCompleted: Flow<Boolean> = context.dataStore.data.map { prefs ->

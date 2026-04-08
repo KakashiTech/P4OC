@@ -50,8 +50,8 @@ fun BashWidgetExpanded(
     val theme = LocalOpenCodeTheme.current
     val state = tool.state
     val (_, stateColor) = getStateIconColor(state, theme)
-    val terminalBg = Color(0xFF0D1117)  // near-black terminal background
-    val terminalFg = Color(0xFFE6EDF3)  // terminal text color
+    val terminalBg = theme.backgroundPanel  // terminal background from theme
+    val terminalFg = theme.text  // terminal text color from theme
     val promptColor = stateColor
     val cardShape = RoundedCornerShape(10.dp)
 
@@ -97,7 +97,7 @@ fun BashWidgetExpanded(
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text("~", style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp), color = Color(0xFF58A6FF), fontWeight = FontWeight.Medium)
+            Text("~", style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp), color = theme.info, fontWeight = FontWeight.Medium)
             Text("❯", style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp), color = promptColor, fontWeight = FontWeight.Bold)
             Text(command, style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp), color = terminalFg, modifier = Modifier.weight(1f))
         }

@@ -10,6 +10,8 @@ import dev.blazelight.p4oc.domain.model.MessageWithParts
 import dev.blazelight.p4oc.domain.model.Part
 import dev.blazelight.p4oc.domain.model.TokenUsage
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -26,6 +28,7 @@ class MessageStore(
     private val scope: CoroutineScope
 ) {
     private val _messagesMap: SnapshotStateMap<String, MessageWithParts> = mutableStateMapOf()
+    private val messageOrder = mutableListOf<String>() // ascending by createdAt
 
     // Version counter to trigger flow emission when map values change
     // SnapshotStateMap only detects key add/remove, not value updates
@@ -33,24 +36,37 @@ class MessageStore(
 
     private val messagesMutex = Mutex()
 
+    // Buffered updates to coalesce rapid SSE text deltas
+    private val pendingMutex = Mutex()
+    private val pendingUpdates = mutableMapOf<String, MutableMap<String, PendingDelta>>() // messageId -> (partId -> delta)
+    private var flushJob: Job? = null
+    @Volatile private var flushDelayMs: Long = 16L
+
     /**
-     * Messages flow — emits when any message in the map changes.
-     *
-     * We use a version counter inside snapshotFlow to detect value changes.
-     * The snapshotFlow will emit whenever _messagesVersion changes.
+     * Optimized messages flow with better performance.
+     * Uses derivedStateOf-like behavior to reduce unnecessary emissions.
      */
     val messages: StateFlow<List<MessageWithParts>> = snapshotFlow {
         // Read version to establish dependency — triggers emission on value changes
         _messagesVersion.value
-        _messagesMap.values.sortedBy { it.message.createdAt }
-    }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+        // Map stable order to current map values
+        messageOrder.mapNotNull { id -> _messagesMap[id] }
+    }.stateIn(
+        scope = scope,
+        started = SharingStarted.WhileSubscribed(5000), // Stop when not subscribed for 5s
+        initialValue = emptyList()
+    )
 
     /**
      * Load initial messages from API response.
      */
     fun loadInitial(messages: List<MessageWithParts>) {
-        messages.forEach { msg ->
+        _messagesMap.clear()
+        messageOrder.clear()
+        // Insert all in ascending order by createdAt
+        messages.sortedBy { it.message.createdAt }.forEach { msg ->
             _messagesMap[msg.message.id] = msg
+            messageOrder.add(msg.message.id)
         }
         _messagesVersion.value++
     }
@@ -62,12 +78,94 @@ class MessageStore(
                 _messagesMap[message.id] = if (existing != null) {
                     existing.copy(message = message)
                 } else {
+                    // New message — insert into ordered list by createdAt
+                    insertIntoOrder(message.id, message.createdAt)
                     MessageWithParts(message, emptyList())
                 }
                 _messagesVersion.value++
                 AppLog.d(TAG, "upsertMessage: ${message.id}, exists=${existing != null}")
             }
         }
+    }
+
+    /**
+     * Coalesced variant of upsertPart: accumulates rapid updates and applies in a single batch.
+     * This reduces recompositions under heavy streaming.
+     */
+    fun upsertPartBuffered(part: Part, delta: String?) {
+        scope.launch {
+            pendingMutex.withLock {
+                val byPart = pendingUpdates.getOrPut(part.messageID) { mutableMapOf() }
+                val existing = byPart[part.id]
+                if (existing == null) {
+                    byPart[part.id] = PendingDelta(part, delta)
+                } else {
+                    // Merge: for text with delta, accumulate; for others, last write wins
+                    val merged = if (existing.part is Part.Text && part is Part.Text) {
+                        val acc = (existing.delta ?: "") + (delta ?: "")
+                        PendingDelta(part.copy(text = part.text, isStreaming = true), acc)
+                    } else {
+                        PendingDelta(part, delta)
+                    }
+                    byPart[part.id] = merged
+                }
+
+                if (flushJob?.isActive != true) {
+                    flushJob = scope.launch {
+                        // Frame-aligned delay; can be increased while scrolling to reduce jank
+                        delay(flushDelayMs)
+                        flushPendingParts()
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun flushPendingParts() {
+        val batch: Map<String, Map<String, PendingDelta>> = pendingMutex.withLock {
+            if (pendingUpdates.isEmpty()) return
+            val snapshot = pendingUpdates.mapValues { it.value.toMap() }.toMap()
+            pendingUpdates.clear()
+            snapshot
+        }
+
+        var changed = false
+        messagesMutex.withLock {
+            batch.forEach { (messageId, partsMap) ->
+                val existing = _messagesMap[messageId] ?: run {
+                    val placeholder = createPlaceholderMessage(messageId)
+                    _messagesMap[messageId] = placeholder
+                    ensureInOrderList(messageId, placeholder.message.createdAt)
+                    placeholder
+                }
+
+                var updated = existing
+                partsMap.values.forEach { pd ->
+                    val partIndex = updated.parts.indexOfFirst { it.id == pd.part.id }
+                    val newPart = applyDeltaIfNeeded(updated, pd)
+                    val newParts = if (partIndex >= 0) {
+                        updated.parts.toMutableList().apply { this[partIndex] = newPart }
+                    } else {
+                        updated.parts + newPart
+                    }
+                    updated = updated.copy(parts = newParts)
+                    changed = true
+                }
+
+                _messagesMap[messageId] = updated
+            }
+            if (changed) _messagesVersion.value++
+        }
+    }
+
+    private fun applyDeltaIfNeeded(existing: MessageWithParts, pd: PendingDelta): Part {
+        val incoming = pd.part
+        val delta = pd.delta
+        val current = existing.parts.firstOrNull { it.id == incoming.id }
+        return if (delta != null && incoming is Part.Text && current is Part.Text) {
+            // Accumulate at render time too, marking as streaming
+            incoming.copy(text = current.text + delta, isStreaming = true)
+        } else incoming
     }
 
     /**
@@ -112,6 +210,7 @@ class MessageStore(
         scope.launch {
             messagesMutex.withLock {
                 if (_messagesMap.remove(messageId) != null) {
+                    messageOrder.remove(messageId)
                     _messagesVersion.value++
                     AppLog.d(TAG, "removeMessage: $messageId")
                 }
@@ -178,6 +277,38 @@ class MessageStore(
         } else {
             incoming
         }
+    }
+
+    private data class PendingDelta(val part: Part, val delta: String?)
+
+    /**
+     * Adjust flush cadence depending on scroll state.
+     * Slightly slower during scroll reduces layout thrash while keeping streaming responsive.
+     */
+    fun setFlushDelayWhileScrolling(isScrolling: Boolean) {
+        flushDelayMs = if (isScrolling) 80L else 32L
+    }
+
+    /** Directly control flush delay (used for speed-adaptive tuning). */
+    fun setFlushDelayMs(delayMs: Long) {
+        flushDelayMs = delayMs.coerceIn(8L, 120L)
+    }
+
+    private fun insertIntoOrder(messageId: String, createdAt: Long) {
+        // Binary search by createdAt over current order
+        var low = 0
+        var high = messageOrder.size
+        while (low < high) {
+            val mid = (low + high) ushr 1
+            val midCreated = _messagesMap[messageOrder[mid]]?.message?.createdAt ?: Long.MAX_VALUE
+            if (midCreated < createdAt) low = mid + 1 else high = mid
+        }
+        messageOrder.add(low, messageId)
+    }
+
+    private fun ensureInOrderList(messageId: String, createdAt: Long) {
+        if (messageOrder.contains(messageId)) return
+        insertIntoOrder(messageId, createdAt)
     }
 
     private fun createPlaceholderMessage(messageId: String): MessageWithParts {
