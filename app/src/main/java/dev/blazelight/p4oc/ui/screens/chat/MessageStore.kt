@@ -92,6 +92,28 @@ class MessageStore(
     }
 
     /**
+     * Batch upsert for better performance when loading multiple messages.
+     * Single version bump for all changes reduces recompositions.
+     */
+    fun upsertMessages(messages: List<Message>) {
+        scope.launch {
+            messagesMutex.withLock {
+                messages.forEach { message ->
+                    val existing = _messagesMap[message.id]
+                    _messagesMap[message.id] = if (existing != null) {
+                        existing.copy(message = message)
+                    } else {
+                        insertIntoOrder(message.id, message.createdAt)
+                        MessageWithParts(message, emptyList())
+                    }
+                }
+                _messagesVersion.value++
+                AppLog.d(TAG, "upsertMessages: batch of ${messages.size}")
+            }
+        }
+    }
+
+    /**
      * Coalesced variant of upsertPart: accumulates rapid updates and applies in a single batch.
      * This reduces recompositions under heavy streaming.
      */

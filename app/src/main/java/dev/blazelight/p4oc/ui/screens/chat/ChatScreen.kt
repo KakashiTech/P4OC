@@ -107,6 +107,10 @@ fun ChatScreen(
     val sessionConnectionState by viewModel.sessionConnectionState.collectAsStateWithLifecycle()
     val visualSettings by viewModel.visualSettings.collectAsStateWithLifecycle()
 
+    // === INSTANT PAINT: Show UI immediately with skeleton ===
+    val instantPaint by viewModel.instantPaintState.collectAsStateWithLifecycle()
+    val estimatedCount by viewModel.estimatedMessageCount.collectAsStateWithLifecycle()
+
     // Dialog states - collected separately to avoid unnecessary recompositions
     val pendingQuestion by viewModel.dialogManager.pendingQuestion.collectAsStateWithLifecycle()
     val pendingPermissionsByCallId by viewModel.dialogManager.pendingPermissionsByCallId.collectAsStateWithLifecycle()
@@ -157,11 +161,11 @@ fun ChatScreen(
     }
 
     // === LITE Entrance Animations ===
-    // Single trigger when session loads - no per-item animations
+    // Trigger when instant paint is ready (immediate) or real session loads
     var screenReady by remember { mutableStateOf(false) }
-    LaunchedEffect(uiState.session) {
-        if (uiState.session != null) {
-            delay(50) // Tiny delay for stability
+    LaunchedEffect(instantPaint.isVisible, uiState.session) {
+        if (instantPaint.isVisible || uiState.session != null) {
+            delay(16) // One frame delay for stability
             screenReady = true
         }
     }
@@ -262,9 +266,15 @@ fun ChatScreen(
                 translationY = screenTranslation
             },
         topBar = {
+            // INSTANT PAINT: Use instant title while real session loads
+            val displayTitle = when {
+                instantPaint.hasRealSession -> uiState.session?.title
+                instantPaint.sessionTitle.isNotBlank() -> instantPaint.sessionTitle
+                else -> "Chat"
+            } ?: "Chat"
             ChatTopBar(
                 modifier = Modifier.graphicsLayer { translationY = topBarTranslation },
-                title = uiState.session?.title ?: "Chat",
+                title = displayTitle,
                 connectionState = connectionState,
                 onBack = onNavigateBack,
                 onTerminal = onOpenTerminal,
@@ -575,9 +585,59 @@ fun ChatScreen(
         )
     }
 
-    // Loading skeleton - shown while session loads
-    if (showSkeleton) {
-        LoadingSkeleton()
+    // === INSTANT PAINT SKELETON ===
+    // Show immediately while real data hydrates in background
+    if (instantPaint.isVisible && !instantPaint.hasRealMessages) {
+        InstantPaintSkeleton(
+            messageCount = instantPaint.estimatedMessageCount,
+            hasRealSession = instantPaint.hasRealSession
+        )
+    }
+}
+
+/**
+ * INSTANT PAINT Skeleton - shows immediately with estimated content.
+ * Replaced seamlessly when real messages arrive.
+ */
+@Composable
+private fun InstantPaintSkeleton(
+    messageCount: Int,
+    hasRealSession: Boolean
+) {
+    val theme = LocalOpenCodeTheme.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // Generate skeleton rows based on estimated count
+        repeat(messageCount.coerceIn(3, 8)) { index ->
+            val isUser = index % 2 == 0
+            val height = 48.dp + (index * 4).dp
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(if (isUser) 0.75f else 0.85f)
+                        .height(height)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (isUser) theme.primary.copy(alpha = 0.06f)
+                            else theme.backgroundElement.copy(alpha = 0.5f)
+                        )
+                        .border(
+                            1.dp,
+                            if (isUser) theme.primary.copy(alpha = 0.12f)
+                            else theme.border.copy(alpha = 0.25f),
+                            RoundedCornerShape(12.dp)
+                        )
+                )
+            }
+        }
     }
 }
 
