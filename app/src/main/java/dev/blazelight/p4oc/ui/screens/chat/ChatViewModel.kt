@@ -28,6 +28,7 @@ import dev.blazelight.p4oc.ui.components.chat.SelectedFile
 import dev.blazelight.p4oc.ui.navigation.Screen
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
@@ -70,7 +71,16 @@ class ChatViewModel constructor(
     // --- Core state ---
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
-    
+
+    // === INSTANT PAINT STATE ===
+    // Revolutionary: Show UI immediately with minimal data, hydrate progressively
+    private val _instantPaintState = MutableStateFlow(InstantPaintState())
+    val instantPaintState: StateFlow<InstantPaintState> = _instantPaintState.asStateFlow()
+
+    // Message count estimate for instant skeleton rendering
+    private val _estimatedMessageCount = MutableStateFlow(0)
+    val estimatedMessageCount: StateFlow<Int> = _estimatedMessageCount.asStateFlow()
+
     // Optimized session loading with caching
     private val _sessionCache = mutableMapOf<String, Session>()
 
@@ -179,51 +189,107 @@ class ChatViewModel constructor(
 
     private fun loadSessionAndMessages() {
         viewModelScope.launch {
+            // === PHASE 1: INSTANT PAINT (0-16ms) ===
+            // Show skeleton immediately with estimated data
+            _instantPaintState.value = InstantPaintState(
+                isVisible = true,
+                sessionTitle = _sessionCache[sessionId]?.title ?: "Loading...",
+                estimatedMessageCount = _estimatedMessageCount.value.coerceAtLeast(3)
+            )
             _uiState.update { it.copy(isLoading = true) }
+
             val api = connectionManager.getApi() ?: run {
                 _uiState.update { it.copy(isLoading = false, error = "Not connected") }
+                _instantPaintState.value = _instantPaintState.value.copy(isVisible = false)
                 return@launch
             }
             val dir = sessionDirectory ?: directoryManager.getDirectory()
-            coroutineScope {
-                // Fire both requests in parallel
-                val sessionDeferred = async { safeApiCall { api.getSession(sessionId, dir) } }
-                val messagesDeferred = async { safeApiCall { api.getMessages(sessionId, limit = currentMessageLimit, directory = dir) } }
 
-                val sessionResult = sessionDeferred.await()
-                val messagesResult = messagesDeferred.await()
+            // === PHASE 2: STREAMING HYDRATION ===
+            // Start with session for instant title update
+            val sessionResult = safeApiCall { api.getSession(sessionId, dir) }
 
-                when (sessionResult) {
-                    is ApiResult.Success -> {
-                        val session = SessionMapper.mapToDomain(sessionResult.data)
-                        _uiState.update { it.copy(session = session) }
-                        if (sessionDirectory == null && session.directory.isNotBlank()) {
-                            directoryManager.setDirectory(session.directory)
-                        }
+            when (sessionResult) {
+                is ApiResult.Success -> {
+                    val session = SessionMapper.mapToDomain(sessionResult.data)
+                    _sessionCache[sessionId] = session
+                    _uiState.update { it.copy(session = session) }
+                    // Update instant paint with real title
+                    _instantPaintState.value = _instantPaintState.value.copy(
+                        sessionTitle = session.title,
+                        hasRealSession = true
+                    )
+                    if (sessionDirectory == null && session.directory.isNotBlank()) {
+                        directoryManager.setDirectory(session.directory)
                     }
-                    is ApiResult.Error -> {
-                        _uiState.update { it.copy(error = "Failed to load session") }
-                    }
+                }
+                is ApiResult.Error -> {
+                    _uiState.update { it.copy(error = "Failed to load session") }
+                }
+            }
+
+            // === PHASE 3: CHUNKED MESSAGE LOADING ===
+            // Load messages in chunks to show content faster
+            launch(Dispatchers.Default) {
+                val messagesResult = safeApiCall {
+                    api.getMessages(sessionId, limit = currentMessageLimit, directory = dir)
                 }
 
                 when (messagesResult) {
                     is ApiResult.Success -> {
                         AppLog.d(TAG, "Loaded ${messagesResult.data.size} messages")
-                        val mapped = messagesResult.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
-                        messageStore.loadInitial(mapped)
+                        _estimatedMessageCount.value = messagesResult.data.size
+
+                        // Progressive: Map in chunks and emit progressively
+                        val dtos = messagesResult.data
+                        val chunkSize = 20 // Process 20 messages at a time
+
+                        for (i in dtos.indices.chunked(chunkSize)) {
+                            val chunk = dtos.slice(i)
+                            val mapped = chunk.map { dto -> messageMapper.mapWrapperToDomain(dto) }
+
+                            // On first chunk: clear and load, hide instant paint
+                            if (i.first() == 0) {
+                                messageStore.loadInitial(mapped)
+                                _instantPaintState.value = _instantPaintState.value.copy(
+                                    isVisible = false,
+                                    hasRealMessages = true
+                                )
+                            } else {
+                                // Append subsequent chunks
+                                mapped.forEach { messageStore.upsertMessage(it.message) }
+                            }
+
+                            // Small delay to allow UI to breathe
+                            if (i.last() < dtos.size - 1) delay(8)
+                        }
                     }
                     is ApiResult.Error -> {
                         AppLog.e(TAG, "Failed to load messages: ${messagesResult.message}")
                         _uiState.update { it.copy(error = "Failed to load messages") }
+                        _instantPaintState.value = _instantPaintState.value.copy(isVisible = false)
                     }
                 }
 
                 _uiState.update { it.copy(isLoading = false) }
             }
-            // VCS after session dir is known
-            loadVcsInfo()
+
+            // VCS info loads last (not critical for UI)
+            launch { loadVcsInfo() }
         }
     }
+
+    /**
+     * Data class for INSTANT PAINT pattern.
+     * Allows UI to render immediately with estimated/placholder data.
+     */
+    data class InstantPaintState(
+        val isVisible: Boolean = false,
+        val sessionTitle: String = "",
+        val estimatedMessageCount: Int = 0,
+        val hasRealSession: Boolean = false,
+        val hasRealMessages: Boolean = false
+    )
 
     /**
      * Load older messages by increasing the limit and merging results.
