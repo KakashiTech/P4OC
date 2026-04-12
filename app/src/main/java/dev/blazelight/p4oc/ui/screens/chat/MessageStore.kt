@@ -39,15 +39,21 @@ class MessageStore(
 
     private val messagesMutex = Mutex()
 
+    // PAGINATION: Store all loaded messages, display only visible subset
+    private val allMessagesMap = mutableMapOf<String, MessageWithParts>()
+    private var visibleMessageCount = 0
+    private val MESSAGES_PER_PAGE = 25
+    private val INITIAL_MESSAGE_COUNT = 25
+
     // Buffered updates to coalesce rapid SSE text deltas
     private val pendingMutex = Mutex()
     private val pendingUpdates = mutableMapOf<String, MutableMap<String, PendingDelta>>() // messageId -> (partId -> delta)
     private var flushJob: Job? = null
-    @Volatile private var flushDelayMs: Long = 16L // 1 frame @60fps — instantaneous streaming
+    @Volatile private var flushDelayMs: Long = 8L // 1 frame @120fps — ultra-responsive streaming for reasoning
 
     /**
-     * Optimized messages flow with better performance.
-     * Uses derivedStateOf-like behavior to reduce unnecessary emissions.
+     * Messages flow - emits whenever messages or parts change.
+     * CRITICAL: No conflate to ensure all updates reach UI.
      */
     val messages: StateFlow<List<MessageWithParts>> = snapshotFlow {
         // Read version to establish dependency — triggers emission on value changes
@@ -55,7 +61,6 @@ class MessageStore(
         // Map stable order to current map values
         messageOrder.mapNotNull { id -> _messagesMap[id] }
     }
-        .conflate() // Skip intermediate values if processing backlog
         .stateIn(
             scope = scope,
             started = SharingStarted.Lazily, // Keep alive for entire ViewModel lifetime
@@ -64,38 +69,93 @@ class MessageStore(
 
     /**
      * Load initial messages from API response.
-     * OPTIMIZED: Process in batches to prevent ANR with large message lists.
+     * PAGINATED: Load only last 25 messages initially for instant paint.
+     * Remaining messages loaded on demand via loadMore().
      */
     fun loadInitial(messages: List<MessageWithParts>) {
         val sorted = messages.sortedBy { it.message.createdAt }
-        AppLog.d(TAG, "loadInitial: Loading ${sorted.size} messages")
+        AppLog.d(TAG, "loadInitial: Total ${sorted.size} messages, loading last $INITIAL_MESSAGE_COUNT initially")
+        
         scope.launch(Dispatchers.Main.immediate) {
+            // Store ALL messages in background map
+            allMessagesMap.clear()
+            sorted.forEach { msg ->
+                allMessagesMap[msg.message.id] = msg
+            }
+            
+            // Clear and load only last 25 into visible map
             _messagesMap.clear()
             messageOrder.clear()
-
-            // OPTIMIZED: Process in batches of 50 to prevent UI freeze
-            val batchSize = 50
-            sorted.chunked(batchSize).forEachIndexed { batchIndex, batch ->
-                batch.forEach { msg ->
-                    _messagesMap[msg.message.id] = msg
-                    messageOrder.add(msg.message.id)
-                }
-                _messagesVersion.value++
-
-                // Yield to main thread every batch to prevent ANR
-                if (batchIndex < sorted.size / batchSize) {
-                    kotlinx.coroutines.yield()
-                }
-                AppLog.d(TAG, "loadInitial: Processed batch ${batchIndex + 1}, total ${messageOrder.size}/${sorted.size}")
+            
+            // Take last 25 messages (most recent)
+            val initialMessages = sorted.takeLast(INITIAL_MESSAGE_COUNT)
+            visibleMessageCount = initialMessages.size
+            
+            initialMessages.forEach { msg ->
+                _messagesMap[msg.message.id] = msg
+                messageOrder.add(msg.message.id)
             }
-            AppLog.d(TAG, "loadInitial: Complete, loaded ${messageOrder.size} messages")
+            
+            _messagesVersion.value++
+            AppLog.d(TAG, "loadInitial: Instant paint with $visibleMessageCount messages (${sorted.size - visibleMessageCount} more available)")
         }
     }
+    
+    /**
+     * Load next page of older messages.
+     * Returns true if more messages available, false if all loaded.
+     */
+    fun loadMore(count: Int = MESSAGES_PER_PAGE): Boolean {
+        val allMessageIds = allMessagesMap.keys.sortedBy { allMessagesMap[it]?.message?.createdAt }
+        val currentVisibleIds = messageOrder.toSet()
+        
+        // Find oldest visible message index
+        val oldestVisibleIndex = allMessageIds.indexOfFirst { it in currentVisibleIds }
+        if (oldestVisibleIndex <= 0) {
+            AppLog.d(TAG, "loadMore: All messages already visible")
+            return false // All loaded or nothing to load
+        }
+        
+        // Load 'count' messages before the oldest visible
+        val startIndex = (oldestVisibleIndex - count).coerceAtLeast(0)
+        val messagesToLoad = allMessageIds.subList(startIndex, oldestVisibleIndex)
+        
+        messagesToLoad.forEach { id ->
+            allMessagesMap[id]?.let { msg ->
+                _messagesMap[id] = msg
+                messageOrder.add(0, id) // Add at beginning (oldest)
+            }
+        }
+        
+        visibleMessageCount += messagesToLoad.size
+        _messagesVersion.value++
+        
+        val hasMore = startIndex > 0
+        AppLog.d(TAG, "loadMore: Loaded ${messagesToLoad.size} older messages, total visible: $visibleMessageCount, hasMore: $hasMore")
+        return hasMore
+    }
+    
+    /**
+     * Check if there are more messages to load.
+     */
+    fun hasMoreMessages(): Boolean {
+        return allMessagesMap.size > visibleMessageCount
+    }
+    
+    /**
+     * Get total message count (including not yet visible).
+     */
+    fun getTotalMessageCount(): Int = allMessagesMap.size
 
     fun upsertMessage(message: Message) {
         scope.launch {
             messagesMutex.withLock {
                 val existing = _messagesMap[message.id]
+                val isNew = existing == null
+                val messageType = when (message) {
+                    is Message.User -> "USER"
+                    is Message.Assistant -> "ASSISTANT"
+                }
                 _messagesMap[message.id] = if (existing != null) {
                     existing.copy(message = message)
                 } else {
@@ -104,7 +164,7 @@ class MessageStore(
                     MessageWithParts(message, emptyList())
                 }
                 _messagesVersion.value++
-                AppLog.d(TAG, "upsertMessage: ${message.id}, exists=${existing != null}")
+                AppLog.d(TAG, "upsertMessage: msgId=${message.id}, type=$messageType, sessionId=${message.sessionID}, isNew=$isNew, totalMessages=${_messagesMap.size}")
             }
         }
     }
@@ -134,9 +194,21 @@ class MessageStore(
     /**
      * Coalesced variant of upsertPart: accumulates rapid updates and applies in a single batch.
      * This reduces recompositions under heavy streaming.
+     * 
+     * OPTIMIZED: Reasoning Parts flush immediately for real-time visibility.
      */
     fun upsertPartBuffered(part: Part, delta: String?) {
         scope.launch {
+            AppLog.d(TAG, "upsertPartBuffered: partId=${part.id}, msgId=${part.messageID}, delta=${delta?.length ?: 0} chars")
+            
+            // OPTIMIZATION: Reasoning Parts flush immediately - user wants to see thinking process
+            val isReasoning = part is Part.Reasoning
+            if (isReasoning) {
+                // Direct update for reasoning - no buffering
+                upsertPart(part, delta)
+                return@launch
+            }
+            
             pendingMutex.withLock {
                 val byPart = pendingUpdates.getOrPut(part.messageID) { mutableMapOf() }
                 val existing = byPart[part.id]
@@ -166,8 +238,14 @@ class MessageStore(
 
     private suspend fun flushPendingParts() {
         val batch: Map<String, Map<String, PendingDelta>> = pendingMutex.withLock {
-            if (pendingUpdates.isEmpty()) return
+            if (pendingUpdates.isEmpty()) {
+                AppLog.v(TAG, "flushPendingParts: no pending updates")
+                return
+            }
             val snapshot = pendingUpdates.mapValues { it.value.toMap() }.toMap()
+            val msgCount = snapshot.size
+            val partCount = snapshot.values.sumOf { it.size }
+            AppLog.d(TAG, "flushPendingParts: flushing $msgCount messages, $partCount parts")
             pendingUpdates.clear()
             snapshot
         }
@@ -230,6 +308,7 @@ class MessageStore(
                 }
 
                 val partIndex = existing.parts.indexOfFirst { it.id == part.id }
+                AppLog.d(TAG, "upsertPart: existing parts=${existing.parts.size}, partIndex=$partIndex, partId=${part.id}")
                 val updatedParts = if (partIndex >= 0) {
                     existing.parts.toMutableList().apply {
                         this[partIndex] = applyDelta(this[partIndex], part, delta)
@@ -238,9 +317,15 @@ class MessageStore(
                     existing.parts + part
                 }
 
-                _messagesMap[messageId] = existing.copy(parts = updatedParts)
+                // CRITICAL: Create completely new MessageWithParts to ensure StateFlow emits
+                val updatedMessage = MessageWithParts(
+                    message = existing.message,
+                    parts = updatedParts
+                )
+                _messagesMap.remove(messageId)
+                _messagesMap[messageId] = updatedMessage
                 _messagesVersion.value++
-                AppLog.d(TAG, "upsertPart: partId=${part.id}, messageId=$messageId, delta=${delta?.length ?: 0} chars, partCount=${updatedParts.size}")
+                AppLog.d(TAG, "upsertPart: DONE - partId=${part.id}, messageId=$messageId, delta=${delta?.length ?: 0} chars, oldCount=${existing.parts.size}, newCount=${updatedParts.size}")
             }
         }
     }

@@ -206,19 +206,25 @@ class OpenCodeEventSource(
         !isShutdown && generation == gen
 
     private fun parseAndEmitEvent(data: String) {
+        AppLog.v(TAG, "parseAndEmitEvent: RAW DATA (${data.length} chars): ${data.take(200)}")
         try {
             val globalEvent = json.decodeFromString<GlobalEventDto>(data)
+            AppLog.d(TAG, "parseAndEmitEvent: GlobalEvent payloadType=${globalEvent.payload.type}")
             val event = eventMapper.mapToEvent(globalEvent.payload)
             if (event != null) {
                 val emitted = _events.tryEmit(event)
-                AppLog.d(TAG, "Event emitted: ${event::class.simpleName}, success=$emitted")
+                AppLog.d(TAG, "Event emitted: ${event::class.simpleName}, success=$emitted, bufferCapacity=${_events.subscriptionCount.value}")
                 if (!emitted) {
                     AppLog.w(TAG, "Dropped event (buffer full): ${event::class.simpleName}")
                 }
+            } else {
+                AppLog.w(TAG, "Event mapper returned null for type: ${globalEvent.payload?.type}")
             }
         } catch (e: Exception) {
+            AppLog.d(TAG, "Failed to parse as GlobalEvent, trying EventDataDto: ${e.message}")
             try {
                 val eventData = json.decodeFromString<EventDataDto>(data)
+                AppLog.d(TAG, "Parsed as EventDataDto: type=${eventData.type}")
                 val event = eventMapper.mapToEvent(eventData)
                 if (event != null) {
                     val emitted = _events.tryEmit(event)
@@ -226,10 +232,12 @@ class OpenCodeEventSource(
                     if (!emitted) {
                         AppLog.w(TAG, "Dropped event (buffer full, fallback): ${event::class.simpleName}")
                     }
+                } else {
+                    AppLog.w(TAG, "Event mapper returned null for fallback type: ${eventData.type}")
                 }
             } catch (e2: Exception) {
                 if (!data.contains("server.heartbeat") && !data.contains("server.connected")) {
-                    AppLog.e(TAG, "Failed to parse event (${data.length} chars): ${data.take(80)}…", e2)
+                    AppLog.e(TAG, "Failed to parse event (${data.length} chars): ${data.take(200)}…", e2)
                 }
             }
         }

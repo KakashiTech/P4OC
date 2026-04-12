@@ -193,10 +193,11 @@ class ConnectionManager constructor(
         val cache = Cache(cacheDir, 20L * 1024L * 1024L)
 
         val builder = OkHttpClient.Builder()
-            // Reduced timeouts for faster failure detection and retry
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .writeTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            // Extended timeouts for long-running AI operations (5 minutes)
+            // Prevents cancellation during complex tasks (code analysis, refactoring, etc.)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(300, TimeUnit.SECONDS) // 5 min for long AI operations
             // Aggressive connection pooling
             .connectionPool(sharedConnectionPool)
             // HTTP/2 for multiplexing and header compression

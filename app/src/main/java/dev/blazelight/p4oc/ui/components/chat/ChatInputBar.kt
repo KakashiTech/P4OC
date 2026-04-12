@@ -1,8 +1,11 @@
 package dev.blazelight.p4oc.ui.components.chat
 
+import dev.blazelight.p4oc.core.log.AppLog
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -10,6 +13,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -91,15 +98,21 @@ fun ChatInputBar(
     val hasContent = value.isNotBlank() || attachedFiles.isNotEmpty()
     val canSend = hasContent && enabled && !isLoading && !isBusy
     val canQueue = hasContent && isBusy && !hasQueuedMessage
+    
+    // CRITICAL DIAGNOSTIC: Log button state
+    AppLog.w("ChatInputBar", "=== BUTTON STATE ===")
+    AppLog.w("ChatInputBar", "hasContent=$hasContent, enabled=$enabled, isLoading=$isLoading, isBusy=$isBusy")
+    AppLog.w("ChatInputBar", "canSend=$canSend, canQueue=$canQueue")
+    AppLog.w("ChatInputBar", "value='${value.take(20)}...', files=${attachedFiles.size}")
     val showSlashCommands = value.startsWith("/") && !value.contains(" ") && commands.isNotEmpty()
 
-    // Contextual placeholder
+    // Contextual placeholder - modern and short
     val placeholder = when {
-        !enabled         -> "Not connected"
-        isBusy && hasQueuedMessage -> "Message queued ⊕"
-        isBusy           -> "AI working — queue next message..."
+        !enabled         -> "Offline"
+        isBusy && hasQueuedMessage -> "Queued ⊕"
+        isBusy           -> "Queue next..."
         isLoading        -> "Sending..."
-        else             -> "> Message..."
+        else             -> "Type..."
     }
 
     Box(modifier = modifier.fillMaxWidth()) {
@@ -121,8 +134,52 @@ fun ChatInputBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(theme.backgroundElement)
+                .background(theme.background)
         ) {
+            // ASCII divider line - erudite terminal aesthetic
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                    modifier = Modifier
+                        .width(12.dp)
+                        .height(1.dp)
+                        .background(theme.border.copy(alpha = 0.3f))
+                )
+                Text(
+                    text = "├",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.accent.copy(alpha = 0.7f)
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(1.dp)
+                        .background(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    theme.border.copy(alpha = 0.3f),
+                                    theme.accent.copy(alpha = 0.4f),
+                                    theme.border.copy(alpha = 0.3f)
+                                )
+                            )
+                        )
+                )
+                Text(
+                    text = "┤",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.border.copy(alpha = 0.5f)
+                )
+                Box(
+                    modifier = Modifier
+                        .width(12.dp)
+                        .height(1.dp)
+                        .background(theme.border.copy(alpha = 0.3f))
+                )
+            }
+
             // ── Queued message chip ─────────────────────────────────────────
             AnimatedVisibility(
                 visible = hasQueuedMessage && queuedMessagePreview != null,
@@ -132,7 +189,7 @@ fun ChatInputBar(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(theme.accent.copy(alpha = 0.08f))
+                        .background(theme.background)
                         .padding(horizontal = 14.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -155,47 +212,33 @@ fun ChatInputBar(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
-                    if (onCancelQueue != null) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .clickable(role = Role.Button) { onCancelQueue() }
-                                .padding(horizontal = 6.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = "✕ cancel",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = theme.error.copy(alpha = 0.8f)
-                            )
-                        }
-                    }
                 }
             }
 
-            // ── File attachments row ────────────────────────────────────────
+            // File attachments - compact row
             if (attachedFiles.isNotEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(horizontal = 10.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     attachedFiles.forEach { file ->
                         Row(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(theme.accent.copy(alpha = 0.1f))
-                                .border(1.dp, theme.border, RoundedCornerShape(6.dp))
+                                .background(theme.backgroundElement)
+                                .border(1.dp, theme.border)
                                 .height(Sizing.buttonHeightSm)
                                 .padding(horizontal = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Text(
-                                text = "📄",
-                                style = MaterialTheme.typography.labelSmall
+                                text = "▒",
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = theme.accent.copy(alpha = 0.8f)
                             )
                             Text(
                                 file.name,
@@ -208,7 +251,6 @@ fun ChatInputBar(
                             )
                             Box(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(3.dp))
                                     .clickable(role = Role.Button) { onRemoveAttachment(file.path) }
                                     .padding(2.dp)
                             ) {
@@ -232,38 +274,42 @@ fun ChatInputBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // Attach button - terminal style (compact)
+                // Attach button - terminal angular style
                 Box(
                     modifier = Modifier
                         .size(28.dp)
                         .background(theme.backgroundElement)
+                        .border(1.dp, theme.border)
                         .clickable(role = Role.Button) { onAttachClick() }
                         .testTag("attach_button"),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = "+",
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleSmall,
                         fontFamily = FontFamily.Monospace,
-                        color = theme.accent
+                        color = theme.accent,
+                        fontWeight = FontWeight.Medium
                     )
                 }
 
-                // Terminal style input with prompt
+                // Terminal input - compact erudite style
                 Row(
                     modifier = Modifier
                         .weight(1f)
+                        .height(36.dp)
                         .background(theme.backgroundElement)
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .border(1.dp, theme.border)
+                        .padding(horizontal = 10.dp, vertical = 0.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Terminal prompt indicator
+                    // ASCII prompt - erudite terminal aesthetic
                     Text(
-                        text = ">",
+                        text = "›",
                         style = MaterialTheme.typography.bodyMedium,
                         fontFamily = FontFamily.Monospace,
                         color = theme.accent,
-                        modifier = Modifier.padding(end = 8.dp)
+                        modifier = Modifier.padding(end = 6.dp)
                     )
 
                     Box(
@@ -280,7 +326,11 @@ fun ChatInputBar(
                         }
                         BasicTextField(
                             value = value,
-                            onValueChange = onValueChange,
+                            onValueChange = { text ->
+                                AppLog.w("ChatInputBar", "=== BASIC TEXTFIELD INPUT ===")
+                                AppLog.w("ChatInputBar", "BasicTextField onValueChange: text='${text.take(20)}...', length=${text.length}")
+                                onValueChange(text)
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .focusRequester(focusRequester)
@@ -297,32 +347,64 @@ fun ChatInputBar(
                     }
                 }
 
-                // Send / Queue / Loading button - terminal style (compact)
+                // Cancel / Send / Queue / Loading button - terminal style with smooth animations
                 val btnColor = when {
                     canSend  -> theme.accent
                     canQueue -> theme.warning
                     else     -> theme.textMuted.copy(alpha = 0.4f)
                 }
+                
+                // Send/Queue button - terminal angular style
                 Box(
                     modifier = Modifier
                         .size(28.dp)
-                        .background(theme.backgroundElement)
+                        .background(
+                            when {
+                                canSend -> theme.accent.copy(alpha = 0.15f)
+                                canQueue -> theme.warning.copy(alpha = 0.15f)
+                                else -> theme.backgroundElement
+                            }
+                        )
+                        .border(1.dp, when {
+                            canSend -> theme.accent
+                            canQueue -> theme.warning
+                            else -> theme.border
+                        })
                         .then(
-                            if (canSend) Modifier.clickable(role = Role.Button) {
-                                onSend()
-                                try { focusRequester.requestFocus() } catch (_: Exception) {}
-                            }.testTag("send_button")
-                            else if (canQueue) Modifier.clickable(role = Role.Button) {
-                                onQueueMessage()
-                                try { focusRequester.requestFocus() } catch (_: Exception) {}
-                            }.testTag("chat_queue_button")
-                            else Modifier
+                            if ((isBusy && onCancelQueue != null) || (!hasContent && value.isNotEmpty())) {
+                                Modifier.clickable(role = Role.Button) {
+                                    if (isBusy && onCancelQueue != null) {
+                                        onCancelQueue()
+                                    } else {
+                                        onValueChange("")
+                                    }
+                                    try { focusRequester.requestFocus() } catch (_: Exception) {}
+                                }.testTag("cancel_button")
+                            } else if (canSend) {
+                                Modifier.clickable(role = Role.Button) {
+                                    onSend()
+                                    try { focusRequester.requestFocus() } catch (_: Exception) {}
+                                }.testTag("send_button")
+                            } else if (canQueue) {
+                                Modifier.clickable(role = Role.Button) {
+                                    onQueueMessage()
+                                    try { focusRequester.requestFocus() } catch (_: Exception) {}
+                                }.testTag("chat_queue_button")
+                            } else Modifier
                         ),
                     contentAlignment = Alignment.Center
                 ) {
+                    // Optimized button rendering with state-based display
                     when {
                         isLoading -> TuiLoadingIndicator()
-                        canQueue  -> Text(
+                        (isBusy && onCancelQueue != null) || (!hasContent && value.isNotEmpty()) -> Text(
+                            text = "✕",
+                            color = theme.error.copy(alpha = 0.8f),
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        canQueue -> Text(
                             text = "⊕",
                             color = theme.warning,
                             fontFamily = FontFamily.Monospace,
@@ -340,16 +422,32 @@ fun ChatInputBar(
                 }
             }
 
-            // Bottom bar: Model/Agent selector
+            // Bottom bar - compact terminal style with ASCII accents
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(theme.backgroundElement)
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                    .background(theme.background)
+                    .padding(horizontal = 10.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Start
             ) {
+                // ASCII prefix marker
+                Text(
+                    text = "░",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.border.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(end = 6.dp)
+                )
                 agentSelector()
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "│",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.border.copy(alpha = 0.3f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
                 modelSelector()
             }
         }
@@ -367,7 +465,6 @@ private fun QueuePulseDot(color: androidx.compose.ui.graphics.Color) {
     Box(
         modifier = Modifier
             .size(8.dp)
-            .clip(RoundedCornerShape(2.dp))
             .alpha(alpha)
             .background(color)
     )

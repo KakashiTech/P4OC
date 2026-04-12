@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.List
@@ -99,13 +102,20 @@ fun TabBar(
                 .padding(horizontal = 12.dp, vertical = 4.dp),
             verticalAlignment = Alignment.Bottom
         ) {
+            // OPTIMIZED LazyRow for smooth tab scrolling
             LazyRow(
                 state = listState,
                 modifier = Modifier.weight(1f),
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
-                verticalAlignment = Alignment.Bottom
+                verticalAlignment = Alignment.Bottom,
+                // Performance optimizations
+                contentPadding = PaddingValues(horizontal = 2.dp)
             ) {
-                items(items = tabs, key = { it.id }) { tab ->
+                items(
+                    items = tabs, 
+                    key = { it.id },
+                    contentType = { "tab" }
+                ) { tab ->
                     val isActive = tab.id == activeTabId
                     val title = tabTitles[tab.id] ?: "Tab"
                     val icon = tabIcons[tab.id] ?: Icons.Default.Tab
@@ -179,19 +189,13 @@ private fun TabIndicator(
 ) {
     val theme = LocalOpenCodeTheme.current
     
-    // Optimized pulse animation for BUSY and AWAITING_INPUT states
-    val pulseAlpha by rememberOptimizedPulse(
-        key = "tab_pulse_${connectionState?.name}",
-        fast = false
-    )
-    
-    val shouldPulse = connectionState?.shouldPulse == true
+    // Static colors to prevent redimensionamiento
     val indicatorColor = SessionStateColors.forStateOrNull(connectionState)
     val needsAttention = connectionState?.showsAttentionBadge == true
     
     val activeTabBg = theme.backgroundElement
     val inactiveTabBg = theme.background
-    val attentionBg = theme.warning.copy(alpha = if (shouldPulse) pulseAlpha * 0.12f else 0.12f)
+    val attentionBg = theme.warning.copy(alpha = 0.12f) // Fixed alpha to prevent resizing
 
     val tabBg = when {
         needsAttention && !isActive -> attentionBg
@@ -238,7 +242,7 @@ private fun TabIndicator(
             fontFamily = FontFamily.Monospace,
             style = MaterialTheme.typography.labelSmall,
             color = indicatorColor ?: textColor,
-            modifier = Modifier.alpha(if (shouldPulse) pulseAlpha else 1f)
+            modifier = Modifier.alpha(1f) // Fixed alpha to prevent resizing
         )
 
         // Title

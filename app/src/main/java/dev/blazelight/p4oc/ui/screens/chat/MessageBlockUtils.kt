@@ -25,7 +25,7 @@ sealed class MessageBlock {
 private const val TAG = "MessageBlockUtils"
 
 fun groupMessagesIntoBlocks(messages: List<MessageWithParts>): List<MessageBlock> {
-    AppLog.d(TAG, "groupMessagesIntoBlocks: input size=${messages.size}")
+    // Early return for empty list
     if (messages.isEmpty()) return emptyList()
 
     val blocks = mutableListOf<MessageBlock>()
@@ -51,7 +51,11 @@ fun groupMessagesIntoBlocks(messages: List<MessageWithParts>): List<MessageBlock
         }
     }
 
-    AppLog.d(TAG, "groupMessagesIntoBlocks: output size=${blocks.size}")
+    // Log para diagnóstico
+    val userBlocks = blocks.count { it is MessageBlock.UserBlock }
+    val assistantBlocks = blocks.count { it is MessageBlock.AssistantBlock }
+    AppLog.d(TAG, "groupMessagesIntoBlocks: ${messages.size} messages → $userBlocks user blocks, $assistantBlocks assistant blocks")
+
     return blocks
 }
 
@@ -85,8 +89,9 @@ internal fun MessageBlockView(
                 AppLog.e(TAG, "AssistantBlock with empty messages - skipping render")
                 return
             }
-            val mergedMessageWithParts = remember(block) {
-                AppLog.d(TAG, "AssistantBlock merging ${block.messages.size} messages")
+            AppLog.d(TAG, "Rendering AssistantBlock with ${block.messages.size} messages, parts=${block.messages.sumOf { it.parts.size }}")
+            // Optimized: More stable remember key to prevent unnecessary recompositions
+            val mergedMessageWithParts = remember(block.messages.size, block.messages.firstOrNull()?.message?.id) {
                 MessageWithParts(
                     message = block.messages.first().message,
                     parts = block.messages.flatMap { it.parts }

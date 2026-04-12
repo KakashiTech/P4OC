@@ -381,19 +381,66 @@ fun ChatScreen(
             if (!hasContent && !uiState.isLoading) {
                 EmptyChatView(modifier = Modifier.align(Alignment.Center))
             } else {
-                // OPTIMIZED: LazyColumn with enhanced performance and smooth animations
-                LazyColumn(
-                    state = listState,
+                // ASCII Terminal Frame - surrounds entire message area
+                Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 12.dp) // Match topbar padding
-                        .testTag("message_list"),
-                    reverseLayout = true,
-                    flingBehavior = smoothFling,
-                    contentPadding = PaddingValues(vertical = 2.dp),
-                    // Performance optimizations
-                    userScrollEnabled = true,
+                        .padding(horizontal = 8.dp)
                 ) {
+                    // Top border with optional title
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "┌─[messages]─",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.border
+                        )
+                        // Expanding line
+                        Text(
+                            text = "─".repeat(50),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.border,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1
+                        )
+                        Text(
+                            text = "─┐",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.border
+                        )
+                    }
+                    
+                    // Message area with side borders
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                    ) {
+                        // Left border
+                        Text(
+                            text = "│",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.border,
+                            modifier = Modifier.padding(horizontal = 2.dp)
+                        )
+                        
+                        // LazyColumn message list
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("message_list"),
+                            reverseLayout = true,
+                            flingBehavior = smoothFling,
+                            contentPadding = PaddingValues(vertical = 2.dp, horizontal = 4.dp),
+                            userScrollEnabled = true,
+                        ) {
                     // Inline question card - optimized without animation to prevent lag
                     pendingQuestion?.let { questionRequest ->
                         item(
@@ -504,6 +551,43 @@ fun ChatScreen(
                                 )
                             }
                         }
+                    }
+                    
+                        // Right border
+                        Text(
+                            text = "│",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.border,
+                            modifier = Modifier.padding(horizontal = 2.dp)
+                        )
+                    }
+                    
+                    // Bottom border
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "└",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.border
+                        )
+                        Text(
+                            text = "─".repeat(50),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.border,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1
+                        )
+                        Text(
+                            text = "┘",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.border
+                        )
                     }
                 }
             }

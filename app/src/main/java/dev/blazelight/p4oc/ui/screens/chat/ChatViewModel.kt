@@ -26,14 +26,9 @@ import dev.blazelight.p4oc.ui.components.chat.AbortSummary
 import dev.blazelight.p4oc.ui.components.chat.InterruptedTool
 import dev.blazelight.p4oc.ui.components.chat.SelectedFile
 import dev.blazelight.p4oc.ui.navigation.Screen
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 /**
@@ -72,33 +67,8 @@ class ChatViewModel constructor(
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
-    // === INSTANT PAINT STATE ===
-    // Revolutionary: Show UI immediately with minimal data, hydrate progressively
-    private val _instantPaintState = MutableStateFlow(InstantPaintState())
-    val instantPaintState: StateFlow<InstantPaintState> = _instantPaintState.asStateFlow()
-
-    // Message count estimate for instant skeleton rendering
-    private val _estimatedMessageCount = MutableStateFlow(0)
-    val estimatedMessageCount: StateFlow<Int> = _estimatedMessageCount.asStateFlow()
-
-    // Optimized session loading with caching
-    private val _sessionCache = mutableMapOf<String, Session>()
-
     /** Convenience alias — ChatScreen reads this directly. */
     val messages: StateFlow<List<MessageWithParts>> = messageStore.messages
-
-    /**
-     * Pre-computed message blocks on Default dispatcher.
-     * Heavy computation off the main thread for 60 FPS scroll.
-     */
-    val messageBlocks: StateFlow<List<MessageBlock>> = messageStore.messages
-        .mapLatest { msgs ->
-            withContext(Dispatchers.Default) {
-                groupMessagesIntoBlocks(msgs)
-            }
-        }
-        .conflate() // Skip intermediate values if backlog
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val connectionState: StateFlow<ConnectionState> = connectionManager.connectionState
 
@@ -108,9 +78,6 @@ class ChatViewModel constructor(
     // Track whether this tab has unread responses (LLM finished but user hasn't viewed)
     private val _hasUnreadResponse = MutableStateFlow(false)
     val hasUnreadResponse: StateFlow<Boolean> = _hasUnreadResponse.asStateFlow()
-
-    // Paging: track current limit for incremental loading
-    private var currentMessageLimit = 500
 
     /**
      * Session connection state for tab indicator display.
@@ -123,21 +90,19 @@ class ChatViewModel constructor(
         _hasUnreadResponse,
         messages
     ) { isBusy, hasUnread, msgs ->
-        // Run on Default dispatcher — avoid O(n) scan on Main thread during streaming
-        withContext(Dispatchers.Default) {
-            val hasRunningTools = msgs.any { msg ->
-                msg.parts.any { part -> part is Part.Tool && part.state is ToolState.Running }
-            }
-            val hasStreamingText = msgs.any { msg ->
-                msg.parts.any { part -> part is Part.Text && part.isStreaming }
-            }
-            when {
-                isBusy || hasRunningTools || hasStreamingText -> TabConnectionState.BUSY
-                hasUnread -> TabConnectionState.AWAITING_INPUT
-                else -> TabConnectionState.IDLE
-            }
+        val hasRunningTools = msgs.any { msg ->
+            msg.parts.any { part -> part is Part.Tool && part.state is ToolState.Running }
         }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, TabConnectionState.IDLE)
+        val hasStreamingText = msgs.any { msg ->
+            msg.parts.any { part -> part is Part.Text && part.isStreaming }
+        }
+
+        when {
+            isBusy || hasRunningTools || hasStreamingText -> TabConnectionState.BUSY
+            hasUnread -> TabConnectionState.AWAITING_INPUT
+            else -> TabConnectionState.IDLE
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TabConnectionState.IDLE)
 
     val visualSettings = settingsDataStore.visualSettings
         .stateIn(viewModelScope, SharingStarted.Eagerly, dev.blazelight.p4oc.core.datastore.VisualSettings())
@@ -164,10 +129,12 @@ class ChatViewModel constructor(
     }
 
     init {
-        loadSessionAndMessages()
+        loadSession()
+        loadMessages()
         modelAgentManager.loadAgents()
         modelAgentManager.loadModels()
         observeEvents()
+        loadVcsInfo()
     }
 
     // --- Public API (delegating) ---
@@ -189,123 +156,55 @@ class ChatViewModel constructor(
     private fun getDirectory(): String? =
         sessionDirectory ?: _uiState.value.session?.directory ?: directoryManager.getDirectory()
 
-    private fun loadSessionAndMessages() {
+    private fun loadSession() {
         viewModelScope.launch {
-            AppLog.d(TAG, "=== LOAD SESSION START: $sessionId ===")
-            // === PHASE 1: INSTANT PAINT (0-16ms) ===
-            // Show skeleton immediately with estimated data
-            _instantPaintState.value = InstantPaintState(
-                isVisible = true,
-                sessionTitle = _sessionCache[sessionId]?.title ?: "Loading...",
-                estimatedMessageCount = _estimatedMessageCount.value.coerceAtLeast(3)
-            )
-            _uiState.update { it.copy(isLoading = true) }
-            AppLog.d(TAG, "Instant paint shown, estimated count: ${_estimatedMessageCount.value.coerceAtLeast(3)}")
-
             val api = connectionManager.getApi() ?: run {
-                AppLog.e(TAG, "API is null - not connected")
-                _uiState.update { it.copy(isLoading = false, error = "Not connected") }
-                _instantPaintState.value = _instantPaintState.value.copy(isVisible = false)
+                _uiState.update { it.copy(error = "Not connected") }
                 return@launch
             }
-            val dir = sessionDirectory ?: directoryManager.getDirectory()
-            AppLog.d(TAG, "Directory: $dir")
-
-            // === PHASE 2: STREAMING HYDRATION ===
-            // Start with session for instant title update
-            val sessionResult = safeApiCall { api.getSession(sessionId, dir) }
-
-            when (sessionResult) {
+            val result = safeApiCall { api.getSession(sessionId, sessionDirectory ?: directoryManager.getDirectory()) }
+            when (result) {
                 is ApiResult.Success -> {
-                    AppLog.d(TAG, "Session loaded: ${sessionResult.data.id}")
-                    val session = SessionMapper.mapToDomain(sessionResult.data)
-                    _sessionCache[sessionId] = session
+                    val session = SessionMapper.mapToDomain(result.data)
                     _uiState.update { it.copy(session = session) }
-                    // Update instant paint with real title
-                    _instantPaintState.value = _instantPaintState.value.copy(
-                        sessionTitle = session.title,
-                        hasRealSession = true
-                    )
                     if (sessionDirectory == null && session.directory.isNotBlank()) {
                         directoryManager.setDirectory(session.directory)
                     }
+                    // Reload VCS now that we have the canonical session directory
+                    loadVcsInfo()
                 }
                 is ApiResult.Error -> {
-                    AppLog.e(TAG, "Failed to load session: ${sessionResult.message}")
                     _uiState.update { it.copy(error = "Failed to load session") }
                 }
             }
-
-            // === PHASE 3: SINGLE-BATCH MESSAGE LOADING ===
-            // Load all messages at once — no chunking, no delay
-            launch(Dispatchers.Default) {
-                AppLog.d(TAG, "Starting message loading, limit: $currentMessageLimit")
-                val messagesResult = safeApiCall {
-                    api.getMessages(sessionId, limit = currentMessageLimit, directory = dir)
-                }
-
-                when (messagesResult) {
-                    is ApiResult.Success -> {
-                        AppLog.d(TAG, "Loaded ${messagesResult.data.size} messages from API")
-                        _estimatedMessageCount.value = messagesResult.data.size
-
-                        // Map all in parallel on Default dispatcher, then load in one shot
-                        AppLog.d(TAG, "Mapping ${messagesResult.data.size} messages to domain...")
-                        val mapped = messagesResult.data.map { dto ->
-                            messageMapper.mapWrapperToDomain(dto)
-                        }
-                        AppLog.d(TAG, "Mapped ${mapped.size} messages, loading into store...")
-                        messageStore.loadInitial(mapped)
-                        AppLog.d(TAG, "Messages loaded into store successfully")
-                        _instantPaintState.value = _instantPaintState.value.copy(
-                            isVisible = false,
-                            hasRealMessages = true
-                        )
-                    }
-                    is ApiResult.Error -> {
-                        AppLog.e(TAG, "Failed to load messages: ${messagesResult.message}")
-                        _uiState.update { it.copy(error = "Failed to load messages") }
-                        _instantPaintState.value = _instantPaintState.value.copy(isVisible = false)
-                    }
-                }
-
-                _uiState.update { it.copy(isLoading = false) }
-                AppLog.d(TAG, "=== LOAD SESSION COMPLETE ===")
-            }
-
-            // VCS info loads last (not critical for UI)
-            launch { loadVcsInfo() }
         }
     }
 
-    /**
-     * Data class for INSTANT PAINT pattern.
-     * Allows UI to render immediately with estimated/placholder data.
-     */
-    data class InstantPaintState(
-        val isVisible: Boolean = false,
-        val sessionTitle: String = "",
-        val estimatedMessageCount: Int = 0,
-        val hasRealSession: Boolean = false,
-        val hasRealMessages: Boolean = false
-    )
-
-    /**
-     * Load older messages by increasing the limit and merging results.
-     */
-    fun loadOlderMessages(step: Int = 50) {
+    private fun loadMessages() {
         viewModelScope.launch {
-            val api = connectionManager.getApi() ?: return@launch
-            val dir = sessionDirectory ?: directoryManager.getDirectory()
-            val newLimit = (currentMessageLimit + step).coerceAtMost(1000) // hard cap to avoid huge pulls
-            when (val result = safeApiCall { api.getMessages(sessionId, limit = newLimit, directory = dir) }) {
+            _uiState.update { it.copy(isLoading = true) }
+            AppLog.d(TAG, "loadMessages() called for session: $sessionId")
+
+            val api = connectionManager.getApi() ?: run {
+                _uiState.update { it.copy(isLoading = false, error = "Not connected") }
+                return@launch
+            }
+
+            val directory = getDirectory()
+            val result = safeApiCall { api.getMessages(sessionId, limit = null, directory = directory) }
+
+            when (result) {
                 is ApiResult.Success -> {
-                    currentMessageLimit = newLimit
+                    AppLog.d(TAG, "Loaded ${result.data.size} messages")
                     val mapped = result.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
                     messageStore.loadInitial(mapped)
+                    _uiState.update { it.copy(isLoading = false) }
                 }
                 is ApiResult.Error -> {
-                    AppLog.w(TAG, "Failed to load older messages: ${result.message}")
+                    AppLog.e(TAG, "Failed to load messages: ${result.message}", result.throwable)
+                    _uiState.update {
+                        it.copy(isLoading = false, error = "Failed to load messages")
+                    }
                 }
             }
         }
@@ -343,111 +242,96 @@ class ChatViewModel constructor(
     }
 
     private fun handleEvent(event: OpenCodeEvent) {
-        try {
-            when (event) {
-                is OpenCodeEvent.MessageUpdated -> {
-                    // Defensive: check for null/blank sessionID to prevent NPE
-                    val evtSessionId = event.message.sessionID
-                    if (!evtSessionId.isNullOrBlank() && evtSessionId == sessionId) {
-                        messageStore.upsertMessage(event.message)
-                    }
+        when (event) {
+            is OpenCodeEvent.MessageUpdated -> {
+                if (event.message.sessionID == sessionId) {
+                    messageStore.upsertMessage(event.message)
                 }
-                is OpenCodeEvent.MessagePartUpdated -> {
-                    // Defensive: check for null/blank sessionID
-                    val evtSessionId = event.part.sessionID
-                    if (!evtSessionId.isNullOrBlank() && evtSessionId == sessionId) {
-                        // Buffered updates reduce recompositions under rapid streaming
-                        messageStore.upsertPartBuffered(event.part, event.delta)
-                    }
+            }
+            is OpenCodeEvent.MessagePartUpdated -> {
+                if (event.part.sessionID == sessionId) {
+                    messageStore.upsertPart(event.part, event.delta)
                 }
-                is OpenCodeEvent.MessageRemoved -> {
-                    if (event.sessionID == sessionId) {
-                        messageStore.removeMessage(event.messageID)
-                    }
+            }
+            is OpenCodeEvent.MessageRemoved -> {
+                if (event.sessionID == sessionId) {
+                    messageStore.removeMessage(event.messageID)
                 }
-                is OpenCodeEvent.PartRemoved -> {
-                    if (event.sessionID == sessionId) {
-                        messageStore.removePart(event.messageID, event.partID)
-                    }
+            }
+            is OpenCodeEvent.PartRemoved -> {
+                if (event.sessionID == sessionId) {
+                    messageStore.removePart(event.messageID, event.partID)
                 }
-                is OpenCodeEvent.PermissionRequested -> {
-                    // Defensive: check for null/blank sessionID
-                    val evtSessionId = event.permission.sessionID
-                    if (!evtSessionId.isNullOrBlank() && isOwnedSession(evtSessionId)) {
-                        dialogManager.enqueuePermission(event.permission)
-                    }
+            }
+            is OpenCodeEvent.PermissionRequested -> {
+                if (isOwnedSession(event.permission.sessionID)) {
+                    dialogManager.enqueuePermission(event.permission)
                 }
-                is OpenCodeEvent.QuestionAsked -> {
-                    // Defensive: check for null/blank sessionID
-                    val evtSessionId = event.request.sessionID
-                    if (!evtSessionId.isNullOrBlank() && isOwnedSession(evtSessionId)) {
-                        dialogManager.enqueueQuestion(event.request)
-                    }
+            }
+            is OpenCodeEvent.QuestionAsked -> {
+                if (isOwnedSession(event.request.sessionID)) {
+                    dialogManager.enqueueQuestion(event.request)
                 }
-                is OpenCodeEvent.SessionCreated -> {
-                    // Defensive: check for null parentID before comparison
-                    if (event.session.parentID == sessionId) {
-                        childSessionIds.add(event.session.id)
-                    }
+            }
+            is OpenCodeEvent.SessionCreated -> {
+                if (event.session.parentID == sessionId) {
+                    childSessionIds.add(event.session.id)
                 }
-                is OpenCodeEvent.SessionStatusChanged -> {
-                    if (event.sessionID == sessionId) {
-                        val wasBusy = _uiState.value.isBusy
-                        val isBusy = event.status is SessionStatus.Busy || event.status is SessionStatus.Retry
-                        _uiState.update { it.copy(isBusy = isBusy, isSending = if (!isBusy) false else it.isSending) }
+            }
+            is OpenCodeEvent.SessionStatusChanged -> {
+                if (event.sessionID == sessionId) {
+                    val wasBusy = _uiState.value.isBusy
+                    val isBusy = event.status is SessionStatus.Busy || event.status is SessionStatus.Retry
+                    _uiState.update { it.copy(isBusy = isBusy, isSending = if (!isBusy) false else it.isSending) }
 
-                        // Clear streaming flags when session becomes idle
-                        if (wasBusy && !isBusy) {
-                            viewModelScope.launch { messageStore.clearStreamingFlags() }
-                            _hasUnreadResponse.value = true
-                        }
-
-                        // Send queued message when session becomes idle
-                        if (!isBusy) {
-                            sendQueuedMessageIfAny()
-                        }
-                    }
-                }
-                is OpenCodeEvent.SessionUpdated -> {
-                    if (event.session.id == sessionId) {
-                        _uiState.update { it.copy(session = event.session) }
-                    }
-                }
-                is OpenCodeEvent.SessionError -> {
-                    if (event.sessionID == sessionId) {
-                        AppLog.e(TAG, "Session error: ${event.error?.message}")
-                        _uiState.update {
-                            it.copy(
-                                isBusy = false,
-                                isSending = false,
-                                error = event.error?.message ?: "An error occurred"
-                            )
-                        }
-                    }
-                }
-                is OpenCodeEvent.SessionIdle -> {
-                    if (event.sessionID == sessionId) {
-                        AppLog.d(TAG, "Session became idle")
+                    // Clear streaming flags when session becomes idle
+                    if (wasBusy && !isBusy) {
                         viewModelScope.launch { messageStore.clearStreamingFlags() }
-                        _uiState.update { it.copy(isBusy = false, isSending = false) }
+                        _hasUnreadResponse.value = true
+                    }
+
+                    // Send queued message when session becomes idle
+                    if (!isBusy) {
                         sendQueuedMessageIfAny()
                     }
                 }
-                is OpenCodeEvent.TodoUpdated -> {
-                    if (event.sessionID == sessionId) {
-                        _uiState.update { it.copy(todos = event.todos) }
-                    }
-                }
-                is OpenCodeEvent.PermissionReplied -> {
-                    if (isOwnedSession(event.sessionID)) {
-                        dialogManager.clearPermissionByRequestId(event.requestID)
-                    }
-                }
-                else -> {}
             }
-        } catch (e: Exception) {
-            // Catch-all to prevent crashes from malformed events
-            AppLog.e(TAG, "Error handling event ${event::class.simpleName}: ${e.message}", e)
+            is OpenCodeEvent.SessionUpdated -> {
+                if (event.session.id == sessionId) {
+                    _uiState.update { it.copy(session = event.session) }
+                }
+            }
+            is OpenCodeEvent.SessionError -> {
+                if (event.sessionID == sessionId) {
+                    AppLog.e(TAG, "Session error: ${event.error?.message}")
+                    _uiState.update {
+                        it.copy(
+                            isBusy = false,
+                            isSending = false,
+                            error = event.error?.message ?: "An error occurred"
+                        )
+                    }
+                }
+            }
+            is OpenCodeEvent.SessionIdle -> {
+                if (event.sessionID == sessionId) {
+                    AppLog.d(TAG, "Session became idle")
+                    viewModelScope.launch { messageStore.clearStreamingFlags() }
+                    _uiState.update { it.copy(isBusy = false, isSending = false) }
+                    sendQueuedMessageIfAny()
+                }
+            }
+            is OpenCodeEvent.TodoUpdated -> {
+                if (event.sessionID == sessionId) {
+                    _uiState.update { it.copy(todos = event.todos) }
+                }
+            }
+            is OpenCodeEvent.PermissionReplied -> {
+                if (isOwnedSession(event.sessionID)) {
+                    dialogManager.clearPermissionByRequestId(event.requestID)
+                }
+            }
+            else -> {}
         }
     }
 
@@ -517,16 +401,6 @@ class ChatViewModel constructor(
         }
         filePickerManager.clearAttachedFiles()
         AppLog.d(TAG, "queueMessage: Queued message with ${text.length} chars, ${attachedFiles.size} files")
-    }
-
-    fun cancelQueuedMessage() {
-        val queued = _uiState.value.queuedMessage ?: return
-        _uiState.update { it.copy(
-            queuedMessage = null,
-            inputText = queued.text
-        ) }
-        filePickerManager.restoreAttachedFiles(queued.attachedFiles)
-        AppLog.d(TAG, "cancelQueuedMessage: restored queued message to input")
     }
 
     private fun sendQueuedMessageIfAny() {
@@ -688,14 +562,6 @@ class ChatViewModel constructor(
         }
     }
 
-    private suspend fun refreshSession() {
-        val api = connectionManager.getApi() ?: return
-        val result = safeApiCall { api.getSession(sessionId, getDirectory()) }
-        if (result is ApiResult.Success) {
-            _uiState.update { it.copy(session = SessionMapper.mapToDomain(result.data)) }
-        }
-    }
-
     // --- Revert / Unrevert ---
 
     fun revertMessage(messageId: String) {
@@ -705,7 +571,7 @@ class ChatViewModel constructor(
             val result = safeApiCall { api.revertSession(sessionId, request, getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
-                    refreshSession()
+                    loadSession()  // Refresh to get updated revert state
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(error = "Failed to revert: ${result.message}") }
@@ -720,7 +586,7 @@ class ChatViewModel constructor(
             val result = safeApiCall { api.unrevertSession(sessionId, getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
-                    refreshSession()
+                    loadSession()  // Refresh to clear revert state
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(error = "Failed to unrevert: ${result.message}") }
@@ -730,6 +596,28 @@ class ChatViewModel constructor(
     }
 
     // --- Abort ---
+
+    /**
+     * Load next page of older messages for pagination.
+     * Returns true if more messages available.
+     */
+    fun loadOlderMessages(): Boolean {
+        return messageStore.loadMore(25)
+    }
+    
+    /**
+     * Check if there are more messages to load.
+     */
+    fun hasMoreMessages(): Boolean {
+        return messageStore.hasMoreMessages()
+    }
+    
+    /**
+     * Get total message count (including not yet visible).
+     */
+    fun getTotalMessageCount(): Int {
+        return messageStore.getTotalMessageCount()
+    }
 
     fun abortSession() {
         viewModelScope.launch {

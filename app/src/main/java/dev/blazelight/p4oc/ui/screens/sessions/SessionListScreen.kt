@@ -20,6 +20,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -27,13 +28,15 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -184,13 +187,17 @@ fun SessionListScreen(
                     buildSessionTree(displayedSessions)
                 }
 
+                // OPTIMIZED LazyColumn for smooth session scrolling
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().testTag("sessions_list"),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     // Animated PocketCode Logo Header
-                    item(key = "logo_header") {
+                    item(
+                        key = "logo_header",
+                        contentType = "header"
+                    ) {
                         PocketCodeLogoHeader()
                     }
 
@@ -889,9 +896,9 @@ private fun PocketCodeLogoHeader(
                 delay(250)
             }
 
-            // Clear and move to next
+            // Clear and move to next - maintain space to prevent resizing
             currentCommandIndex = (currentCommandIndex + 1) % funnyCommands.size
-            displayedCommand = ""  // Clear just before typing next command
+            displayedCommand = " "  // Use space instead of empty to maintain layout
             delay(150)
         }
     }
@@ -948,145 +955,206 @@ private fun PocketCodeLogoHeader(
                 )
             }
 
-            // Main logo box with animated moving border glow
+            // Terminal-style header container
             Box(
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(
+                        width = Spacing.hairline,
+                        color = theme.border.copy(alpha = 0.6f)
+                    )
+                    .background(
+                        color = theme.backgroundElement.copy(alpha = 0.12f)
+                    )
+                    .padding(vertical = Spacing.xs),
+                contentAlignment = Alignment.Center
             ) {
-                // Ambient glow effect moving around the border
+                // Subtle terminal scanline effect
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
+                        .matchParentSize()
                         .background(
-                            brush = Brush.sweepGradient(
+                            brush = Brush.verticalGradient(
                                 colors = listOf(
-                                    theme.accent.copy(alpha = 0f),
-                                    theme.accent.copy(alpha = 0.15f),
-                                    theme.accent.copy(alpha = 0.4f),
-                                    theme.accent.copy(alpha = 0.15f),
-                                    theme.accent.copy(alpha = 0f)
-                                ),
-                                center = Offset(
-                                    x = if (glowPosition < 0.5f) glowPosition * 2f else (1f - (glowPosition - 0.5f) * 2f),
-                                    y = 0.5f
+                                    theme.accent.copy(alpha = 0.03f),
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                    theme.accent.copy(alpha = 0.02f)
                                 )
                             )
                         )
                 )
 
-                // Main content row
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, theme.border.copy(alpha = 0.4f))
-                        .background(theme.backgroundElement.copy(alpha = 0.15f))
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                // Terminal-style content
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
                 ) {
-                    // Left side: Logo Symbol + PocketCode with typewriter
+                    // Compact terminal header line
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Logo bracket with pulse
+                        // Compact terminal window controls
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(theme.error.copy(alpha = 0.9f))
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(theme.warning.copy(alpha = 0.9f))
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(theme.success.copy(alpha = 0.9f))
+                            )
+                        }
+                        
+                        // Compact terminal title
+                        Text(
+                            text = "p4oc@terminal",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = MaterialTheme.typography.labelSmall.fontSize * 0.85
+                            ),
+                            color = theme.text.copy(alpha = 0.6f)
+                        )
+                        
+                        Spacer(Modifier.width(24.dp)) // Balance the controls
+                    }
+                    
+                    // Main logo section - compact terminal style
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.md),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Compact terminal prompt
+                        Text(
+                            text = "$",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = theme.accent.copy(alpha = accentGlow)
+                        )
+                        
+                        Spacer(Modifier.width(Spacing.xs))
+                        
+                        // Compact logo brackets
                         Text(
                             text = "[",
                             fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.headlineSmall.copy(
-                                fontWeight = FontWeight.Bold
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.ExtraBold
                             ),
                             color = theme.accent.copy(alpha = accentGlow)
                         )
-
-                        // P symbol
+                        
+                        // Compact core symbol
                         Text(
                             text = "◈",
                             fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = theme.accent.copy(alpha = 0.8f)
+                            style = MaterialTheme.typography.titleMedium,
+                            color = theme.accent
                         )
-
+                        
                         Text(
                             text = "]",
                             fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.headlineSmall.copy(
-                                fontWeight = FontWeight.Bold
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.ExtraBold
                             ),
                             color = theme.accent.copy(alpha = accentGlow)
                         )
-
-                        // Vertical separator
-                        Box(
-                            modifier = Modifier
-                                .width(1.dp)
-                                .height(24.dp)
-                                .background(theme.border.copy(alpha = 0.4f))
+                        
+                        // Compact terminal pipe separator
+                        Text(
+                            text = " ",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = theme.border.copy(alpha = 0.6f)
                         )
-
-                        // Typewriter text
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = typedLogo,
-                                fontFamily = FontFamily.Monospace,
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.5.sp
-                                ),
-                                color = theme.text
-                            )
-                            // Blinking block cursor after logo
-                            if (cursorVisible && animationPhase <= 1) {
-                                Text(
-                                    text = "█",
-                                    fontFamily = FontFamily.Monospace,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = theme.accent.copy(alpha = 0.7f),
-                                    modifier = Modifier.padding(start = 1.dp)
-                                )
+                        
+                        // Compact typewriter effect with reduced spacing
+                        Text(
+                            text = typedLogo,
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.5.sp
+                            ),
+                            color = theme.text
+                        )
+                        
+                        // Compact blinking cursor - always takes space
+                        Text(
+                            text = "▊",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = if (cursorVisible && animationPhase <= 1) {
+                                theme.accent.copy(alpha = 0.9f)
+                            } else {
+                                Color.Transparent // Takes space but invisible
                             }
-                        }
+                        )
                     }
 
-                    // Right side: Terminal prompt + rotating funny command
-                    // Fixed width container so prompt stays in place
+                    // Row 2: Terminal prompt + animated command (estilo terminal pegado a la izquierda)
                     Row(
-                        modifier = Modifier.widthIn(min = 140.dp, max = 180.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Start
                     ) {
-                        // Fixed prompt (always in same position)
+                        // Prompt
                         Text(
                             text = "~$",
                             fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.textMuted.copy(alpha = 0.5f),
-                            modifier = Modifier.padding(end = 4.dp)
+                            style = MaterialTheme.typography.bodySmall,
+                            color = theme.textMuted.copy(alpha = 0.5f)
                         )
 
-                        // Command text container - grows left-to-right
+                        // Spacer para separar prompt del comando
+                        Box(modifier = Modifier.width(6.dp))
+
+                        // Command text
                         Text(
                             text = displayedCommand,
                             fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.labelSmall,
+                            style = MaterialTheme.typography.bodySmall,
                             color = theme.success.copy(alpha = 0.9f),
-                            maxLines = 1
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
 
-                        // Blinking cursor immediately after command text
-                        if (cursorVisible && animationPhase >= 2 && displayedCommand.isNotEmpty()) {
-                            Text(
-                                text = "█",
-                                fontFamily = FontFamily.Monospace,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = theme.accent.copy(alpha = 0.6f)
-                            )
-                        }
+                        // Blinking cursor after command - always takes space
+                        Text(
+                            text = "█",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (cursorVisible && animationPhase >= 2 && displayedCommand.isNotEmpty()) {
+                                theme.accent.copy(alpha = 0.6f)
+                            } else {
+                                Color.Transparent // Takes space but invisible
+                            }
+                        )
                     }
                 }
             }
 
-            // Bottom ascii connector
+            // Master unified connector system - topbar integration
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -1095,13 +1163,21 @@ private fun PocketCodeLogoHeader(
                     text = "├",
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodySmall,
-                    color = theme.border.copy(alpha = 0.5f)
+                    color = theme.accent.copy(alpha = 0.7f) // Matches topbar connector
                 )
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .height(1.dp)
-                        .background(theme.border.copy(alpha = 0.3f))
+                        .background(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    theme.border.copy(alpha = 0.3f),
+                                    theme.accent.copy(alpha = 0.4f),
+                                    theme.border.copy(alpha = 0.3f)
+                                )
+                            )
+                        )
                 )
                 Text(
                     text = "┤",

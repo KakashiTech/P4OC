@@ -1,6 +1,7 @@
 package dev.blazelight.p4oc.ui.components.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.*
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
+import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolGroupWidget
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
@@ -49,8 +51,10 @@ fun ChatMessage(
     modifier: Modifier = Modifier
 ) {
     if (messageWithParts.message is Message.User) {
+        AppLog.d("ChatMessage", "Rendering USER message: ${messageWithParts.message.id}")
         UserMessage(messageWithParts, modifier)
     } else {
+        AppLog.d("ChatMessage", "Rendering ASSISTANT message: ${messageWithParts.message.id}, parts=${messageWithParts.parts.size}")
         AssistantMessage(
             messageWithParts = messageWithParts,
             onToolApprove = onToolApprove,
@@ -83,14 +87,13 @@ private fun UserMessage(messageWithParts: MessageWithParts, modifier: Modifier =
     val text = remember(textParts) { textParts.joinToString("\n") { it.text } }
     if (text.isBlank()) return
 
-    // Slightly more visible tint — enough contrast to read as a command line block
-    val rowBg  = remember(theme.primary) { theme.primary.copy(alpha = 0.09f) }
-    val arrowColor = theme.primary   // uses live theme color, no remember needed (Color is stable)
+    // Glass morphism transparent background - modern terminal style
+    val promptColor = theme.success // Green for dev elegance
+    val textColor = theme.text
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(rowBg)
             .combinedClickable(
                 onClick = {},
                 onLongClick = {
@@ -99,23 +102,23 @@ private fun UserMessage(messageWithParts: MessageWithParts, modifier: Modifier =
                 },
                 onLongClickLabel = "Copy"
             )
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 4.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.Start,
-        verticalAlignment = Alignment.Top
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        // Prompt arrow in theme color — matches image (green/cyan/etc per active theme)
+        // Minimal elegant prompt - just the arrow
         Text(
-            text = "→ ",
+            text = "➜ ",
             fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = arrowColor,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = promptColor,
         )
         Text(
             text = text,
             fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            color = theme.text,
+            fontSize = 12.sp,
+            color = textColor,
             modifier = Modifier.weight(1f),
         )
     }
@@ -135,6 +138,7 @@ private fun AssistantMessage(
     onRevert: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    AppLog.d("AssistantMessage", "Executing AssistantMessage with ${messageWithParts.parts.size} parts")
     val theme = LocalOpenCodeTheme.current
     val partGroups = remember(messageWithParts.parts) {
         buildList {
@@ -164,7 +168,7 @@ private fun AssistantMessage(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 4.dp, bottom = 4.dp, start = 8.dp)  // Reduced from 16dp to 8dp
+            .padding(top = 4.dp, bottom = 4.dp, start = 0.dp)  // Remove start padding since LazyColumn handles it
             .drawBehind {
                 // Draw accent bar - 3dp wide (thinner), positioned at very left
                 drawRect(
@@ -178,7 +182,7 @@ private fun AssistantMessage(
         Column(
             modifier = Modifier
                 .weight(1f)
-                .padding(start = 10.dp, end = 12.dp),  // 10dp = 3dp bar + 7dp gap
+                .padding(start = 10.dp, end = 0.dp),  // Remove end padding since LazyColumn handles it
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             partGroups.forEach { group ->
@@ -205,8 +209,14 @@ private fun AssistantMessage(
                         }
                     }
                     is PartGroupItem.Other -> when (val part = group.part) {
-                        is Part.Text      -> TextPart(part)
-                        is Part.Reasoning -> ReasoningPart(part)
+                        is Part.Text      -> {
+                            AppLog.d("AssistantMessage", "Rendering TextPart: ${part.text.take(30)}...")
+                            TextPart(part)
+                        }
+                        is Part.Reasoning -> {
+                            AppLog.d("AssistantMessage", "Rendering ReasoningPart: thinking=${part.time?.end == null}")
+                            ReasoningPart(part)
+                        }
                         is Part.File      -> FilePart(part)
                         is Part.Patch     -> CompactPatchPart(part)
                         else              -> Unit

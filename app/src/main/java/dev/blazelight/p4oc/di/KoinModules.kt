@@ -26,6 +26,9 @@ import dev.blazelight.p4oc.ui.screens.projects.ProjectsViewModel
 import dev.blazelight.p4oc.ui.screens.terminal.TerminalViewModel
 import dev.blazelight.p4oc.ui.tabs.TabManager
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.module.dsl.viewModelOf
@@ -67,6 +70,7 @@ val networkModule = module {
     single { MdnsDiscoveryManager(androidContext()) }
     factory { PtyWebSocketClient(get()) }
     single { ConnectionManager(androidContext(), get(), get(), get()) }
+    
 }
 
 val viewModelModule = module {
