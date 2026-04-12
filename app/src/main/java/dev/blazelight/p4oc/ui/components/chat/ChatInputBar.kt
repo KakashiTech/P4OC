@@ -141,6 +141,7 @@ fun ChatInputBar(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Box(
                     modifier = Modifier
                         .width(12.dp)
                         .height(1.dp)
