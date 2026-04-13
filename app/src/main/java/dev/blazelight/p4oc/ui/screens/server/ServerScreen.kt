@@ -20,6 +20,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -48,6 +51,7 @@ import dev.blazelight.p4oc.core.datastore.RecentServer
 import dev.blazelight.p4oc.core.network.DiscoveredServer
 import dev.blazelight.p4oc.core.network.DiscoveryState
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
+import dev.blazelight.p4oc.ui.components.TuiTopBar
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
@@ -97,123 +101,136 @@ fun ServerScreen(
         viewModel.startDiscovery()
     }
 
-    Scaffold(
-        topBar = { ServerAsciiTopBar(theme = theme, onSettings = onSettings) },
-        containerColor = theme.background
-    ) { padding ->
-        var started by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) { delay(30); started = true }
-        val smoothSpringDp  = spring<Dp>(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)
-        val smoothSpringFlt = spring<Float>(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)
-        val pageAlpha by animateFloatAsState(
-            targetValue = if (started) 1f else 0f,
-            animationSpec = tween(280, easing = FastOutSlowInEasing),
-            label = "page_alpha"
-        )
-        val pageOffsetY by animateDpAsState(
-            targetValue = if (started) Spacing.none else 20.dp,
-            animationSpec = smoothSpringDp,
-            label = "page_offsetY"
-        )
-        val pageScale by animateFloatAsState(
-            targetValue = if (started) 1f else 0.97f,
-            animationSpec = smoothSpringFlt,
-            label = "page_scale"
-        )
+    val smoothSpringDp  = spring<Dp>(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)
+    val smoothSpringFlt = spring<Float>(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)
 
-        // Per-section stagger states
-        var showDiscover by remember { mutableStateOf(false) }
-        var showRecent   by remember { mutableStateOf(false) }
-        var showRemote   by remember { mutableStateOf(false) }
-        var showHelp     by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) {
-            delay(60);  showDiscover = true
-            delay(80);  showRecent   = true
-            delay(80);  showRemote   = true
-            delay(100); showHelp     = true
-        }
+    var started      by remember { mutableStateOf(false) }
+    var showHeader   by remember { mutableStateOf(false) }
+    var showDiscover by remember { mutableStateOf(false) }
+    var showRecent   by remember { mutableStateOf(false) }
+    var showRemote   by remember { mutableStateOf(false) }
+    var showHelp     by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        started    = true
+        delay(40);  showHeader   = true
+        delay(80);  showDiscover = true
+        delay(80);  showRecent   = true
+        delay(80);  showRemote   = true
+        delay(100); showHelp     = true
+    }
 
+    val pageAlpha by animateFloatAsState(
+        targetValue = if (started) 1f else 0f,
+        animationSpec = tween(320, easing = FastOutSlowInEasing), label = "pA"
+    )
+    val pageOffset by animateDpAsState(
+        targetValue = if (started) Spacing.none else 24.dp,
+        animationSpec = smoothSpringDp, label = "pO"
+    )
+    val pageScale by animateFloatAsState(
+        targetValue = if (started) 1f else 0.96f,
+        animationSpec = smoothSpringFlt, label = "pS"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(theme.background)
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .imePadding()
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.sm, vertical = Spacing.md)
                 .alpha(pageAlpha)
-                .offset(y = pageOffsetY)
-                .graphicsLayer { scaleX = pageScale; scaleY = pageScale },
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                .offset(y = pageOffset)
+                .graphicsLayer { scaleX = pageScale; scaleY = pageScale }
         ) {
+            // ── Unified Hero Header (top bar IS the art) ──────────────────
+            ServerHeroHeader(
+                theme = theme,
+                visible = showHeader,
+                springDp = smoothSpringDp,
+                onSettings = onSettings
+            )
 
-            if (uiState.discoveredServers.isNotEmpty() || uiState.discoveryState == DiscoveryState.SCANNING) {
-                val dAlpha  by animateFloatAsState(if (showDiscover) 1f else 0f,
-                    tween(260, easing = FastOutSlowInEasing), label = "dA")
-                val dOffset by animateDpAsState(if (showDiscover) Spacing.none else 16.dp,
-                    smoothSpringDp, label = "dO")
-                val dScale  by animateFloatAsState(if (showDiscover) 1f else 0.96f,
-                    smoothSpringFlt, label = "dS")
-                Column(modifier = Modifier.alpha(dAlpha).offset(y = dOffset)
-                    .graphicsLayer { scaleX = dScale; scaleY = dScale }) {
-                    DiscoveredServersSection(
-                        servers = uiState.discoveredServers,
-                        discoveryState = uiState.discoveryState,
+            // ── Sections ──────────────────────────────────────────────────
+            Column(
+                modifier = Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+            ) {
+                if (uiState.discoveredServers.isNotEmpty() || uiState.discoveryState == DiscoveryState.SCANNING) {
+                    val dA by animateFloatAsState(if (showDiscover) 1f else 0f,
+                        tween(260, easing = FastOutSlowInEasing), label = "dA")
+                    val dO by animateDpAsState(if (showDiscover) Spacing.none else 20.dp,
+                        smoothSpringDp, label = "dO")
+                    val dS by animateFloatAsState(if (showDiscover) 1f else 0.95f,
+                        smoothSpringFlt, label = "dS")
+                    Column(modifier = Modifier.alpha(dA).offset(y = dO)
+                        .graphicsLayer { scaleX = dS; scaleY = dS }) {
+                        DiscoveredServersSection(
+                            servers = uiState.discoveredServers,
+                            discoveryState = uiState.discoveryState,
+                            isConnecting = uiState.isConnecting,
+                            onServerClick = viewModel::connectToDiscoveredServer,
+                            onStopClick = viewModel::stopDiscovery
+                        )
+                    }
+                }
+
+                if (uiState.recentServers.isNotEmpty()) {
+                    val rA by animateFloatAsState(if (showRecent) 1f else 0f,
+                        tween(260, easing = FastOutSlowInEasing), label = "rA")
+                    val rO by animateDpAsState(if (showRecent) Spacing.none else 20.dp,
+                        smoothSpringDp, label = "rO")
+                    val rS by animateFloatAsState(if (showRecent) 1f else 0.95f,
+                        smoothSpringFlt, label = "rS")
+                    Column(modifier = Modifier.alpha(rA).offset(y = rO)
+                        .graphicsLayer { scaleX = rS; scaleY = rS }) {
+                        RecentServersSection(
+                            servers = uiState.recentServers,
+                            isConnecting = uiState.isConnecting,
+                            onServerClick = viewModel::connectToRecentServer,
+                            onRemoveServer = viewModel::removeRecentServer
+                        )
+                    }
+                }
+
+                val fA by animateFloatAsState(if (showRemote) 1f else 0f,
+                    tween(280, easing = FastOutSlowInEasing), label = "fA")
+                val fO by animateDpAsState(if (showRemote) Spacing.none else 20.dp,
+                    smoothSpringDp, label = "fO")
+                val fS by animateFloatAsState(if (showRemote) 1f else 0.95f,
+                    smoothSpringFlt, label = "fS")
+                Column(modifier = Modifier.alpha(fA).offset(y = fO)
+                    .graphicsLayer { scaleX = fS; scaleY = fS }) {
+                    RemoteServerSection(
+                        url = uiState.remoteUrl,
+                        username = uiState.username,
+                        password = uiState.password,
                         isConnecting = uiState.isConnecting,
-                        onServerClick = viewModel::connectToDiscoveredServer,
-                        onStopClick = viewModel::stopDiscovery
+                        onUrlChange = viewModel::setRemoteUrl,
+                        onUsernameChange = viewModel::setUsername,
+                        onPasswordChange = viewModel::setPassword,
+                        onConnect = viewModel::connectToRemote
                     )
                 }
-            }
 
-            if (uiState.recentServers.isNotEmpty()) {
-                val rAlpha  by animateFloatAsState(if (showRecent) 1f else 0f,
-                    tween(260, easing = FastOutSlowInEasing), label = "rA")
-                val rOffset by animateDpAsState(if (showRecent) Spacing.none else 16.dp,
-                    smoothSpringDp, label = "rO")
-                val rScale  by animateFloatAsState(if (showRecent) 1f else 0.96f,
-                    smoothSpringFlt, label = "rS")
-                Column(modifier = Modifier.alpha(rAlpha).offset(y = rOffset)
-                    .graphicsLayer { scaleX = rScale; scaleY = rScale }) {
-                    RecentServersSection(
-                        servers = uiState.recentServers,
-                        isConnecting = uiState.isConnecting,
-                        onServerClick = viewModel::connectToRecentServer,
-                        onRemoveServer = viewModel::removeRecentServer
-                    )
+                uiState.error?.let { error -> ErrorBanner(error = error) }
+
+                val hA by animateFloatAsState(if (showHelp) 1f else 0f,
+                    tween(260, easing = FastOutSlowInEasing), label = "hA")
+                val hO by animateDpAsState(if (showHelp) Spacing.none else 20.dp,
+                    smoothSpringDp, label = "hO")
+                val hS by animateFloatAsState(if (showHelp) 1f else 0.95f,
+                    smoothSpringFlt, label = "hS")
+                Column(modifier = Modifier.alpha(hA).offset(y = hO)
+                    .graphicsLayer { scaleX = hS; scaleY = hS }) {
+                    ServerSetupHelpSection()
                 }
-            }
 
-            val fAlpha  by animateFloatAsState(if (showRemote) 1f else 0f,
-                tween(280, easing = FastOutSlowInEasing), label = "fA")
-            val fOffset by animateDpAsState(if (showRemote) Spacing.none else 16.dp,
-                smoothSpringDp, label = "fO")
-            val fScale  by animateFloatAsState(if (showRemote) 1f else 0.96f,
-                smoothSpringFlt, label = "fS")
-            Column(modifier = Modifier.alpha(fAlpha).offset(y = fOffset)
-                .graphicsLayer { scaleX = fScale; scaleY = fScale }) {
-                RemoteServerSection(
-                    url = uiState.remoteUrl,
-                    username = uiState.username,
-                    password = uiState.password,
-                    isConnecting = uiState.isConnecting,
-                    onUrlChange = viewModel::setRemoteUrl,
-                    onUsernameChange = viewModel::setUsername,
-                    onPasswordChange = viewModel::setPassword,
-                    onConnect = viewModel::connectToRemote
-                )
-            }
-
-            uiState.error?.let { error -> ErrorBanner(error = error) }
-
-            val hAlpha  by animateFloatAsState(if (showHelp) 1f else 0f,
-                tween(260, easing = FastOutSlowInEasing), label = "hA")
-            val hOffset by animateDpAsState(if (showHelp) Spacing.none else 16.dp,
-                smoothSpringDp, label = "hO")
-            val hScale  by animateFloatAsState(if (showHelp) 1f else 0.96f,
-                smoothSpringFlt, label = "hS")
-            Column(modifier = Modifier.alpha(hAlpha).offset(y = hOffset)
-                .graphicsLayer { scaleX = hScale; scaleY = hScale }) {
-                ServerSetupHelpSection()
+                Spacer(Modifier.height(Spacing.xl))
             }
         }
     }
@@ -847,204 +864,155 @@ private fun ScanPulse() {
         style = MaterialTheme.typography.labelSmall, color = theme.accent.copy(alpha = alpha))
 }
 
-// ── Unified ASCII Top Bar ──────────────────────────────────────────────────────
+// ── Unified Hero Header ───────────────────────────────────────────────────
 
 /**
- * Fully custom top bar for ServerScreen.
- * One cohesive block: status bar insets → top frame → title row → bottom frame.
- * No Material3 TopAppBar wrapper — pure ASCII art surface.
+ * The hero header IS the top bar — no separation.
+ * Full-width ASCII art block that flows directly into the scrollable content.
  *
- * Layout (monospace sketch):
- *   ┌─ surface (backgroundElement) ──────────────────────────────┐
- *   │  [status bar inset spacer]                                  │
- *   │  ⌜────────────────────────────────────────────────────────⌝ │
- *   │  ◈ srv ── connect :: server ──────────────── ── ── ─ ⚙   │
- *   │  ⌞────── ·  ·  ·  ──────────────────────────────────────⌟  │
- *   └─────────────────────────────────────────────────────────────┘
+ * Layout (unified top→content flow):
+ *
+ *   ⌜───────────────────────────────────────────────────────────⌝
+ *    ◈ P4OC                              ⚙
+ *    │ connect::server
+ *    └─────────────────────────────────────────────────────────
  */
 @Composable
-private fun ServerAsciiTopBar(
+private fun ServerHeroHeader(
     theme: OpenCodeTheme,
+    visible: Boolean,
+    springDp: androidx.compose.animation.core.SpringSpec<Dp>,
     onSettings: () -> Unit
 ) {
-    val inf = rememberInfiniteTransition(label = "topBarAnim")
+    val hA by animateFloatAsState(if (visible) 1f else 0f,
+        tween(300, easing = FastOutSlowInEasing), label = "hdrA")
+    val hO by animateDpAsState(if (visible) Spacing.none else (-12).dp,
+        springDp, label = "hdrO")
 
-    // Symbol pulse: ◈ breathes between dim and bright
-    val symbolGlow by inf.animateFloat(
+    // Pulsing glow for ◈ symbol
+    val infiniteTransition = rememberInfiniteTransition(label = "heroGlow")
+    val glow by infiniteTransition.animateFloat(
         initialValue = 0.4f, targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            tween(1600, easing = FastOutSlowInEasing), RepeatMode.Reverse
-        ), label = "symGlow"
+            tween(2000, easing = FastOutSlowInEasing), RepeatMode.Reverse
+        ), label = "glow"
     )
-
-    // Dashes slide: subtle scanning left→right offset for the decorative line
-    val dashOffset by inf.animateFloat(
+    // Scanning line offset (travels right)
+    val scanX by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            tween(3000, easing = LinearEasing), RepeatMode.Restart
-        ), label = "dashOffset"
+            tween(3200, easing = LinearEasing), RepeatMode.Restart
+        ), label = "scanX"
     )
 
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = theme.backgroundElement,
-        tonalElevation = 0.dp
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(hA)
+            .offset(y = hO)
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        theme.backgroundElement,
+                        theme.backgroundElement.copy(alpha = 0.7f),
+                        theme.background.copy(alpha = 0f)
+                    )
+                )
+            )
+            .padding(horizontal = Spacing.sm)
+            .padding(top = Spacing.xs, bottom = Spacing.sm)
     ) {
-        Column {
-            // Status bar inset
-            Spacer(Modifier.windowInsetsPadding(WindowInsets.statusBars))
-
-            // ── Top frame line ────────────────────────────────────────────
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.xs),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "⌜",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = theme.accent.copy(alpha = symbolGlow * 0.8f)
-                )
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(Sizing.dividerThickness)
-                        .background(
-                            Brush.horizontalGradient(
-                                colorStops = arrayOf(
-                                    dashOffset * 0.0f to theme.accent.copy(alpha = 0.0f),
-                                    (dashOffset * 0.5f).coerceIn(0f, 1f) to theme.accent.copy(alpha = symbolGlow * 0.7f),
-                                    1f to theme.accent.copy(alpha = 0.0f)
-                                )
-                            )
-                        )
-                )
-                Text(
-                    text = "⌝",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = theme.accent.copy(alpha = symbolGlow * 0.8f)
+        // Top border with scanning pulse
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(text = "⌜", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.accent.copy(alpha = glow * 0.9f))
+            Box(modifier = Modifier.weight(1f).height(Sizing.dividerThickness)) {
+                // Base line
+                Box(modifier = Modifier.fillMaxSize()
+                    .background(theme.border.copy(alpha = 0.25f)))
+                // Scanning highlight
+                Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(0.18f)
+                    .offset(x = (scanX * 10000).dp)  // moves offscreen, clipped by parent
+                    .background(Brush.horizontalGradient(listOf(
+                        theme.accent.copy(alpha = 0f),
+                        theme.accent.copy(alpha = 0.7f),
+                        theme.accent.copy(alpha = 0f)
+                    )))
                 )
             }
+            Text(text = "⌝", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.accent.copy(alpha = glow * 0.9f))
+        }
 
-            // ── Main title row ────────────────────────────────────────────
+        Spacer(Modifier.height(Spacing.xs))
+
+        // Main title row
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
             ) {
-                // ◈ animated icon
-                Text(
-                    text = "◈",
-                    fontFamily = FontFamily.Monospace,
+                Text(text = "◈", fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = theme.accent.copy(alpha = symbolGlow)
-                )
-                Spacer(Modifier.width(Spacing.xs))
-                // Label prefix
-                Text(
-                    text = "srv",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = theme.accent
-                )
-                // Dashed separator
-                Text(
-                    text = " ─",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = theme.border.copy(alpha = 0.6f)
-                )
-                Spacer(Modifier.width(Spacing.xs))
-                // Title
-                Text(
-                    text = "connect",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = theme.text
-                )
-                Text(
-                    text = " :: ",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = theme.textMuted.copy(alpha = 0.45f)
-                )
-                Text(
-                    text = "server",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = theme.textMuted.copy(alpha = 0.7f)
-                )
-                // Spacer with animated scanning dash trail
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = Spacing.xs)
-                        .height(Sizing.dividerThickness)
-                        .background(
-                            Brush.horizontalGradient(
-                                colors = listOf(
-                                    theme.border.copy(alpha = 0.0f),
-                                    theme.border.copy(alpha = 0.3f),
-                                    theme.border.copy(alpha = 0.0f)
-                                )
-                            )
-                        )
-                )
-                // Settings gear
-                Text(
-                    text = "⚙",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = theme.textMuted.copy(alpha = 0.6f),
-                    modifier = Modifier
-                        .clickable(role = Role.Button) { onSettings() }
-                        .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
-                        .testTag("server_settings_button")
-                )
+                    color = theme.accent.copy(alpha = glow),
+                    fontWeight = FontWeight.Bold)
+                Text(text = "P4OC", fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold, color = theme.text)
             }
-
-            // ── Bottom frame line ─────────────────────────────────────────
-            Row(
+            // Settings gear — top right
+            Text(
+                text = "⚙",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.titleMedium,
+                color = theme.textMuted.copy(alpha = 0.7f),
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.xs),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "⌞",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = theme.border.copy(alpha = 0.35f)
-                )
-                // Scanning dot trail — animated brightness sweep
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(Sizing.dividerThickness)
-                        .background(
-                            Brush.horizontalGradient(
-                                colorStops = arrayOf(
-                                    0f to theme.border.copy(alpha = 0.1f),
-                                    dashOffset.coerceIn(0f, 1f) to theme.accent.copy(alpha = 0.5f),
-                                    1f to theme.border.copy(alpha = 0.05f)
-                                )
-                            )
-                        )
-                )
-                Text(
-                    text = "⌟",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = theme.border.copy(alpha = 0.35f)
-                )
-            }
+                    .clickable(role = Role.Button) { onSettings() }
+                    .padding(Spacing.xs)
+                    .testTag("server_settings_button")
+            )
+        }
+
+        // Subtitle breadcrumb row
+        Row(
+            modifier = Modifier.padding(start = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)
+        ) {
+            Text(text = "│", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.accent.copy(alpha = 0.4f))
+            Text(text = "connect", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.textMuted)
+            Text(text = "::", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.textMuted.copy(alpha = 0.4f))
+            Text(text = "server", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = theme.accent.copy(alpha = 0.8f))
+        }
+
+        Spacer(Modifier.height(Spacing.xs))
+
+        // Bottom separator └────
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(text = "└", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.border.copy(alpha = 0.5f))
+            Box(modifier = Modifier.weight(1f).height(Sizing.dividerThickness)
+                .background(Brush.horizontalGradient(listOf(
+                    theme.border.copy(alpha = 0.4f),
+                    theme.border.copy(alpha = 0.05f)
+                )))
+            )
         }
     }
 }
