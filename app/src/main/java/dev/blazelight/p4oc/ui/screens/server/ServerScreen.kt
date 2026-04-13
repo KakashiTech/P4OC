@@ -32,6 +32,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
@@ -101,8 +102,8 @@ fun ServerScreen(
         viewModel.startDiscovery()
     }
 
-    val smoothSpringDp  = spring<Dp>(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)
-    val smoothSpringFlt = spring<Float>(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)
+    val smoothSpringDp  = spring<Dp>(dampingRatio = 0.68f, stiffness = Spring.StiffnessMedium)
+    val smoothSpringFlt = spring<Float>(dampingRatio = 0.68f, stiffness = Spring.StiffnessMedium)
 
     var started      by remember { mutableStateOf(false) }
     var showHeader   by remember { mutableStateOf(false) }
@@ -112,11 +113,11 @@ fun ServerScreen(
     var showHelp     by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         started    = true
-        delay(40);  showHeader   = true
-        delay(80);  showDiscover = true
-        delay(80);  showRecent   = true
-        delay(80);  showRemote   = true
-        delay(100); showHelp     = true
+        delay(30);  showHeader   = true
+        delay(60);  showDiscover = true
+        delay(55);  showRecent   = true
+        delay(55);  showRemote   = true
+        delay(70);  showHelp     = true
     }
 
     val pageAlpha by animateFloatAsState(
@@ -146,16 +147,15 @@ fun ServerScreen(
                 .alpha(pageAlpha)
                 .offset(y = pageOffset)
                 .graphicsLayer { scaleX = pageScale; scaleY = pageScale }
+                .padding(horizontal = Spacing.sm)
         ) {
-            // ── Unified Hero Header (top bar IS the art) ──────────────────
+            // Hero + panel share the same horizontal padding, flowing as one
             ServerHeroHeader(
                 theme = theme,
                 visible = showHeader,
                 springDp = smoothSpringDp,
                 onSettings = onSettings
             )
-
-            // ── Single unified ASCII panel ───────────────────────────────
             UnifiedServerPanel(
                 uiState = uiState,
                 showDiscover = showDiscover,
@@ -233,21 +233,21 @@ private fun UnifiedServerPanel(
     val hO by animateDpAsState(if (showHelp) Spacing.none else 14.dp,
         springDp, label = "hO")
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.sm)
-    ) {
-        // ⌜ top border
-        TuiTopFrame()
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // ⌜ top border — animated scan
+        TuiTopFrame(animated = true)
 
-        // Outer panel body
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(theme.backgroundElement.copy(alpha = 0.45f))
-                .border(Sizing.strokeThin, theme.border.copy(alpha = 0.35f))
-        ) {
+        // Panel body — left + right border drawn by single-pixel Box columns
+        Row(modifier = Modifier.fillMaxWidth()) {
+            // Left border bar
+            Box(modifier = Modifier.width(Sizing.strokeThin)
+                .fillMaxHeight()
+                .background(theme.border.copy(alpha = 0.35f)))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .background(theme.backgroundElement.copy(alpha = 0.4f))
+            ) {
             // ── DISCOVERED SERVERS ──
             if (uiState.discoveredServers.isNotEmpty() || uiState.discoveryState == DiscoveryState.SCANNING) {
                 Column(modifier = Modifier.alpha(dA).offset(y = dO)) {
@@ -300,6 +300,11 @@ private fun UnifiedServerPanel(
             Column(modifier = Modifier.alpha(hA).offset(y = hO)) {
                 ServerSetupHelpSection()
             }
+            }
+            // Right border bar
+            Box(modifier = Modifier.width(Sizing.strokeThin)
+                .fillMaxHeight()
+                .background(theme.border.copy(alpha = 0.35f)))
         }
 
         // ⌞ bottom border
@@ -354,21 +359,35 @@ private fun TuiGradientLine() {
     )
 }
 
-/** Top frame row:  ⌜─────────────────────────⌝  */
+/** Top frame row:  ⌜─────────────────────────⌝  with optional scan pulse */
 @Composable
-private fun TuiTopFrame(accentAlpha: Float = 0.7f) {
+private fun TuiTopFrame(accentAlpha: Float = 0.8f, animated: Boolean = false) {
     val theme = LocalOpenCodeTheme.current
+    val scanX = if (animated) {
+        val tr = rememberInfiniteTransition(label = "topScan")
+        tr.animateFloat(0f, 1f, infiniteRepeatable(tween(2800, easing = LinearEasing),
+            RepeatMode.Restart), label = "sX").value
+    } else -1f
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(text = "⌜", fontFamily = FontFamily.Monospace,
             style = MaterialTheme.typography.bodySmall, color = theme.accent.copy(alpha = accentAlpha))
-        Box(
-            modifier = Modifier.weight(1f).height(Sizing.dividerThickness)
+        Box(modifier = Modifier.weight(1f).height(Sizing.dividerThickness).clipToBounds()) {
+            Box(modifier = Modifier.fillMaxSize()
                 .background(Brush.horizontalGradient(listOf(
-                    theme.accent.copy(alpha = accentAlpha * 0.8f),
-                    theme.border.copy(alpha = 0.1f),
-                    theme.accent.copy(alpha = accentAlpha * 0.8f)
-                )))
-        )
+                    theme.accent.copy(alpha = accentAlpha * 0.9f),
+                    theme.border.copy(alpha = 0.15f),
+                    theme.accent.copy(alpha = accentAlpha * 0.9f)
+                ))))
+            if (animated && scanX >= 0f) {
+                Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(0.15f)
+                    .offset(x = ((scanX - 0.15f) * 2000).dp)
+                    .background(Brush.horizontalGradient(listOf(
+                        theme.accent.copy(alpha = 0f),
+                        theme.accent.copy(alpha = 0.9f),
+                        theme.accent.copy(alpha = 0f)
+                    ))))
+            }
+        }
         Text(text = "⌝", fontFamily = FontFamily.Monospace,
             style = MaterialTheme.typography.bodySmall, color = theme.accent.copy(alpha = accentAlpha))
     }
@@ -394,26 +413,29 @@ private fun TuiBottomFrame(dimAlpha: Float = 0.3f) {
     }
 }
 
-/** Section label row:  ├─[ LABEL ]──────────── (trailing slot optional)  */
+/** Section label row:  ├─[ LABEL ]──────── (trailing slot optional)  */
 @Composable
 private fun TuiSectionLabel(label: String, trailing: @Composable (() -> Unit)? = null) {
     val theme = LocalOpenCodeTheme.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)
     ) {
-        Text(text = "├─[", fontFamily = FontFamily.Monospace,
-            style = MaterialTheme.typography.bodySmall, color = theme.accent.copy(alpha = 0.7f))
-        Text(text = label, fontFamily = FontFamily.Monospace,
-            style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = theme.accent)
+        Text(text = "├─", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, color = theme.accent)
+        Text(text = "[", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, color = theme.accent)
+        Text(text = " $label ", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+            color = theme.accent)
         Text(text = "]", fontFamily = FontFamily.Monospace,
-            style = MaterialTheme.typography.bodySmall, color = theme.accent.copy(alpha = 0.7f))
+            style = MaterialTheme.typography.bodySmall, color = theme.accent)
         Box(
             modifier = Modifier.weight(1f).height(Sizing.dividerThickness)
                 .background(Brush.horizontalGradient(listOf(
-                    theme.accent.copy(alpha = 0.4f),
-                    theme.border.copy(alpha = 0.05f)
+                    theme.accent.copy(alpha = 0.6f),
+                    theme.border.copy(alpha = 0.08f)
                 )))
         )
         trailing?.invoke()
@@ -425,23 +447,18 @@ private fun TuiSectionLabel(label: String, trailing: @Composable (() -> Unit)? =
 @Composable
 private fun ErrorBanner(error: String) {
     val theme = LocalOpenCodeTheme.current
-    Column {
-        TuiTopFrame(accentAlpha = 0.0f)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(theme.error.copy(alpha = 0.06f))
-                .border(Sizing.strokeThin, theme.error.copy(alpha = 0.35f))
-                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(text = "✗", color = theme.error, fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodyMedium)
-            Text(text = error, color = theme.error, fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-        }
-        TuiBottomFrame()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(theme.error.copy(alpha = 0.08f))
+            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = "✗", color = theme.error, fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodyMedium)
+        Text(text = error, color = theme.error, fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
     }
 }
 
@@ -959,15 +976,11 @@ private fun ScanPulse() {
 // ── Unified Hero Header ───────────────────────────────────────────────────
 
 /**
- * The hero header IS the top bar — no separation.
- * Full-width ASCII art block that flows directly into the scrollable content.
+ * Compact hero: top line shared with panel, no dead space.
  *
- * Layout (unified top→content flow):
- *
- *   ⌜───────────────────────────────────────────────────────────⌝
- *    ◈ P4OC                              ⚙
- *    │ connect::server
- *    └─────────────────────────────────────────────────────────
+ *   ◈ P4OC ───────────────────────────── ⚙
+ *   └─ connect :: server
+ *   (panel starts immediately, ⌜ is the panel's own top frame)
  */
 @Composable
 private fun ServerHeroHeader(
@@ -977,24 +990,15 @@ private fun ServerHeroHeader(
     onSettings: () -> Unit
 ) {
     val hA by animateFloatAsState(if (visible) 1f else 0f,
-        tween(300, easing = FastOutSlowInEasing), label = "hdrA")
-    val hO by animateDpAsState(if (visible) Spacing.none else (-12).dp,
+        tween(260, easing = FastOutSlowInEasing), label = "hdrA")
+    val hO by animateDpAsState(if (visible) Spacing.none else (-10).dp,
         springDp, label = "hdrO")
 
-    // Pulsing glow for ◈ symbol
     val infiniteTransition = rememberInfiniteTransition(label = "heroGlow")
     val glow by infiniteTransition.animateFloat(
-        initialValue = 0.4f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            tween(2000, easing = FastOutSlowInEasing), RepeatMode.Reverse
-        ), label = "glow"
-    )
-    // Scanning line offset (travels right)
-    val scanX by infiniteTransition.animateFloat(
-        initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            tween(3200, easing = LinearEasing), RepeatMode.Restart
-        ), label = "scanX"
+        initialValue = 0.5f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1600, easing = FastOutSlowInEasing),
+            RepeatMode.Reverse), label = "glow"
     )
 
     Column(
@@ -1002,109 +1006,52 @@ private fun ServerHeroHeader(
             .fillMaxWidth()
             .alpha(hA)
             .offset(y = hO)
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        theme.backgroundElement,
-                        theme.backgroundElement.copy(alpha = 0.7f),
-                        theme.background.copy(alpha = 0f)
-                    )
-                )
-            )
-            .padding(horizontal = Spacing.sm)
-            .padding(top = Spacing.xs, bottom = Spacing.sm)
+            .background(Brush.verticalGradient(listOf(
+                theme.backgroundElement.copy(alpha = 0.9f),
+                theme.backgroundElement.copy(alpha = 0.5f)
+            )))
+            .padding(horizontal = Spacing.xs)
+            .padding(top = Spacing.sm, bottom = Spacing.xs),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xxs)
     ) {
-        // Top border with scanning pulse
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(text = "⌜", fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodySmall,
-                color = theme.accent.copy(alpha = glow * 0.9f))
-            Box(modifier = Modifier.weight(1f).height(Sizing.dividerThickness)) {
-                // Base line
-                Box(modifier = Modifier.fillMaxSize()
-                    .background(theme.border.copy(alpha = 0.25f)))
-                // Scanning highlight
-                Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(0.18f)
-                    .offset(x = (scanX * 10000).dp)  // moves offscreen, clipped by parent
-                    .background(Brush.horizontalGradient(listOf(
-                        theme.accent.copy(alpha = 0f),
-                        theme.accent.copy(alpha = 0.7f),
-                        theme.accent.copy(alpha = 0f)
-                    )))
-                )
-            }
-            Text(text = "⌝", fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodySmall,
-                color = theme.accent.copy(alpha = glow * 0.9f))
-        }
-
-        Spacer(Modifier.height(Spacing.xs))
-
-        // Main title row
+        // Title row: ◈ P4OC ──────────── ⚙
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.xs),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 Text(text = "◈", fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = theme.accent.copy(alpha = glow),
-                    fontWeight = FontWeight.Bold)
+                    style = MaterialTheme.typography.titleLarge,
+                    color = theme.accent.copy(alpha = glow), fontWeight = FontWeight.Bold)
                 Text(text = "P4OC", fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold, color = theme.text)
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.ExtraBold, color = theme.text)
             }
-            // Settings gear — top right
-            Text(
-                text = "⚙",
-                fontFamily = FontFamily.Monospace,
+            Text(text = "⚙", fontFamily = FontFamily.Monospace,
                 style = MaterialTheme.typography.titleMedium,
-                color = theme.textMuted.copy(alpha = 0.7f),
+                color = theme.textMuted.copy(alpha = 0.65f),
                 modifier = Modifier
                     .clickable(role = Role.Button) { onSettings() }
                     .padding(Spacing.xs)
-                    .testTag("server_settings_button")
-            )
+                    .testTag("server_settings_button"))
         }
-
-        // Subtitle breadcrumb row
-        Row(
-            modifier = Modifier.padding(start = Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)
-        ) {
-            Text(text = "│", fontFamily = FontFamily.Monospace,
+        // Breadcrumb row: └─ connect :: server
+        Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+            Text(text = "└─", fontFamily = FontFamily.Monospace,
                 style = MaterialTheme.typography.bodySmall,
-                color = theme.accent.copy(alpha = 0.4f))
+                color = theme.accent.copy(alpha = 0.5f))
             Text(text = "connect", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall, color = theme.textMuted)
+            Text(text = " :: ", fontFamily = FontFamily.Monospace,
                 style = MaterialTheme.typography.bodySmall,
-                color = theme.textMuted)
-            Text(text = "::", fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodySmall,
-                color = theme.textMuted.copy(alpha = 0.4f))
+                color = theme.textMuted.copy(alpha = 0.35f))
             Text(text = "server", fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-                color = theme.accent.copy(alpha = 0.8f))
+                style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold,
+                color = theme.accent.copy(alpha = 0.85f))
         }
-
         Spacer(Modifier.height(Spacing.xs))
-
-        // Bottom separator └────
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(text = "└", fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodySmall,
-                color = theme.border.copy(alpha = 0.5f))
-            Box(modifier = Modifier.weight(1f).height(Sizing.dividerThickness)
-                .background(Brush.horizontalGradient(listOf(
-                    theme.border.copy(alpha = 0.4f),
-                    theme.border.copy(alpha = 0.05f)
-                )))
-            )
-        }
     }
 }
