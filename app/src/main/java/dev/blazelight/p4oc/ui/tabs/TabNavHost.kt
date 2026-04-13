@@ -4,6 +4,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -35,37 +36,41 @@ import dev.blazelight.p4oc.ui.screens.sessions.SessionListScreen
 import dev.blazelight.p4oc.ui.screens.settings.*
 import dev.blazelight.p4oc.ui.screens.terminal.TerminalScreen
 
-// ── iOS-style spring navigation physics ────────────────────────────────────
+// ── True iOS UINavigationController illusion ────────────────────────────────
+// Three simultaneous layers on every transition:
+//   1. translateX  — new screen slides full-width; old recedes at 1/3 speed (parallax)
+//   2. scale       — outgoing screen shrinks to 0.94f creating depth/z feel
+//   3. alpha       — fade hides the scale artifact cleanly
 //
-// Push  (forward):  new screen slides in from right with spring deceleration
-//                   old screen recedes left (28%) + fades — same as iOS UIKit
-// Pop   (back):     old screen springs out to right; previous slides back from left
-//
-// Spring params tuned to match UINavigationController feel:
-//   dampingRatio 0.86 — critically damped, no overshoot, smooth stop
-//   stiffness Medium  — fast enough to feel snappy, not jarring
+// Spring physics: dampingRatio 0.88 = no bounce, smooth natural stop
+//                 stiffness 400    = ~280ms effective, fast but not jarring
 
-private val pushSpring  = spring<IntOffset>(dampingRatio = 0.86f, stiffness = Spring.StiffnessMedium)
-private val popSpring   = spring<IntOffset>(dampingRatio = 0.82f, stiffness = Spring.StiffnessMedium)
-private val fadeIn160   = tween<Float>(160)
-private val fadeOut140  = tween<Float>(140)
-private val recedeTween = tween<IntOffset>(210)    // exit/pop-enter: simple tween, screen just slides away
+private val pushSpring = spring<IntOffset>(dampingRatio = 0.88f, stiffness = 400f)
+private val popSpring  = spring<IntOffset>(dampingRatio = 0.86f, stiffness = 500f)
+private val paralaxTween = tween<IntOffset>(240, easing = FastOutSlowInEasing)
 
-// Enter: spring slide from right + fast fade-in
+// PUSH ENTER: spring slide from right full-width + fast fade
 private val pushEnter: AnimatedContentTransitionScope<*>.() -> EnterTransition = {
-    slideInHorizontally(pushSpring) { it } + fadeIn(fadeIn160)
+    slideInHorizontally(pushSpring) { it } +
+    fadeIn(tween(180, easing = FastOutSlowInEasing))
 }
-// Exit: recede left 25% + fade (stays in place visually while new screen arrives)
+// PUSH EXIT: old screen recedes 1/3 left + shrinks to 0.94 + fades
+// Key: moves slower than entering screen = parallax depth illusion
 private val pushExit: AnimatedContentTransitionScope<*>.() -> ExitTransition = {
-    slideOutHorizontally(recedeTween) { -it / 4 } + fadeOut(tween(180))
+    slideOutHorizontally(paralaxTween) { -(it / 3) } +
+    scaleOut(tween(240, easing = FastOutSlowInEasing), targetScale = 0.94f) +
+    fadeOut(tween(160, easing = FastOutSlowInEasing))
 }
-// Pop enter: slide back from left 25% + fade (previous screen re-appears)
+// POP ENTER: previous screen slides back from 1/3 left + scale restores
 private val popEnter: AnimatedContentTransitionScope<*>.() -> EnterTransition = {
-    slideInHorizontally(recedeTween) { -it / 4 } + fadeIn(tween(180))
+    slideInHorizontally(paralaxTween) { -(it / 3) } +
+    scaleIn(tween(240, easing = FastOutSlowInEasing), initialScale = 0.94f) +
+    fadeIn(tween(160, easing = FastOutSlowInEasing))
 }
-// Pop exit: spring out to right (gesture-like snap)
+// POP EXIT: spring snap to right, gesture-like
 private val popExit: AnimatedContentTransitionScope<*>.() -> ExitTransition = {
-    slideOutHorizontally(popSpring) { it } + fadeOut(fadeOut140)
+    slideOutHorizontally(popSpring) { it } +
+    fadeOut(tween(120, easing = FastOutSlowInEasing))
 }
 
 /**

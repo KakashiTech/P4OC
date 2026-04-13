@@ -2,6 +2,7 @@ package dev.blazelight.p4oc.ui.navigation
 
 import android.net.Uri
 import androidx.compose.animation.*
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -19,29 +20,47 @@ import dev.blazelight.p4oc.ui.screens.settings.VisualSettingsScreen
 import dev.blazelight.p4oc.ui.screens.setup.SetupScreen
 import dev.blazelight.p4oc.ui.tabs.MainTabScreen
 
-// iOS-style spring specs
-private val iosSpringInt = spring<IntOffset>(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow)
-private val popSpring = spring<IntOffset>(dampingRatio = 0.78f, stiffness = Spring.StiffnessMedium)
+// ── True iOS UINavigationController illusion ────────────────────────────────
+// Three simultaneous layers on every transition:
+//   1. translateX  — new screen slides full-width; old recedes at 30% speed (parallax)
+//   2. scale       — outgoing screen shrinks to 0.94f creating depth/z feel
+//   3. alpha       — fade hides the scale artifact cleanly
+//
+// Spring physics: dampingRatio 0.88 = no bounce, smooth natural stop
+//                 stiffness 400    = ~280ms effective, fast but not jarring
 
-// Enter from right: slide in + fade + subtle scale up (iOS push)
+private val iosEnterSpring = spring<IntOffset>(
+    dampingRatio = 0.88f, stiffness = 400f
+)
+private val iosPopSpring = spring<IntOffset>(
+    dampingRatio = 0.86f, stiffness = 500f
+)
+private val iosFastTween  = tween<IntOffset>(240, easing = FastOutSlowInEasing)
+@Suppress("unused")
+private val iosFloatTween = tween<Float>(200, easing = FastOutSlowInEasing)
+
+// PUSH ENTER: spring slide in from right full-width + fade up
 private val iosPushEnter: AnimatedContentTransitionScope<*>.() -> EnterTransition = {
-    slideInHorizontally(animationSpec = iosSpringInt) { it } +
-    fadeIn(animationSpec = tween(160))
+    slideInHorizontally(iosEnterSpring) { fullWidth -> fullWidth } +
+    fadeIn(tween(180, easing = FastOutSlowInEasing))
 }
-// Exit to left: slide out 25% + fade (content recedes)
+// PUSH EXIT: old screen recedes 28% left + shrinks slightly + fades out
+// This is the key: it moves at 1/3.5 speed = paralax depth
 private val iosPushExit: AnimatedContentTransitionScope<*>.() -> ExitTransition = {
-    slideOutHorizontally(animationSpec = tween<IntOffset>(210)) { -it / 4 } +
-    fadeOut(animationSpec = tween(180))
+    slideOutHorizontally(iosFastTween) { fullWidth -> -(fullWidth / 3) } +
+    scaleOut(tween(240, easing = FastOutSlowInEasing), targetScale = 0.94f) +
+    fadeOut(tween(160, easing = FastOutSlowInEasing))
 }
-// Pop enter from left: slide back + fade
+// POP ENTER: previous screen slides back from left 28% + scale restores to 1f
 private val iosPopEnter: AnimatedContentTransitionScope<*>.() -> EnterTransition = {
-    slideInHorizontally(animationSpec = tween<IntOffset>(210)) { -it / 4 } +
-    fadeIn(animationSpec = tween(180))
+    slideInHorizontally(iosFastTween) { fullWidth -> -(fullWidth / 3) } +
+    scaleIn(tween(240, easing = FastOutSlowInEasing), initialScale = 0.94f) +
+    fadeIn(tween(160, easing = FastOutSlowInEasing))
 }
-// Pop exit to right: spring slide out
+// POP EXIT: spring snap to right (gesture-like) + fade
 private val iosPopExit: AnimatedContentTransitionScope<*>.() -> ExitTransition = {
-    slideOutHorizontally(animationSpec = popSpring) { it } +
-    fadeOut(animationSpec = tween(140))
+    slideOutHorizontally(iosPopSpring) { fullWidth -> fullWidth } +
+    fadeOut(tween(120, easing = FastOutSlowInEasing))
 }
 
 /**
