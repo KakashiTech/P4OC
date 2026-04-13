@@ -57,10 +57,12 @@ private val iosPopEnter: AnimatedContentTransitionScope<*>.() -> EnterTransition
     scaleIn(tween(240, easing = FastOutSlowInEasing), initialScale = 0.94f) +
     fadeIn(tween(160, easing = FastOutSlowInEasing))
 }
-// POP EXIT: spring snap to right (gesture-like) + fade
+// POP EXIT: spring snap to right + gentle scale + fade — symmetric with popEnter
+// scaleOut(0.96f) prevents the hard cut when the screen springs away
 private val iosPopExit: AnimatedContentTransitionScope<*>.() -> ExitTransition = {
     slideOutHorizontally(iosPopSpring) { fullWidth -> fullWidth } +
-    fadeOut(tween(120, easing = FastOutSlowInEasing))
+    scaleOut(tween(220, easing = FastOutSlowInEasing), targetScale = 0.96f) +
+    fadeOut(tween(180, easing = FastOutSlowInEasing))
 }
 
 /**
