@@ -84,21 +84,17 @@ class ChatViewModel constructor(
      * - BUSY: LLM is processing, streaming, or tools are running
      * - AWAITING_INPUT: LLM finished but user hasn't viewed (tab not active)
      * - IDLE: User has viewed the response
+     *
+     * NOTE: does NOT combine with `messages` flow — scanning all parts on every message
+     * update is O(N×M) and fires on every streaming token. isBusy from SessionStatusChanged
+     * is sufficient; the server already tracks running tools and streaming state.
      */
     val sessionConnectionState: StateFlow<TabConnectionState> = combine(
         _uiState.map { it.isBusy }.distinctUntilChanged(),
-        _hasUnreadResponse,
-        messages
-    ) { isBusy, hasUnread, msgs ->
-        val hasRunningTools = msgs.any { msg ->
-            msg.parts.any { part -> part is Part.Tool && part.state is ToolState.Running }
-        }
-        val hasStreamingText = msgs.any { msg ->
-            msg.parts.any { part -> part is Part.Text && part.isStreaming }
-        }
-
+        _hasUnreadResponse
+    ) { isBusy, hasUnread ->
         when {
-            isBusy || hasRunningTools || hasStreamingText -> TabConnectionState.BUSY
+            isBusy -> TabConnectionState.BUSY
             hasUnread -> TabConnectionState.AWAITING_INPUT
             else -> TabConnectionState.IDLE
         }
@@ -250,7 +246,9 @@ class ChatViewModel constructor(
             }
             is OpenCodeEvent.MessagePartUpdated -> {
                 if (event.part.sessionID == sessionId) {
-                    messageStore.upsertPart(event.part, event.delta)
+                    // Route through buffer — upsertPart was bypassing coalescing entirely,
+                    // causing one full recomposition per SSE token (30-50/sec during streaming).
+                    messageStore.upsertPartBuffered(event.part, event.delta)
                 }
             }
             is OpenCodeEvent.MessageRemoved -> {

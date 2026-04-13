@@ -2,7 +2,6 @@ package dev.blazelight.p4oc.ui.screens.chat
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.platform.LocalContext
 import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.domain.model.Message
 import dev.blazelight.p4oc.domain.model.MessageWithParts
@@ -51,11 +50,6 @@ fun groupMessagesIntoBlocks(messages: List<MessageWithParts>): List<MessageBlock
         }
     }
 
-    // Log para diagnóstico
-    val userBlocks = blocks.count { it is MessageBlock.UserBlock }
-    val assistantBlocks = blocks.count { it is MessageBlock.AssistantBlock }
-    AppLog.d(TAG, "groupMessagesIntoBlocks: ${messages.size} messages → $userBlocks user blocks, $assistantBlocks assistant blocks")
-
     return blocks
 }
 
@@ -89,9 +83,10 @@ internal fun MessageBlockView(
                 AppLog.e(TAG, "AssistantBlock with empty messages - skipping render")
                 return
             }
-            AppLog.d(TAG, "Rendering AssistantBlock with ${block.messages.size} messages, parts=${block.messages.sumOf { it.parts.size }}")
             // Optimized: More stable remember key to prevent unnecessary recompositions
-            val mergedMessageWithParts = remember(block.messages.size, block.messages.firstOrNull()?.message?.id) {
+            // Key: the full messages list — updates when content changes, not just size.
+            // Do NOT use messages.size: that key changes on every new part, destroying the cache.
+            val mergedMessageWithParts = remember(block.messages) {
                 MessageWithParts(
                     message = block.messages.first().message,
                     parts = block.messages.flatMap { it.parts }

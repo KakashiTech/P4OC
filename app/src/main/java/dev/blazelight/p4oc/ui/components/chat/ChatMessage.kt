@@ -28,7 +28,6 @@ import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.*
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
-import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolGroupWidget
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
@@ -51,10 +50,8 @@ fun ChatMessage(
     modifier: Modifier = Modifier
 ) {
     if (messageWithParts.message is Message.User) {
-        AppLog.d("ChatMessage", "Rendering USER message: ${messageWithParts.message.id}")
         UserMessage(messageWithParts, modifier)
     } else {
-        AppLog.d("ChatMessage", "Rendering ASSISTANT message: ${messageWithParts.message.id}, parts=${messageWithParts.parts.size}")
         AssistantMessage(
             messageWithParts = messageWithParts,
             onToolApprove = onToolApprove,
@@ -138,7 +135,6 @@ private fun AssistantMessage(
     onRevert: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    AppLog.d("AssistantMessage", "Executing AssistantMessage with ${messageWithParts.parts.size} parts")
     val theme = LocalOpenCodeTheme.current
     val partGroups = remember(messageWithParts.parts) {
         buildList {
@@ -209,14 +205,8 @@ private fun AssistantMessage(
                         }
                     }
                     is PartGroupItem.Other -> when (val part = group.part) {
-                        is Part.Text      -> {
-                            AppLog.d("AssistantMessage", "Rendering TextPart: ${part.text.take(30)}...")
-                            TextPart(part)
-                        }
-                        is Part.Reasoning -> {
-                            AppLog.d("AssistantMessage", "Rendering ReasoningPart: thinking=${part.time?.end == null}")
-                            ReasoningPart(part)
-                        }
+                        is Part.Text      -> TextPart(part)
+                        is Part.Reasoning -> ReasoningPart(part)
                         is Part.File      -> FilePart(part)
                         is Part.Patch     -> CompactPatchPart(part)
                         else              -> Unit

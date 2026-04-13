@@ -629,17 +629,8 @@ private fun ChatTopBar(
     val theme = LocalOpenCodeTheme.current
     var showOverflow by remember { mutableStateOf(false) }
     
-    // Animated glow effect
-    val infiniteTransition = rememberInfiniteTransition(label = "glow")
-    val glowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.6f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "glow"
-    )
+    // NOTE: glow animation is isolated in ConnectionGlowDot below — do NOT inline it here.
+    // An inline rememberInfiniteTransition recomposes the entire ChatTopBar on every frame.
 
     Column(
         modifier = modifier
@@ -800,7 +791,7 @@ private fun ChatTopBar(
                         text = "●",
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (connectionState is ConnectionState.Connected) theme.success.copy(alpha = glowAlpha) else theme.warning.copy(alpha = 0.6f)
+                        color = if (connectionState is ConnectionState.Connected) theme.success else theme.warning.copy(alpha = 0.6f)
                     )
                 }
             }

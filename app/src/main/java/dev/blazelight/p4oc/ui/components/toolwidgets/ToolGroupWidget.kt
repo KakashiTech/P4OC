@@ -1,12 +1,11 @@
 package dev.blazelight.p4oc.ui.components.toolwidgets
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -171,14 +170,12 @@ fun ToolGroupWidget(
             }
         }
         
-        // Compact/Expanded details - show individual widgets
-        AnimatedVisibility(
-            visible = currentState != ToolWidgetState.ONELINE,
-            enter = expandVertically(),
-            exit = shrinkVertically()
-        ) {
+        // Compact/Expanded details - animateContentSize avoids the IntrinsicSize double-pass
+        // that expandVertically() triggers inside LazyColumn.
+        if (currentState != ToolWidgetState.ONELINE) {
             Column(
-                verticalArrangement = Arrangement.spacedBy(1.dp)  // 1.dp = minimal spacing, no token
+                modifier = Modifier.animateContentSize(animationSpec = tween(120)),
+                verticalArrangement = Arrangement.spacedBy(1.dp)
             ) {
                 tools.forEach { tool ->
                     when (currentState) {
