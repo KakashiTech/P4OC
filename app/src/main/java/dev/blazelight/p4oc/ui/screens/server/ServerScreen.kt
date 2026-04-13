@@ -15,8 +15,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,16 +23,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -59,15 +53,8 @@ import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.opencode.OptimizedThemeLoader
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
+import dev.blazelight.p4oc.ui.components.TuiTopBar
 
-// Corner radius tokens - moderado, no exagerado
-private val CardRadius = 8.dp
-private val ButtonRadius = 6.dp
-private val InputRadius = 4.dp
-private val BadgeRadius = 4.dp
-private val DotRadius = 2.dp
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ServerScreen(
     viewModel: ServerViewModel = koinViewModel(),
@@ -111,30 +98,14 @@ fun ServerScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(theme.accent)
-                        )
-                        Text(
-                            text = stringResource(R.string.server_connect_title),
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
-                            color = theme.text
-                        )
-                    }
-                },
+            TuiTopBar(
+                title = stringResource(R.string.server_connect_title),
                 actions = {
                     IconButton(
                         onClick = onSettings,
-                        modifier = Modifier.testTag("server_settings_button")
+                        modifier = Modifier
+                            .size(Sizing.iconButtonMd)
+                            .testTag("server_settings_button")
                     ) {
                         Text(
                             text = "⚙",
@@ -143,10 +114,7 @@ fun ServerScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = theme.background
-                )
+                }
             )
         },
         containerColor = theme.background
@@ -161,7 +129,7 @@ fun ServerScreen(
             label = "server_enter_alpha"
         )
         val offsetY by animateDpAsState(
-            targetValue = if (started) 0.dp else (-8).dp,
+            targetValue = if (started) Spacing.none else (-Spacing.md),
             animationSpec = enterSpringDp,
             label = "server_enter_offset"
         )
@@ -177,11 +145,11 @@ fun ServerScreen(
                 .padding(padding)
                 .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = Spacing.md, vertical = Spacing.lg)
                 .alpha(alpha)
                 .offset(y = offsetY)
                 .graphicsLayer { scaleX = scaleMain; scaleY = scaleMain },
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(Spacing.xl)
         ) {
             // Staggered section animations: lightweight alpha + small offset
             var showDiscover by remember { mutableStateOf(false) }
@@ -207,7 +175,7 @@ fun ServerScreen(
                     label = "discover_alpha"
                 )
                 val dOffset by animateDpAsState(
-                    targetValue = if (showDiscover) 0.dp else (-6).dp,
+                    targetValue = if (showDiscover) Spacing.none else (-Spacing.sm),
                     animationSpec = enterSpringDp,
                     label = "discover_offset"
                 )
@@ -234,7 +202,7 @@ fun ServerScreen(
                     label = "recent_alpha"
                 )
                 val rOffset by animateDpAsState(
-                    targetValue = if (showRecent) 0.dp else (-6).dp,
+                    targetValue = if (showRecent) Spacing.none else (-Spacing.sm),
                     animationSpec = enterSpringDp,
                     label = "recent_offset"
                 )
@@ -259,7 +227,7 @@ fun ServerScreen(
                 label = "form_alpha"
             )
             val fOffset by animateDpAsState(
-                targetValue = if (showRemote) 0.dp else (-6).dp,
+                targetValue = if (showRemote) Spacing.none else (-Spacing.sm),
                 animationSpec = enterSpringDp,
                 label = "form_offset"
             )
@@ -291,7 +259,7 @@ fun ServerScreen(
                 label = "help_alpha"
             )
             val hOffset by animateDpAsState(
-                targetValue = if (showHelp) 0.dp else (-6).dp,
+                targetValue = if (showHelp) Spacing.none else (-Spacing.sm),
                 animationSpec = enterSpringDp,
                 label = "help_offset"
             )
@@ -315,11 +283,11 @@ private fun ErrorBanner(error: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(CardRadius))
+            .clip(RoundedCornerShape(Sizing.radiusNone))
             .background(theme.error.copy(alpha = 0.08f))
-            .border(1.dp, theme.error.copy(alpha = 0.3f), RoundedCornerShape(CardRadius))
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .border(Sizing.strokeMd, theme.error.copy(alpha = 0.3f), RoundedCornerShape(Sizing.radiusNone))
+            .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -353,13 +321,13 @@ private fun SectionHeader(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(Spacing.mdLg)
         ) {
             // Accent indicator dot
             Box(
                 modifier = Modifier
-                    .size(8.dp)
-                    .clip(RoundedCornerShape(DotRadius))
+                    .size(Sizing.indicatorDotActive)
+                    .clip(RoundedCornerShape(Sizing.radiusNone))
                     .background(theme.accent)
             )
             Text(
@@ -387,23 +355,22 @@ private fun DiscoveredServersSection(
     val theme = LocalOpenCodeTheme.current
     val scanning = discoveryState == DiscoveryState.SCANNING
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(CardRadius),
-        colors = CardDefaults.cardColors(containerColor = theme.backgroundElement),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Sizing.radiusNone))
+            .background(theme.backgroundElement)
+            .border(Sizing.strokeThin, theme.border.copy(alpha = 0.4f), RoundedCornerShape(Sizing.radiusNone))
+            .padding(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.lg)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
             SectionHeader(
                 title = stringResource(R.string.discovery_section_title),
                 trailing = {
                     if (scanning) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.md)
                         ) {
                             ScanPulse()
                             Text(
@@ -423,9 +390,9 @@ private fun DiscoveredServersSection(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = theme.accent,
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(BadgeRadius))
+                                    .clip(RoundedCornerShape(Sizing.radiusNone))
                                     .clickable(role = Role.Button) { onStopClick() }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    .padding(horizontal = Spacing.sm, vertical = Spacing.xxs)
                             )
                         }
                     }
@@ -438,13 +405,13 @@ private fun DiscoveredServersSection(
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                     color = theme.textMuted,
-                    modifier = Modifier.padding(vertical = 8.dp)
+                    modifier = Modifier.padding(vertical = Spacing.md)
                 )
             }
 
             if (servers.isNotEmpty()) {
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
                 ) {
                     servers.forEachIndexed { index, server ->
                         DiscoveredServerItem(
@@ -453,18 +420,14 @@ private fun DiscoveredServersSection(
                             onClick = { onServerClick(server) }
                         )
                         if (index < servers.size - 1) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                                    .height(1.dp)
-                                    .background(theme.borderSubtle.copy(alpha = 0.5f))
+                            HorizontalDivider(
+                                thickness = Sizing.dividerThickness,
+                                color = theme.borderSubtle.copy(alpha = 0.5f)
                             )
                         }
                     }
                 }
             }
-        }
     }
 }
 
@@ -482,19 +445,18 @@ private fun DiscoveredServerItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(Sizing.radiusNone))
             .clickable(enabled = !isConnecting, role = Role.Button) { onClick() }
             .background(theme.background.copy(alpha = 0.5f))
             .testTag("discovered_server_${server.serviceName}")
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.mdLg),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(Spacing.lg)
     ) {
-        // Status indicator with rounded corners
         Box(
             modifier = Modifier
-                .size(10.dp)
-                .clip(RoundedCornerShape(3.dp))
+                .size(Sizing.indicatorDotActive)
+                .clip(RoundedCornerShape(Sizing.radiusNone))
                 .background(networkColor)
         )
 
@@ -521,13 +483,12 @@ private fun DiscoveredServerItem(
             )
         }
 
-        // Network badge
         Box(
             modifier = Modifier
-                .clip(RoundedCornerShape(BadgeRadius))
+                .clip(RoundedCornerShape(Sizing.radiusNone))
                 .background(networkColor.copy(alpha = 0.12f))
-                .border(1.dp, networkColor.copy(alpha = 0.3f), RoundedCornerShape(BadgeRadius))
-                .padding(horizontal = 8.dp, vertical = 3.dp)
+                .border(Sizing.strokeMd, networkColor.copy(alpha = 0.3f), RoundedCornerShape(Sizing.radiusNone))
+                .padding(horizontal = Spacing.md, vertical = Spacing.xxs)
         ) {
             Text(
                 text = networkLabel,
@@ -559,19 +520,18 @@ private fun RecentServersSection(
 ) {
     val theme = LocalOpenCodeTheme.current
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(CardRadius),
-        colors = CardDefaults.cardColors(containerColor = theme.backgroundElement),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Sizing.radiusNone))
+            .background(theme.backgroundElement)
+            .border(Sizing.strokeThin, theme.border.copy(alpha = 0.4f), RoundedCornerShape(Sizing.radiusNone))
+            .padding(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.lg)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
             SectionHeader(title = stringResource(R.string.server_recent_servers))
 
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 servers.forEachIndexed { index, server ->
                     RecentServerItem(
                         server = server,
@@ -580,17 +540,13 @@ private fun RecentServersSection(
                         onRemove = { onRemoveServer(server) }
                     )
                     if (index < servers.size - 1) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .height(1.dp)
-                                .background(theme.borderSubtle.copy(alpha = 0.5f))
+                        HorizontalDivider(
+                            thickness = Sizing.dividerThickness,
+                            color = theme.borderSubtle.copy(alpha = 0.5f)
                         )
                     }
                 }
             }
-        }
     }
 }
 
@@ -606,17 +562,17 @@ private fun RecentServerItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(Sizing.radiusNone))
             .clickable(enabled = !isConnecting, role = Role.Button) { onClick() }
             .background(theme.background.copy(alpha = 0.5f))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.mdLg),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(Spacing.lg)
     ) {
         Box(
             modifier = Modifier
-                .size(10.dp)
-                .clip(RoundedCornerShape(3.dp))
+                .size(Sizing.indicatorDotActive)
+                .clip(RoundedCornerShape(Sizing.radiusNone))
                 .background(theme.textMuted.copy(alpha = 0.5f))
         )
 
@@ -646,9 +602,9 @@ private fun RecentServerItem(
             fontFamily = FontFamily.Monospace,
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
+                .clip(RoundedCornerShape(Sizing.radiusNone))
                 .clickable(role = Role.Button) { onRemove() }
-                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .padding(horizontal = Spacing.md, vertical = Spacing.xs)
         )
     }
 }
@@ -669,16 +625,15 @@ private fun RemoteServerSection(
     val theme = LocalOpenCodeTheme.current
     var passwordVisible by remember { mutableStateOf(false) }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(CardRadius),
-        colors = CardDefaults.cardColors(containerColor = theme.backgroundElement),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Sizing.radiusNone))
+            .background(theme.backgroundElement)
+            .border(Sizing.strokeThin, theme.border.copy(alpha = 0.4f), RoundedCornerShape(Sizing.radiusNone))
+            .padding(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.lg)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
             SectionHeader(title = stringResource(R.string.server_remote_title))
 
             Text(
@@ -688,7 +643,7 @@ private fun RemoteServerSection(
                 color = theme.textMuted
             )
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(Spacing.xs))
 
             // URL field
             ModernTextField(
@@ -725,15 +680,15 @@ private fun RemoteServerSection(
                 visualTransformation = if (passwordVisible)
                     VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                shape = RoundedCornerShape(InputRadius),
+                shape = RoundedCornerShape(Sizing.radiusNone),
                 textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                 colors = modernTextFieldColors(theme),
                 trailingIcon = {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
+                            .clip(RoundedCornerShape(Sizing.radiusNone))
                             .clickable(role = Role.Button) { passwordVisible = !passwordVisible }
-                            .padding(8.dp)
+                            .padding(Spacing.md)
                     ) {
                         Text(
                             text = if (passwordVisible) "◉" else "○",
@@ -745,48 +700,44 @@ private fun RemoteServerSection(
                 }
             )
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(Spacing.xs))
 
-            // Modern connect button
-            Button(
-                onClick = onConnect,
-                enabled = url.isNotBlank() && !isConnecting,
+            val canConnect = url.isNotBlank() && !isConnecting
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(44.dp)
-                    .testTag("server_connect_button"),
-                shape = RoundedCornerShape(ButtonRadius),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = theme.accent,
-                    contentColor = theme.background,
-                    disabledContainerColor = theme.accent.copy(alpha = 0.2f),
-                    disabledContentColor = theme.textMuted.copy(alpha = 0.5f)
-                ),
-                elevation = ButtonDefaults.buttonElevation(
-                    defaultElevation = 2.dp,
-                    pressedElevation = 0.dp,
-                    disabledElevation = 0.dp
-                )
+                    .height(Sizing.buttonHeightLg)
+                    .clip(RoundedCornerShape(Sizing.radiusNone))
+                    .background(if (canConnect) theme.accent else theme.accent.copy(alpha = 0.2f))
+                    .then(
+                        if (canConnect) Modifier.clickable(role = Role.Button) { onConnect() }
+                        else Modifier
+                    )
+                    .testTag("server_connect_button")
+                    .padding(horizontal = Spacing.md),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
             ) {
                 if (isConnecting) {
                     TuiLoadingIndicator()
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(Spacing.mdLg))
                     Text(
                         stringResource(R.string.button_connecting),
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.Medium,
+                        color = theme.background
                     )
                 } else {
                     Text(
                         "▶  ${stringResource(R.string.button_connect)}",
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (canConnect) theme.background else theme.textMuted.copy(alpha = 0.5f)
                     )
                 }
             }
-        }
     }
 }
 
@@ -797,33 +748,32 @@ private fun ServerSetupHelpSection() {
     val theme = LocalOpenCodeTheme.current
     var expanded by remember { mutableStateOf(false) }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(CardRadius),
-        colors = CardDefaults.cardColors(containerColor = theme.backgroundElement.copy(alpha = 0.7f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Sizing.radiusNone))
+            .background(theme.backgroundElement.copy(alpha = 0.7f))
+            .border(Sizing.strokeThin, theme.border.copy(alpha = 0.3f), RoundedCornerShape(Sizing.radiusNone))
+            .padding(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(Sizing.radiusNone))
                     .clickable(role = Role.Button) { expanded = !expanded }
-                    .padding(vertical = 4.dp),
+                    .padding(vertical = Spacing.xs),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.mdLg)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(8.dp)
-                            .clip(RoundedCornerShape(DotRadius))
+                            .size(Sizing.indicatorDotActive)
+                            .clip(RoundedCornerShape(Sizing.radiusNone))
                             .background(theme.textMuted)
                     )
                     Text(
@@ -846,7 +796,7 @@ private fun ServerSetupHelpSection() {
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.lg)) {
                     Text(
                         text = stringResource(R.string.server_setup_subtitle),
                         style = MaterialTheme.typography.bodySmall,
@@ -858,24 +808,23 @@ private fun ServerSetupHelpSection() {
                     SetupStep("2", stringResource(R.string.server_setup_step2_title), stringResource(R.string.server_setup_step2_cmd))
                     SetupStep("3", stringResource(R.string.server_setup_step3_title), stringResource(R.string.server_setup_step3_cmd))
 
-                    // Tip box
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(RoundedCornerShape(Sizing.radiusNone))
                             .background(theme.accent.copy(alpha = 0.08f))
-                            .border(1.dp, theme.accent.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                            .border(Sizing.strokeMd, theme.accent.copy(alpha = 0.2f), RoundedCornerShape(Sizing.radiusNone))
+                            .padding(Spacing.lg),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.md)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(RoundedCornerShape(2.dp))
+                                    .size(Sizing.indicatorDot)
+                                    .clip(RoundedCornerShape(Sizing.radiusNone))
                                     .background(theme.accent)
                             )
                             Text(
@@ -902,22 +851,21 @@ private fun ServerSetupHelpSection() {
                     }
                 }
             }
-        }
     }
 }
 
 @Composable
 private fun SetupStep(number: String, title: String, command: String) {
     val theme = LocalOpenCodeTheme.current
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.Top
         ) {
             Box(
                 modifier = Modifier
-                    .size(18.dp)
-                    .clip(RoundedCornerShape(4.dp))
+                    .size(Sizing.iconSm)
+                    .clip(RoundedCornerShape(Sizing.radiusNone))
                     .background(theme.accent.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
@@ -946,11 +894,11 @@ private fun ModernCodeBlock(command: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(Sizing.radiusNone))
             .background(theme.background)
-            .border(1.dp, theme.border.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .border(Sizing.strokeMd, theme.border.copy(alpha = 0.6f), RoundedCornerShape(Sizing.radiusNone))
+            .padding(horizontal = Spacing.lg, vertical = Spacing.mdLg),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -1000,7 +948,7 @@ private fun ModernTextField(
         }) else null,
         singleLine = true,
         modifier = modifier,
-        shape = RoundedCornerShape(InputRadius),
+        shape = RoundedCornerShape(Sizing.radiusNone),
         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
         colors = modernTextFieldColors(theme)
     )
@@ -1035,8 +983,8 @@ private fun ScanPulse() {
     )
     Box(
         modifier = Modifier
-            .size(8.dp)
-            .clip(RoundedCornerShape(2.dp))
+            .size(Sizing.indicatorDotActive)
+            .clip(RoundedCornerShape(Sizing.radiusNone))
             .alpha(alpha)
             .background(theme.accent)
     )
