@@ -66,6 +66,7 @@ import dev.blazelight.p4oc.ui.components.chat.JumpToBottomButton
 import dev.blazelight.p4oc.ui.components.chat.ModelAgentSelectorBar
 import dev.blazelight.p4oc.ui.components.command.CommandPalette
 import dev.blazelight.p4oc.ui.components.question.InlineQuestionCard
+import dev.blazelight.p4oc.ui.components.todo.TodoLiveDot
 import dev.blazelight.p4oc.ui.components.todo.TodoTrackerSheet
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
 import dev.blazelight.p4oc.ui.components.TuiDropdownMenu
@@ -293,6 +294,7 @@ fun ChatScreen(
                 isBusy = uiState.isBusy,
                 branchName = branchName,
                 todoCount = uiState.todos.count { it.status == "in_progress" || it.status == "pending" },
+                inProgressCount = uiState.todos.count { it.status == "in_progress" },
                 onTodos = {
                     viewModel.loadTodos()
                     showTodoTracker = true
@@ -507,6 +509,7 @@ private fun ChatTopBar(
     isBusy: Boolean,
     branchName: String? = null,
     todoCount: Int = 0,
+    inProgressCount: Int = 0,
     onTodos: () -> Unit = {}
 ) {
     // Unified Chat TopBar - coherent with MainTabScreen style
@@ -723,15 +726,36 @@ private fun ChatTopBar(
                 }
 
                 if (todoCount > 0) {
-                    Text(
-                        text = "[$todoCount]",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = theme.accent.copy(alpha = 0.8f),
+                    Row(
                         modifier = Modifier
                             .clickable(role = Role.Button, onClick = onTodos)
-                            .padding(2.dp)
-                    )
+                            .padding(2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "[",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.textMuted.copy(alpha = 0.6f)
+                        )
+                        if (inProgressCount > 0) {
+                            TodoLiveDot(activeCount = inProgressCount)
+                        } else {
+                            Text(
+                                text = "$todoCount",
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = theme.accent.copy(alpha = 0.8f)
+                            )
+                        }
+                        Text(
+                            text = "]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.textMuted.copy(alpha = 0.6f)
+                        )
+                    }
                 }
 
                 // ASCII menu button with special brackets

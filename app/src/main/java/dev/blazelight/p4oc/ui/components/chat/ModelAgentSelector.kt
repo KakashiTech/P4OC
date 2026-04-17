@@ -3,6 +3,7 @@ package dev.blazelight.p4oc.ui.components.chat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -75,7 +76,8 @@ fun ModelAgentSelectorBar(
 ) {
     val theme = LocalOpenCodeTheme.current
     var showModelPicker by remember { mutableStateOf(false) }
-    
+    var showAgentSheet by remember { mutableStateOf(false) }
+
     val selectModelText = stringResource(R.string.select_model)
     val selectedModelName = remember(selectedModel, availableModels, selectModelText) {
         if (selectedModel == null) return@remember selectModelText
@@ -91,20 +93,24 @@ fun ModelAgentSelectorBar(
         horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // BUILD button - ASCII style with special parentheses
+        // AGENT button — tap to cycle, long-press to open full switcher sheet
         if (availableAgents.isNotEmpty()) {
             val currentAgent = availableAgents.find { it.name == selectedAgent }
             val agentColor = getAgentColor(currentAgent)
-            
+
             Row(
                 modifier = Modifier
-                    .clickable(role = Role.Button) {
-                        val currentIndex = availableAgents.indexOfFirst { it.name == selectedAgent }
-                        val nextIndex = (currentIndex + 1) % availableAgents.size
-                        onAgentSelected(availableAgents[nextIndex].name)
-                    }
+                    .combinedClickable(
+                        role = Role.Button,
+                        onClick = {
+                            val currentIndex = availableAgents.indexOfFirst { it.name == selectedAgent }
+                            val nextIndex = (currentIndex + 1) % availableAgents.size
+                            onAgentSelected(availableAgents[nextIndex].name)
+                        },
+                        onLongClick = { showAgentSheet = true }
+                    )
                     .padding(horizontal = 6.dp, vertical = 2.dp)
-                    .testTag("build_button"),
+                    .testTag("agent_button"),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -182,12 +188,21 @@ fun ModelAgentSelectorBar(
             selectedModel = selectedModel,
             favoriteModels = favoriteModels,
             recentModels = recentModels,
-            onModelSelected = { 
+            onModelSelected = {
                 onModelSelected(it)
                 showModelPicker = false
             },
             onToggleFavorite = onToggleFavorite,
             onDismiss = { showModelPicker = false }
+        )
+    }
+
+    if (showAgentSheet && availableAgents.isNotEmpty()) {
+        AgentSwitcherSheet(
+            agents = availableAgents,
+            selectedAgent = selectedAgent,
+            onAgentSelected = onAgentSelected,
+            onDismiss = { showAgentSheet = false }
         )
     }
 }
