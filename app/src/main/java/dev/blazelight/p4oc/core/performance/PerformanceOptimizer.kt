@@ -72,30 +72,9 @@ object PerformanceOptimizer {
         optimizationScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         isInitialized = true
         
-        optimizationScope?.launch {
-            // Performance monitoring loop
-            while (isActive) {
-                try {
-                    processPerformanceEvents()
-                    optimizeCache()
-                    delay(16) // 60 FPS monitoring
-                } catch (e: Exception) {
-                    delay(100)
-                }
-            }
-        }
-        
-        optimizationScope?.launch {
-            // Predictive preloading
-            while (isActive) {
-                try {
-                    performPredictivePreloading(context)
-                    delay(1000) // Check every second
-                } catch (e: Exception) {
-                    delay(5000)
-                }
-            }
-        }
+        // Background loops disabled — were firing every 16ms draining an empty channel
+        // and every 1000ms with no-op predictive preloading. Real metrics still recorded
+        // via recordPerformanceEvent() and queryable via getAllMetrics().
     }
     
     private suspend fun processPerformanceEvents() {

@@ -46,6 +46,7 @@ captures/
 
 # Temp files
 temp_opencode_analysis/
+checklist.md
 # Images (except screenshots/ and app resources)
 *.png
 *.jpg

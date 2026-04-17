@@ -54,47 +54,9 @@ object OptimizedThemeLoader {
      */
     fun loadThemeImmediate(context: Context, themeName: String, isDark: Boolean): OpenCodeTheme {
         val cacheKey = "${themeName}_${isDark}"
-        android.util.Log.d("THEME_LOADER", "🔍 loadThemeImmediate: theme='$themeName', dark=$isDark, cacheKey='$cacheKey'")
-        
-        // Try to get from cache first (instant)
-        themeCache[cacheKey]?.let { cachedTheme ->
-            android.util.Log.d("THEME_LOADER", "✅ Cache HIT! Found cached theme: ${cachedTheme.name}")
-            // Start background update to ensure we have the latest theme
-            initializationScope?.launch {
-                try {
-                    android.util.Log.d("THEME_LOADER", "🔄 Background update: Loading latest theme...")
-                    val latestTheme = ThemeCacheManager.loadTheme(context, themeName, isDark)
-                    themeCache[cacheKey] = latestTheme
-                    android.util.Log.d("THEME_LOADER", "✅ Background update completed: ${latestTheme.name}")
-                } catch (e: Exception) {
-                    android.util.Log.e("THEME_LOADER", "❌ Background update failed, keeping cached theme", e)
-                }
-            }
-            return cachedTheme
-        }
-        
-        android.util.Log.d("THEME_LOADER", "❌ Cache MISS! Theme not found in cache")
-        android.util.Log.d("THEME_LOADER", "🏗️ Creating fallback theme...")
-        
-        // If not in cache, create fallback and start loading
+        themeCache[cacheKey]?.let { return it }
         val fallbackTheme = createFallbackTheme(isDark)
-        android.util.Log.d("THEME_LOADER", "📦 Fallback theme created: ${fallbackTheme.name}")
         themeCache[cacheKey] = fallbackTheme
-        
-        android.util.Log.d("THEME_LOADER", "🔄 Starting background load of real theme...")
-        // Load real theme in background
-        initializationScope?.launch {
-            try {
-                android.util.Log.d("THEME_LOADER", "🔄 Background loading: Loading real theme...")
-                val realTheme = ThemeCacheManager.loadTheme(context, themeName, isDark)
-                themeCache[cacheKey] = realTheme
-                android.util.Log.d("THEME_LOADER", "✅ Real theme loaded in background: ${realTheme.name}")
-            } catch (e: Exception) {
-                android.util.Log.e("THEME_LOADER", "❌ Background load failed, keeping fallback theme", e)
-            }
-        }
-        
-        android.util.Log.d("THEME_LOADER", "⚠️ Returning FALLBACK theme: ${fallbackTheme.name}")
         return fallbackTheme
     }
     

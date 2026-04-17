@@ -61,6 +61,10 @@ class ConnectionManager constructor(
     val hasConnection: Boolean
         get() = _connection.value != null
 
+    /** The base URL of the currently active connection, or null if not connected. */
+    val currentBaseUrl: String?
+        get() = _connection.value?.config?.url
+
     fun requireApi(): OpenCodeApi {
         return _connection.value?.api
             ?: throw IllegalStateException("Not connected to any server")

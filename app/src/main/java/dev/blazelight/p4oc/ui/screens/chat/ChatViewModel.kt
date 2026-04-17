@@ -70,6 +70,12 @@ class ChatViewModel constructor(
     /** Convenience alias — ChatScreen reads this directly. */
     val messages: StateFlow<List<MessageWithParts>> = messageStore.messages
 
+    /** Monotonic version — use as remember() key instead of messages list reference. */
+    val messagesVersion: StateFlow<Long> = messageStore.messagesVersion
+
+    /** IDs mutated in the last SSE flush — used for incremental flatItems patching. */
+    val lastChangedIds: StateFlow<Set<String>> = messageStore.lastChangedIds
+
     val connectionState: StateFlow<ConnectionState> = connectionManager.connectionState
 
     private val _branchName = MutableStateFlow<String?>(null)

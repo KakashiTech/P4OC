@@ -581,16 +581,19 @@ class EventMapper constructor(
                 OpenCodeEvent.PartRemoved(props.sessionID, props.messageID, props.partID)
             }
             "session.created" -> {
-                val wrapper = json.decodeFromJsonElement<SessionEventDto>(dto.properties)
-                OpenCodeEvent.SessionCreated(SessionMapper.mapToDomain(wrapper.info))
+                val sessionDto = json.decodeFromJsonElement<SessionEventDto>(dto.properties).info
+                    ?: json.decodeFromJsonElement<SessionDto>(dto.properties)
+                OpenCodeEvent.SessionCreated(SessionMapper.mapToDomain(sessionDto))
             }
             "session.updated" -> {
-                val wrapper = json.decodeFromJsonElement<SessionEventDto>(dto.properties)
-                OpenCodeEvent.SessionUpdated(SessionMapper.mapToDomain(wrapper.info))
+                val sessionDto = json.decodeFromJsonElement<SessionEventDto>(dto.properties).info
+                    ?: json.decodeFromJsonElement<SessionDto>(dto.properties)
+                OpenCodeEvent.SessionUpdated(SessionMapper.mapToDomain(sessionDto))
             }
             "session.deleted" -> {
-                val wrapper = json.decodeFromJsonElement<SessionEventDto>(dto.properties)
-                OpenCodeEvent.SessionDeleted(SessionMapper.mapToDomain(wrapper.info))
+                val sessionDto = json.decodeFromJsonElement<SessionEventDto>(dto.properties).info
+                    ?: json.decodeFromJsonElement<SessionDto>(dto.properties)
+                OpenCodeEvent.SessionDeleted(SessionMapper.mapToDomain(sessionDto))
             }
             "session.status" -> {
                 val statusDto = json.decodeFromJsonElement<SessionStatusEventDto>(dto.properties)
@@ -753,7 +756,7 @@ private data class SessionStatusEventDto(
 
 @kotlinx.serialization.Serializable
 private data class SessionEventDto(
-    val info: SessionDto
+    val info: SessionDto? = null
 )
 
 @kotlinx.serialization.Serializable

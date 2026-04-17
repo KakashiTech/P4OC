@@ -92,6 +92,17 @@ android {
             isUniversalApk = false
         }
     }
+
+    // C++ Native build for AnimationOptimizer
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    // NDK version (optional but recommended)
+    ndkVersion = "26.1.10909125"
 }
 
 kotlin {

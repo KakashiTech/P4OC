@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.*
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
+import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolGroupWidget
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
@@ -178,38 +179,48 @@ private fun AssistantMessage(
         Column(
             modifier = Modifier
                 .weight(1f)
-                .padding(start = 10.dp, end = 0.dp),  // Remove end padding since LazyColumn handles it
+                .padding(start = 10.dp, end = 0.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            // key{} lets Compose identify each group by a stable ID so unchanged groups
+            // are skipped entirely during streaming — no recomposition for already-rendered parts.
             partGroups.forEach { group ->
-                when (group) {
-                    is PartGroupItem.Tools -> {
-                        ToolGroupWidget(
-                            tools = group.tools,
-                            defaultState = defaultToolWidgetState,
-                            onToolApprove = onToolApprove,
-                            onToolDeny = onToolDeny,
-                            onOpenSubSession = onOpenSubSession
-                        )
-                        group.tools.forEach { tool ->
-                            tool.callID?.let { callId ->
-                                pendingPermissionsByCallId[callId]?.let { perm ->
-                                    InlinePermissionPrompt(
-                                        permission = perm,
-                                        onAllow  = { onToolApprove(perm.id) },
-                                        onAlways = { onToolAlways(perm.id) },
-                                        onReject = { onToolDeny(perm.id) }
-                                    )
+                val groupKey = when (group) {
+                    is PartGroupItem.Tools -> "tools_${group.tools.firstOrNull()?.id ?: "empty"}"
+                    is PartGroupItem.Other -> "part_${group.part.id}"
+                }
+                key(groupKey) {
+                    when (group) {
+                        is PartGroupItem.Tools -> {
+                            ToolGroupWidget(
+                                tools = group.tools,
+                                defaultState = defaultToolWidgetState,
+                                onToolApprove = onToolApprove,
+                                onToolDeny = onToolDeny,
+                                onOpenSubSession = onOpenSubSession
+                            )
+                            group.tools.forEach { tool ->
+                                tool.callID?.let { callId ->
+                                    pendingPermissionsByCallId[callId]?.let { perm ->
+                                        key(perm.id) {
+                                            InlinePermissionPrompt(
+                                                permission = perm,
+                                                onAllow  = { onToolApprove(perm.id) },
+                                                onAlways = { onToolAlways(perm.id) },
+                                                onReject = { onToolDeny(perm.id) }
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
-                    is PartGroupItem.Other -> when (val part = group.part) {
-                        is Part.Text      -> TextPart(part)
-                        is Part.Reasoning -> ReasoningPart(part)
-                        is Part.File      -> FilePart(part)
-                        is Part.Patch     -> CompactPatchPart(part)
-                        else              -> Unit
+                        is PartGroupItem.Other -> when (val part = group.part) {
+                            is Part.Text      -> TextPart(part)
+                            is Part.Reasoning -> ReasoningPart(part)
+                            is Part.File      -> FilePart(part)
+                            is Part.Patch     -> CompactPatchPart(part)
+                            else              -> Unit
+                        }
                     }
                 }
             }
@@ -236,11 +247,41 @@ private fun AssistantMessage(
 }
 
 /**
- * Sealed class for grouping parts: either a batch of consecutive tools or a single other part
+ * Sealed class for grouping parts: either a batch of consecutive tools or a single other part.
+ * @Stable lets Compose skip recomposition of unchanged items in the forEach loop.
  */
+@Stable
 private sealed class PartGroupItem {
-    data class Tools(val tools: List<Part.Tool>) : PartGroupItem()
-    data class Other(val part: Part) : PartGroupItem()
+    @Stable data class Tools(val tools: List<Part.Tool>) : PartGroupItem()
+    @Stable data class Other(val part: Part) : PartGroupItem()
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+internal fun FlatTextPart(part: Part.Text) = TextPart(part)
+
+@Composable
+internal fun FlatReasoningPart(part: Part.Reasoning) = ReasoningPart(part)
+
+@Composable
+internal fun FlatFilePart(part: Part.File) = FilePart(part)
+
+@Composable
+internal fun FlatPatchPart(part: Part.Patch) = CompactPatchPart(part)
+
+@Composable
+internal fun FlatInlinePermission(
+    perm: dev.blazelight.p4oc.domain.model.Permission,
+    onAllow: (String) -> Unit,
+    onAlways: (String) -> Unit,
+    onReject: (String) -> Unit
+) {
+    InlinePermissionPrompt(
+        permission = perm,
+        onAllow  = { onAllow(perm.id) },
+        onAlways = { onAlways(perm.id) },
+        onReject = { onReject(perm.id) }
+    )
 }
 
 @Composable
@@ -279,102 +320,95 @@ private fun TextPart(part: Part.Text) {
     }
 }
 
-// ── REASONING — terminal comment block ────────────────────────────────────────
-// Collapsed: "# thinking... [3s] ▸"  — looks like a shell comment
-// Expanded: indented block with left dim bar
+// ── THOUGHT — single-pass flat row, zero IntrinsicSize overhead ───────────────
+// Header is a single Text with AnnotatedString — no Row/Spacer/weight.
+// This gives LazyColumn a predictable, stable height on first measure.
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 private fun ReasoningPart(part: Part.Reasoning) {
     val theme     = LocalOpenCodeTheme.current
     val clipboard = LocalClipboardManager.current
     val haptic    = LocalHapticFeedback.current
-    var expanded  by remember { mutableStateOf(false) }
+
+    // Keyed on part.id so state survives item recycling in LazyColumn
+    var expanded by remember(part.id) { mutableStateOf(false) }
 
     val isThinking = part.time?.end == null
-    val duration = remember(part.time) {
+
+    // All colors in remember — avoid .copy() allocation on every recompose
+    val thoughtColor    = remember(theme.textMuted) { theme.textMuted.copy(alpha = 0.45f) }
+    val thoughtColorDim = remember(theme.textMuted) { theme.textMuted.copy(alpha = 0.25f) }
+
+    val durationLabel = remember(part.time) {
         part.time?.let { t ->
             val ms = (t.end ?: t.start) - t.start
             when {
-                ms < 1_000  -> " [${ms}ms]"
-                ms < 60_000 -> " [${ms / 1_000}s]"
-                else        -> " [${ms / 60_000}m${(ms % 60_000) / 1_000}s]"
+                ms < 1_000  -> "${ms}ms"
+                ms < 60_000 -> "${ms / 1_000}s"
+                else        -> "${ms / 60_000}m${(ms % 60_000) / 1_000}s"
             }
-        } ?: ""
+        }
     }
-    // warning is orange/amber in most themes — adapts to active theme
-    // remember(theme) not remember(theme.warning): theme identity is stable per-recompose
-    val reasoningColor    = remember(theme) { theme.warning.copy(alpha = 0.80f) }
-    val reasoningBarColor = remember(theme) { theme.warning.copy(alpha = 0.50f) }
+
+    // Single Text node — no Row/Spacer/weight → single layout pass, fixed height
+    val headerText = remember(isThinking, durationLabel, expanded, part.text.isNotEmpty()) {
+        buildString {
+            append(if (isThinking) "· thinking…" else "· thought")
+            if (!isThinking && durationLabel != null) append("  [$durationLabel]")
+            if (part.text.isNotEmpty()) append(if (expanded) "  ▾" else "  ▸")
+        }
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        // Header line — always a single monospace comment line
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(role = Role.Button) { expanded = !expanded }
-                .padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            if (isThinking) TuiLoadingIndicator()
+        // If actively thinking show the spinner inline, otherwise pure Text header
+        if (isThinking) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = Spacing.xxs),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+            ) {
+                TuiLoadingIndicator()
+                Text(
+                    text = "thinking…",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = thoughtColor
+                )
+            }
+        } else {
             Text(
-                text = buildString {
-                    // ⟳ U+27F3 — clockwise open circle arrow, monospace-safe
-                    append("\u27F3 ")
-                    append(if (isThinking) "thinking..." else "reasoning$duration")
-                    append(if (expanded) "  \u25BE" else "  \u25B8")
-                },
+                text = headerText,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = reasoningColor,
+                fontSize = 11.sp,
+                color = thoughtColorDim,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.Button) { expanded = !expanded }
+                    .padding(vertical = Spacing.xxs)
             )
         }
 
-        // Expanded content — indented block, Box overlay avoids IntrinsicSize double-pass
         if (expanded && part.text.isNotEmpty()) {
-            Box(
+            Text(
+                text = part.text,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = thoughtColorDim,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 2.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .width(2.dp)
-                        .matchParentSize()
-                        .background(reasoningBarColor)
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 12.dp)
-                        .combinedClickable(
-                            onClick = { expanded = !expanded },
-                            onLongClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                clipboard.setText(AnnotatedString(part.text))
-                            },
-                            onLongClickLabel = "Copy reasoning",
-                            role = Role.Button
-                        )
-                ) {
-                    if (isThinking) {
-                        // Plain text while actively streaming — Markdown parsing is O(n) and
-                        // thrashes the main thread when called on every reasoning token.
-                        // Switch to full Markdown only after thinking completes.
-                        Text(
-                            text = part.text,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            color = reasoningColor.copy(alpha = 0.7f),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    } else {
-                        TertiaryStreamingMarkdown(text = part.text, modifier = Modifier.fillMaxWidth())
-                    }
-                }
-            }
+                    .padding(start = Spacing.sm, top = 2.dp, bottom = 2.dp)
+                    .combinedClickable(
+                        onClick = { expanded = !expanded },
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            clipboard.setText(AnnotatedString(part.text))
+                        },
+                        onLongClickLabel = "Copy thought",
+                        role = Role.Button
+                    )
+            )
         }
     }
 }

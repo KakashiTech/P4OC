@@ -22,11 +22,16 @@ import kotlin.system.measureTimeMillis
  * Monitors memory usage, cleans up resources, and provides memory-safe operations.
  */
 object MemoryManager {
-    
+
     private val memoryMutex = Mutex()
     private val cleanupTasks = mutableSetOf<() -> Unit>()
     private var monitoringScope: CoroutineScope? = null
     private var isMonitoring = false
+
+    // Native pressure classifier with hysteresis (avoids flapping on transient spikes)
+    private val nativeClassifier: Long = NativeMemorySupport.createClassifier()
+    // Slab pool: 64 × 4KB slabs pre-allocated natively for message text buffering
+    val slabPool: Long = NativeMemorySupport.createSlabPool(slabSize = 4096, poolSize = 64)
     
     data class MemoryStats(
         val totalMemory: Long,
@@ -64,18 +69,21 @@ object MemoryManager {
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val memoryInfo = ActivityManager.MemoryInfo()
         activityManager.getMemoryInfo(memoryInfo)
-        
+
         val totalMemory = memoryInfo.totalMem
         val availableMemory = memoryInfo.availMem
         val usedMemory = totalMemory - availableMemory
-        
-        val memoryPressure = when {
-            availableMemory < totalMemory * 0.05 -> MemoryPressure.CRITICAL
-            availableMemory < totalMemory * 0.15 -> MemoryPressure.HIGH
-            availableMemory < totalMemory * 0.30 -> MemoryPressure.MEDIUM
-            else -> MemoryPressure.LOW
+
+        // Native integer-only classification with hysteresis — no Double boxing
+        val nativeLevel = NativeMemorySupport.classifyWithHysteresis(
+            nativeClassifier, totalMemory, availableMemory, minCycles = 2)
+        val memoryPressure = when (nativeLevel) {
+            NativeMemorySupport.PressureLevel.CRITICAL -> MemoryPressure.CRITICAL
+            NativeMemorySupport.PressureLevel.HIGH     -> MemoryPressure.HIGH
+            NativeMemorySupport.PressureLevel.MEDIUM   -> MemoryPressure.MEDIUM
+            else                                       -> MemoryPressure.LOW
         }
-        
+
         return MemoryStats(totalMemory, availableMemory, usedMemory, memoryPressure)
     }
     
@@ -109,6 +117,8 @@ object MemoryManager {
         monitoringScope = null
         isMonitoring = false
         cleanupTasks.clear()
+        NativeMemorySupport.destroyClassifier(nativeClassifier)
+        NativeMemorySupport.destroySlabPool(slabPool)
     }
 }
 

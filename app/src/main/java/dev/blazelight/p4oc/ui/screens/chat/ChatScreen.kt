@@ -119,6 +119,9 @@ fun ChatScreen(
     // Optimized state collection - reduce recompositions by grouping related states
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
+    // Stable Long version key — increments on every mutation, never loses equality
+    // on list copy(). Use this as remember() key instead of the messages list reference.
+    val messagesVersion by viewModel.messagesVersion.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val branchName by viewModel.branchName.collectAsStateWithLifecycle()
     val sessionConnectionState by viewModel.sessionConnectionState.collectAsStateWithLifecycle()
@@ -166,14 +169,22 @@ fun ChatScreen(
         ToolWidgetState.fromString(visualSettings.toolWidgetDefaultState)
     }
 
+    // isThinking: pure derivedStateOf — no messages reference key, tracks internally.
+    val isThinking by remember {
+        derivedStateOf {
+            messages.lastOrNull()?.parts?.any { it is Part.Reasoning && it.time?.end == null } == true
+        }
+    }
+
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
-    // ScrollableDefaults.flingBehavior() already uses splineBasedDecay internally in Compose 1.8+
-    // — same physics as RecyclerView. No custom implementation needed.
-    val smoothFling = ScrollableDefaults.flingBehavior()
+    val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
+    DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
+    // NativeFlingBehavior drives every fling frame through the C++ SplineFling engine.
+    // Friction tuned to 52% of Android default — iOS-length glide, no JVM alloc per frame.
+    val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
 
-    // Single snapshotFlow observer — replaces multiple LaunchedEffect(state) that caused re-execution races
     val isAtBottom by remember {
         derivedStateOf {
             listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 120
@@ -182,7 +193,8 @@ fun ChatScreen(
     var userScrolledAway by remember { mutableStateOf(false) }
     var hasNewContentWhileAway by remember { mutableStateOf(false) }
 
-    // One unified scroll observer — zero LaunchedEffect overhead during fling
+    // Observer 1: scroll physics only — reads NO messages state, zero allocation per frame.
+    // Throttles SSE flushes and tracks user-scrolled-away purely from list scroll state.
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress to isAtBottom }
             .collect { (scrolling, atBottom) ->
@@ -195,31 +207,60 @@ fun ChatScreen(
             }
     }
 
-    // SINGLE LaunchedEffect for all scroll logic - prevents multiple triggers and lag
-    // Key: session ID - only runs once per session load
-    LaunchedEffect(uiState.session?.id) {
-        if (messages.isNotEmpty()) {
-            // IMMEDIATE scroll without delay - critical for instant paint
-            listState.scrollToItem(0)
-        }
-    }
-    
-    // New messages auto-scroll (only if user hasn't scrolled away)
-    val messageCount = messages.size
-    LaunchedEffect(messageCount) {
-        if (messageCount > 0 && !userScrolledAway) {
-            listState.scrollToItem(0)
-        } else if (messageCount > 0 && userScrolledAway) {
+    // Observer 2: auto-scroll on new messages — completely separate from scroll observer.
+    // Uses animateScrollToItem for a smooth glide instead of a teleport.
+    // Debounced: only scrolls after 80ms of no new versions to avoid fighting rapid SSE tokens.
+    LaunchedEffect(messagesVersion) {
+        val count = messages.size
+        if (count == 0) return@LaunchedEffect
+        if (!userScrolledAway && !listState.isScrollInProgress) {
+            kotlinx.coroutines.delay(80)
+            if (!listState.isScrollInProgress) {
+                listState.animateScrollToItem(0)
+            }
+        } else if (userScrolledAway) {
             hasNewContentWhileAway = true
         }
     }
 
-    // Loading state - skeleton removed to prevent background placeholders
-    // val showSkeleton = uiState.isLoading || uiState.session == null
+    // Scroll to bottom once when session first loads
+    LaunchedEffect(uiState.session?.id) {
+        if (messages.isNotEmpty()) listState.scrollToItem(0)
+    }
+
     var showCommandPalette by remember { mutableStateOf(false) }
     var showTodoTracker by remember { mutableStateOf(false) }
     var showFilePicker by remember { mutableStateOf(false) }
     var showRevertDialog by remember { mutableStateOf<String?>(null) }
+
+    val lastChangedIds by viewModel.lastChangedIds.collectAsStateWithLifecycle()
+
+    // Delta-diff flatItems: on each version bump try patchFlatItems() first (O(changed)).
+    // Falls back to full buildFlatItems() only when structure changes (new msg / loadMore).
+    // Uses a Ref so the previous value survives recompositions without triggering new ones.
+    val prevFlatItemsRef = remember { androidx.compose.runtime.mutableStateOf<List<FlatChatItem>>(emptyList()) }
+    val messageBlocks = remember(messagesVersion) { groupMessagesIntoBlocks(messages) }
+    val flatItems = remember(messagesVersion) {
+        val patched = patchFlatItems(prevFlatItemsRef.value, messages, lastChangedIds)
+        val result  = patched ?: buildFlatItems(messageBlocks)
+        prevFlatItemsRef.value = result
+        result
+    }
+
+    // Pagination keyed on version too.
+    val hasMoreMessages   = remember(messagesVersion) { viewModel.hasMoreMessages() }
+    val totalMessageCount = remember(messagesVersion) { viewModel.getTotalMessageCount() }
+    val visibleMessageCount = messages.size
+
+    // isBusy / isLoading isolated — consumers only recompose on boolean flip.
+    val isBusy    by remember { derivedStateOf { uiState.isBusy } }
+    val isLoading by remember { derivedStateOf { uiState.isLoading } }
+
+    // Stable lambdas — ViewModel reference is constant for session lifetime.
+    val onToolApprove = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "once") } }
+    val onToolDeny    = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "reject") } }
+    val onToolAlways  = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "always") } }
+    val onRevert      = remember<(String) -> Unit> { { id -> showRevertDialog = id } }
 
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -270,6 +311,7 @@ fun ChatScreen(
                 ) {
                     ChatInputBar(
                         value = uiState.inputText,
+                        isThinking = isThinking,
                         modelSelector = {
                             ModelAgentSelectorBar(
                                 availableAgents = availableAgents,
@@ -285,8 +327,6 @@ fun ChatScreen(
                         },
                         agentSelector = { },
                         onValueChange = { text ->
-                            AppLog.w("ChatScreen", "=== INPUT CHANGE ===")
-                            AppLog.w("ChatScreen", "onValueChange: text='${text.take(20)}...', length=${text.length}")
                             viewModel.updateInput(text)
                             if (text.startsWith("/") && uiState.commands.isEmpty()) {
                                 viewModel.loadCommands()
@@ -319,196 +359,44 @@ fun ChatScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Revert active banner
-            uiState.session?.revert?.let {
-                val theme = LocalOpenCodeTheme.current
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
-                        .background(theme.warning.copy(alpha = 0.12f))
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(text = "↺", color = theme.warning, fontFamily = FontFamily.Monospace)
-                        Text(
-                            text = stringResource(R.string.revert_active_banner),
-                            style = MaterialTheme.typography.labelMedium,
-                            fontFamily = FontFamily.Monospace,
-                            color = theme.warning
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(theme.warning.copy(alpha = 0.15f))
-                            .clickable(role = Role.Button) { viewModel.unrevertSession() }
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.unrevert_all),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Medium,
-                            color = theme.warning
-                        )
-                    }
-                }
-            }
-
-            val hasContent = messages.isNotEmpty() || uiState.isBusy
-            // ORIGINAL: Simple message blocks computation
-            val messageBlocks = remember(messages) {
-                groupMessagesIntoBlocks(messages)
-            }
-
-            // Stable lambdas — same reference across recompositions, prevents MessageBlockView recompose
-            val onToolApprove = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "once") } }
-            val onToolDeny = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "reject") } }
-            val onToolAlways = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "always") } }
-            val onRevert = remember { { id: String -> showRevertDialog = id } }
-
-            if (!hasContent && !uiState.isLoading) {
-                EmptyChatView(modifier = Modifier.align(Alignment.Center))
-            } else {
-                // OPTIMIZED: LazyColumn with enhanced performance and smooth animations
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 12.dp) // Match topbar padding
-                        .testTag("message_list"),
-                    reverseLayout = true,
-                    flingBehavior = smoothFling,
-                    contentPadding = PaddingValues(vertical = 2.dp),
-                    // Performance optimizations
-                    userScrollEnabled = true,
-                ) {
-                    // Inline question card - optimized without animation to prevent lag
-                    pendingQuestion?.let { questionRequest ->
-                        item(
-                            key = "q_${questionRequest.id}",
-                            contentType = "question"
-                        ) {
-                            InlineQuestionCard(
-                                questionData = dev.blazelight.p4oc.domain.model.QuestionData(questionRequest.questions),
-                                onDismiss = viewModel::dismissQuestion,
-                                onSubmit = { viewModel.respondToQuestion(questionRequest.id, it) },
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            )
-                        }
-                    }
-
-                    // Abort summary card - optimized without animation to prevent lag
-                    uiState.abortSummary?.let { summary ->
-                        item(
-                            key = "abort_${summary.abortedAt}",
-                            contentType = "abort"
-                        ) {
-                            AbortSummaryCard(summary = summary, modifier = Modifier.padding(vertical = 4.dp))
-                        }
-                    }
-
-                    // All messages - stable keys + contentType for optimal recycling
-                    items(
-                        items = messageBlocks.asReversed(),
-                        key = { block ->
-                            when (block) {
-                                is MessageBlock.UserBlock -> "u_${block.message.message.id}"
-                                is MessageBlock.AssistantBlock -> {
-                                    // Stable key — no messages.size suffix.
-                                    // Including size caused item destroy+recreate on every new part,
-                                    // producing scroll jumps during reasoning/tool streaming.
-                                    "a_${block.messages.first().message.id}"
-                                }
-                            }
-                        },
-                        contentType = { block ->
-                            when (block) {
-                                is MessageBlock.UserBlock -> "user_simple"
-                                is MessageBlock.AssistantBlock -> {
-                                    val hasTools = block.messages.any { msg ->
-                                        msg.parts.any { part ->
-                                            part is Part.Tool
-                                        }
-                                    }
-                                    val hasLongText = block.messages.any { msg ->
-                                        msg.parts.filterIsInstance<dev.blazelight.p4oc.domain.model.Part.Text>()
-                                            .any { it.text.length > 2000 }
-                                    }
-                                    when {
-                                        hasTools -> "assistant_tools"
-                                        hasLongText -> "assistant_heavy"
-                                        else -> "assistant_simple"
-                                    }
-                                }
-                            }
-                        }
-                    ) { block ->
-                        MessageBlockView(
-                            block = block,
-                            onToolApprove = onToolApprove,
-                            onToolDeny = onToolDeny,
-                            onToolAlways = onToolAlways,
-                            onOpenSubSession = onOpenSubSession,
-                            defaultToolWidgetState = defaultToolWidgetState,
-                            pendingPermissionsByCallId = pendingPermissionsByCallId,
-                            onRevert = onRevert
-                        )
-                    }
-
-                    // Load older messages control (appears at the top due to reverseLayout)
-                    // Show if there are more messages available to load
-                    // Calculate outside items block to avoid @Composable issues
-                    val hasMoreMessages = viewModel.hasMoreMessages()
-                    val totalMessageCount = viewModel.getTotalMessageCount()
-                    val visibleMessageCount = messages.size
-                    
-                    if (hasMoreMessages && visibleMessageCount < totalMessageCount) {
-                        item(
-                            key = "load_more_messages",
-                            contentType = "load_more"
-                        ) {
-                            val theme = LocalOpenCodeTheme.current
-                            var isLoadingMore by remember { mutableStateOf(false) }
-                            
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 2.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .clickable(role = Role.Button, onClick = {
-                                        if (!isLoadingMore) {
-                                            isLoadingMore = true
-                                            viewModel.loadOlderMessages()
-                                            isLoadingMore = false
-                                        }
-                                    })
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = if (isLoadingMore) "..." else "↺ more (${visibleMessageCount}/${totalMessageCount})",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = theme.textMuted
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (uiState.isLoading) {
-                TuiLoadingScreen(
-                    modifier = Modifier.align(Alignment.Center)
+            // Revert active banner — isolated, only reads uiState.session.revert
+            val revert = uiState.session?.revert
+            if (revert != null) {
+                RevertActiveBanner(
+                    onUnrevert = viewModel::unrevertSession,
+                    modifier = Modifier.align(Alignment.TopCenter)
                 )
+            }
+
+            // Main message list — isolated composable, no uiState/connectionState reads.
+            // Only recomposes when flatItems, pendingQuestion, abortSummary, or pagination change.
+            ChatMessageList(
+                listState = listState,
+                flingBehavior = smoothFling,
+                flatItems = flatItems,
+                pendingQuestion = pendingQuestion,
+                abortSummary = uiState.abortSummary,
+                hasMoreMessages = hasMoreMessages,
+                visibleMessageCount = visibleMessageCount,
+                totalMessageCount = totalMessageCount,
+                onLoadMore = { viewModel.loadOlderMessages() },
+                onDismissQuestion = viewModel::dismissQuestion,
+                onRespondQuestion = { id, r -> viewModel.respondToQuestion(id, r) },
+                onToolApprove = onToolApprove,
+                onToolDeny = onToolDeny,
+                onToolAlways = onToolAlways,
+                onOpenSubSession = onOpenSubSession,
+                defaultToolWidgetState = defaultToolWidgetState,
+                pendingPermissionsByCallId = pendingPermissionsByCallId,
+                onRevert = onRevert,
+                showEmpty = messages.isEmpty() && !isBusy && !isLoading,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp)
+            )
+
+            if (isLoading) {
+                TuiLoadingScreen(modifier = Modifier.align(Alignment.Center))
             }
 
             uiState.error?.let { error ->
@@ -518,20 +406,16 @@ fun ChatScreen(
                         .padding(16.dp),
                     action = {
                         TextButton(onClick = viewModel::clearError, shape = RoundedCornerShape(4.dp)) {
-                            Text(
-                                stringResource(R.string.dismiss),
-                                fontFamily = FontFamily.Monospace
-                            )
+                            Text(stringResource(R.string.dismiss), fontFamily = FontFamily.Monospace)
                         }
                     }
                 ) {
                     Text(error, fontFamily = FontFamily.Monospace)
                 }
             }
-            
-            // Jump to bottom button - shows when scrolled away during streaming
+
             JumpToBottomButton(
-                visible = userScrolledAway && uiState.isBusy,
+                visible = userScrolledAway && isBusy,
                 hasNewContent = hasNewContentWhileAway,
                 onClick = {
                     coroutineScope.launch {
@@ -1030,3 +914,179 @@ private fun EmptyChatView(modifier: Modifier = Modifier) {
 }
 
 // MessageBlock, groupMessagesIntoBlocks, and MessageBlockView are now in MessageBlockUtils.kt
+
+/**
+ * Isolated message list composable.
+ *
+ * Receives only stable, pre-computed values — no StateFlow reads, no ViewModel access.
+ * This means it ONLY recomposes when flatItems or the other explicit parameters change,
+ * completely decoupled from uiState, connectionState, inputText, etc.
+ */
+@Composable
+private fun ChatMessageList(
+    listState: LazyListState,
+    flingBehavior: androidx.compose.foundation.gestures.FlingBehavior,
+    flatItems: List<FlatChatItem>,
+    pendingQuestion: dev.blazelight.p4oc.domain.model.QuestionRequest?,
+    abortSummary: dev.blazelight.p4oc.ui.components.chat.AbortSummary?,
+    hasMoreMessages: Boolean,
+    visibleMessageCount: Int,
+    totalMessageCount: Int,
+    onLoadMore: () -> Unit,
+    onDismissQuestion: () -> Unit,
+    onRespondQuestion: (String, List<List<String>>) -> Unit,
+    onToolApprove: (String) -> Unit,
+    onToolDeny: (String) -> Unit,
+    onToolAlways: (String) -> Unit,
+    onOpenSubSession: ((String) -> Unit)?,
+    defaultToolWidgetState: ToolWidgetState,
+    pendingPermissionsByCallId: Map<String, dev.blazelight.p4oc.domain.model.Permission>,
+    onRevert: (String) -> Unit,
+    showEmpty: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    if (showEmpty) {
+        Box(modifier = modifier, contentAlignment = Alignment.Center) {
+            EmptyChatView()
+        }
+        return
+    }
+    LazyColumn(
+        state = listState,
+        modifier = modifier.testTag("message_list"),
+        reverseLayout = true,
+        flingBehavior = flingBehavior,
+        contentPadding = PaddingValues(vertical = 2.dp),
+    ) {
+        pendingQuestion?.let { q ->
+            item(key = "q_${q.id}", contentType = "question") {
+                dev.blazelight.p4oc.ui.components.question.InlineQuestionCard(
+                    questionData = dev.blazelight.p4oc.domain.model.QuestionData(q.questions),
+                    onDismiss = onDismissQuestion,
+                    onSubmit = { onRespondQuestion(q.id, it) },
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            }
+        }
+        abortSummary?.let { s ->
+            item(key = "abort_${s.abortedAt}", contentType = "abort") {
+                dev.blazelight.p4oc.ui.components.chat.AbortSummaryCard(
+                    summary = s,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            }
+        }
+        items(
+            items = flatItems,
+            key = { item ->
+                when (item) {
+                    is FlatChatItem.UserPart          -> "u_${item.messageWithParts.message.id}"
+                    is FlatChatItem.AssistantBarStart -> "abs_${item.messageId}"
+                    is FlatChatItem.AssistantBarEnd   -> "abe_${item.messageId}"
+                    is FlatChatItem.TextPart          -> "tp_${item.part.id}"
+                    is FlatChatItem.ReasoningPart     -> "rp_${item.part.id}"
+                    is FlatChatItem.ToolBatch         -> "tb_${item.msgId}_${item.batchIndex}"
+                    is FlatChatItem.FilePart          -> "fp_${item.part.id}"
+                    is FlatChatItem.PatchPart         -> "pp_${item.part.id}"
+                }
+            },
+            contentType = { item ->
+                when (item) {
+                    is FlatChatItem.UserPart          -> "user"
+                    is FlatChatItem.AssistantBarStart -> "bar_start"
+                    is FlatChatItem.AssistantBarEnd   -> "bar_end"
+                    is FlatChatItem.TextPart          -> "text"
+                    is FlatChatItem.ReasoningPart     -> "reasoning"
+                    is FlatChatItem.ToolBatch         -> "tools"
+                    is FlatChatItem.FilePart          -> "file"
+                    is FlatChatItem.PatchPart         -> "patch"
+                }
+            }
+        ) { item ->
+            FlatChatItemView(
+                item = item,
+                onToolApprove = onToolApprove,
+                onToolDeny = onToolDeny,
+                onToolAlways = onToolAlways,
+                onOpenSubSession = onOpenSubSession,
+                defaultToolWidgetState = defaultToolWidgetState,
+                pendingPermissionsByCallId = pendingPermissionsByCallId,
+                onRevert = onRevert
+            )
+        }
+        if (hasMoreMessages && visibleMessageCount < totalMessageCount) {
+            item(key = "load_more_messages", contentType = "load_more") {
+                val theme = LocalOpenCodeTheme.current
+                var isLoadingMore by remember { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .clickable(role = Role.Button) {
+                            if (!isLoadingMore) {
+                                isLoadingMore = true
+                                onLoadMore()
+                                isLoadingMore = false
+                            }
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (isLoadingMore) "..." else "↺ more ($visibleMessageCount/$totalMessageCount)",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = theme.textMuted
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RevertActiveBanner(
+    onUnrevert: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val theme = LocalOpenCodeTheme.current
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
+            .background(theme.warning.copy(alpha = 0.12f))
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(text = "↺", color = theme.warning, fontFamily = FontFamily.Monospace)
+            Text(
+                text = stringResource(R.string.revert_active_banner),
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = FontFamily.Monospace,
+                color = theme.warning
+            )
+        }
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .background(theme.warning.copy(alpha = 0.15f))
+                .clickable(role = Role.Button) { onUnrevert() }
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.unrevert_all),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+                color = theme.warning
+            )
+        }
+    }
+}

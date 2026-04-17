@@ -6,6 +6,7 @@ import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.core.network.ApiResult
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.network.DirectoryManager
+import dev.blazelight.p4oc.core.network.SessionDataCache
 import dev.blazelight.p4oc.core.network.safeApiCall
 import dev.blazelight.p4oc.data.remote.dto.CreateSessionRequest
 import dev.blazelight.p4oc.data.remote.dto.UpdateSessionRequest
@@ -24,42 +25,46 @@ import kotlinx.coroutines.coroutineScope
 
 class SessionListViewModel constructor(
     private val connectionManager: ConnectionManager,
-    private val directoryManager: DirectoryManager
+    private val directoryManager: DirectoryManager,
+    private val sessionDataCache: SessionDataCache
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SessionListUiState())
     val uiState: StateFlow<SessionListUiState> = _uiState.asStateFlow()
 
+    // True after the first full load completes — used by the UI to skip
+    // re-loading during the pop-back transition (avoids recomposition jank).
+    private var initialLoadDone = false
+
     init {
-        loadSessions()
-        loadSessionStatuses()
-        loadProjects()
+        val cached = sessionDataCache.peek()
+        if (cached != null && sessionDataCache.hasFreshData) {
+            // Branch-prediction hit: cache was pre-warmed by ServerViewModel after connect.
+            // Paint the screen immediately with cached data, then refresh delta in background.
+            AppLog.d("SessionListVM", "Cache hit: ${cached.sessions.size} sessions — instant paint")
+            _uiState.update { it.copy(sessions = cached.sessions, projects = cached.projects) }
+            initialLoadDone = true
+            viewModelScope.launch { loadSessionStatuses() }
+        } else {
+            viewModelScope.launch {
+                loadSessionsAsync()
+                loadSessionStatuses()
+            }
+        }
     }
 
     fun refresh() {
-        loadSessions()
-        loadSessionStatuses()
-        loadProjects()
+        viewModelScope.launch {
+            loadSessionsAsync()
+            loadSessionStatuses()
+        }
     }
 
-    private fun loadProjects() {
-        viewModelScope.launch {
-            val api = connectionManager.getApi() ?: return@launch
-            val result = safeApiCall { api.listProjects() }
-            when (result) {
-                is ApiResult.Success -> {
-                    val projects = result.data.map { dto ->
-                        ProjectInfo(
-                            id = dto.id,
-                            worktree = dto.worktree,
-                            name = dto.worktree.substringAfterLast("/")
-                        )
-                    }.sortedByDescending { it.worktree }
-                    _uiState.update { it.copy(projects = projects) }
-                }
-                is ApiResult.Error -> {}
-            }
-        }
+    // Called when navigating back to Sessions — only fetches the fast status
+    // endpoint, not the full session list. Keeps the UI stable during animation.
+    fun refreshOnResume() {
+        if (!initialLoadDone) return
+        loadSessionStatuses()
     }
 
     private fun loadSessionStatuses() {
@@ -97,14 +102,13 @@ class SessionListViewModel constructor(
         }
     }
 
-    private fun loadSessions() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
+    private suspend fun loadSessionsAsync() {
+        _uiState.update { it.copy(isLoading = true, error = null) }
 
-            val api = connectionManager.getApi() ?: run {
-                _uiState.update { it.copy(isLoading = false) }
-                return@launch
-            }
+        val api = connectionManager.getApi() ?: run {
+            _uiState.update { it.copy(isLoading = false) }
+            return
+        }
 
             try {
                 // First, fetch projects to know what to aggregate
@@ -182,13 +186,13 @@ class SessionListViewModel constructor(
                         sessions = allSessionsWithProjects.sortedByDescending { s -> s.session.updatedAt }
                     )
                 }
+                initialLoadDone = true
             } catch (e: Exception) {
                 AppLog.e("SessionListVM", "loadSessions error", e)
                 _uiState.update {
                     it.copy(isLoading = false, error = "Failed to load sessions: ${e.message}")
                 }
             }
-        }
     }
 
     fun createSession(title: String?, directory: String?) {

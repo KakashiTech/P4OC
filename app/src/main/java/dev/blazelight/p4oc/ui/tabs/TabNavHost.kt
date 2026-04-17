@@ -4,6 +4,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -36,43 +37,43 @@ import dev.blazelight.p4oc.ui.screens.sessions.SessionListScreen
 import dev.blazelight.p4oc.ui.screens.settings.*
 import dev.blazelight.p4oc.ui.screens.terminal.TerminalScreen
 
-// ── True iOS UINavigationController illusion ────────────────────────────────
-// Three simultaneous layers on every transition:
-//   1. translateX  — new screen slides full-width; old recedes at 1/3 speed (parallax)
-//   2. scale       — outgoing screen shrinks to 0.94f creating depth/z feel
-//   3. alpha       — fade hides the scale artifact cleanly
-//
-// Spring physics: dampingRatio 0.88 = no bounce, smooth natural stop
-//                 stiffness 400    = ~280ms effective, fast but not jarring
+// ── iOS UINavigationController easing — shared with NavGraph ────────────────
+// iOS cubic-bezier(0.25, 0.46, 0.45, 0.94) — exact UIKit ease-out value
+private val iosEaseOut = CubicBezierEasing(0.25f, 0.46f, 0.45f, 0.94f)
+// iOS ease-in-out for exits: slower start, decelerates to stop
+private val iosEaseInOut = CubicBezierEasing(0.42f, 0.0f, 0.58f, 1.0f)
 
-private val pushSpring = spring<IntOffset>(dampingRatio = 0.88f, stiffness = 400f)
-private val popSpring  = spring<IntOffset>(dampingRatio = 0.86f, stiffness = 500f)
-private val paralaxTween = tween<IntOffset>(240, easing = FastOutSlowInEasing)
+// Push: entering screen springs in from right (full width)
+private val pushSpring  = spring<IntOffset>(dampingRatio = 0.90f, stiffness = 460f)
+// Pop: exiting screen springs out to right (snappy, fast)
+private val popSpring   = spring<IntOffset>(dampingRatio = 0.86f, stiffness = 600f)
+// Background slide tween: slower than foreground = parallax depth
+private val bgSlideTween = tween<IntOffset>(280, easing = iosEaseOut)
+private val fgSlideTween = tween<IntOffset>(260, easing = iosEaseInOut)
+private val fadeInTween  = tween<Float>(200, easing = iosEaseOut)
+private val fadeOutTween = tween<Float>(160, easing = iosEaseInOut)
 
-// PUSH ENTER: spring slide from right full-width + fast fade
+// PUSH ENTER: new screen springs in from right full-width + fade up
 private val pushEnter: AnimatedContentTransitionScope<*>.() -> EnterTransition = {
-    slideInHorizontally(pushSpring) { it } +
-    fadeIn(tween(180, easing = FastOutSlowInEasing))
+    slideInHorizontally(pushSpring) { it } + fadeIn(fadeInTween)
 }
-// PUSH EXIT: old screen recedes 1/3 left + shrinks to 0.94 + fades
-// Key: moves slower than entering screen = parallax depth illusion
+// PUSH EXIT: old screen recedes 1/3 to left + subtle depth scale + fade
 private val pushExit: AnimatedContentTransitionScope<*>.() -> ExitTransition = {
-    slideOutHorizontally(paralaxTween) { -(it / 3) } +
-    scaleOut(tween(240, easing = FastOutSlowInEasing), targetScale = 0.94f) +
-    fadeOut(tween(160, easing = FastOutSlowInEasing))
+    slideOutHorizontally(bgSlideTween) { -(it / 3) } +
+    scaleOut(tween(280, easing = iosEaseOut), targetScale = 0.94f) +
+    fadeOut(fadeOutTween)
 }
-// POP ENTER: previous screen slides back from 1/3 left + scale restores
+// POP ENTER: previous screen slides back from 1/3 left — NO scale (was never scaled)
+// iOS behavior: background screen only translates, it was never scaled down
 private val popEnter: AnimatedContentTransitionScope<*>.() -> EnterTransition = {
-    slideInHorizontally(paralaxTween) { -(it / 3) } +
-    scaleIn(tween(240, easing = FastOutSlowInEasing), initialScale = 0.94f) +
-    fadeIn(tween(160, easing = FastOutSlowInEasing))
+    slideInHorizontally(bgSlideTween) { -(it / 3) } +
+    fadeIn(fadeInTween)
 }
-// POP EXIT: spring snap to right + gentle scale + fade — symmetric with popEnter
-// scaleOut(0.96f) prevents the hard cut when the screen springs away
+// POP EXIT: top screen springs back to right + fade out
 private val popExit: AnimatedContentTransitionScope<*>.() -> ExitTransition = {
     slideOutHorizontally(popSpring) { it } +
-    scaleOut(tween(220, easing = FastOutSlowInEasing), targetScale = 0.96f) +
-    fadeOut(tween(180, easing = FastOutSlowInEasing))
+    scaleOut(tween(200, easing = iosEaseInOut), targetScale = 0.98f) +
+    fadeOut(fadeOutTween)
 }
 
 /**

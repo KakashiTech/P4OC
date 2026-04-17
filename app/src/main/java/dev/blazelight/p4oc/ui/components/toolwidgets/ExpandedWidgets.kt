@@ -1,11 +1,15 @@
 package dev.blazelight.p4oc.ui.components.toolwidgets
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -14,13 +18,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.R
@@ -534,31 +539,92 @@ fun TaskWidgetExpanded(
 
 // ============== Shared Components ==============
 
+/**
+ * Terminal-style flat key button.
+ * Press animates scale+alpha. No elevation, no rounded corners, no Material ripple chrome.
+ */
 @Composable
-private fun PendingApprovalButtons(
-    onApprove: () -> Unit,
-    onDeny: () -> Unit
+private fun TuiKey(
+    label: String,
+    onClick: () -> Unit,
+    borderColor: Color,
+    textColor: Color,
+    fillColor: Color = Color.Transparent,
+    modifier: Modifier = Modifier,
+    height: Dp = Sizing.buttonHeightSm
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.94f else 1f,
+        animationSpec = tween(80),
+        label = "keyScale"
+    )
+    val bgAlpha by animateFloatAsState(
+        targetValue = if (isPressed) 0.22f else if (fillColor == Color.Transparent) 0f else 1f,
+        animationSpec = tween(80),
+        label = "keyBg"
+    )
+    Box(
+        modifier = modifier
+            .height(height)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .border(Sizing.strokeMd, borderColor.copy(alpha = if (isPressed) 1f else 0.65f), RectangleShape)
+            .background(if (fillColor == Color.Transparent) borderColor.copy(alpha = bgAlpha) else fillColor.copy(alpha = bgAlpha + (if (fillColor == Color.Transparent) 0f else 0.15f)))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            fontFamily = FontFamily.Monospace,
+            fontSize = TuiCodeFontSize.lg,
+            fontWeight = FontWeight.Medium,
+            color = textColor.copy(alpha = if (isPressed) 1f else 0.88f),
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+fun PendingApprovalButtons(
+    onApprove: () -> Unit,
+    onDeny: () -> Unit,
+    onAlways: (() -> Unit)? = null
+) {
+    val theme = LocalOpenCodeTheme.current
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        OutlinedButton(
+        TuiKey(
+            label = "✗ ${stringResource(R.string.deny)}",
             onClick = onDeny,
-            modifier = Modifier.weight(1f).height(Sizing.buttonHeightSm),
-            shape = RoundedCornerShape(8.dp),
-            contentPadding = PaddingValues(horizontal = Spacing.md)
-        ) {
-            Text(stringResource(R.string.deny), style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace))
+            borderColor = theme.error,
+            textColor = theme.error,
+            modifier = Modifier.weight(1f)
+        )
+        if (onAlways != null) {
+            TuiKey(
+                label = "◎ ${stringResource(R.string.always_allow)}",
+                onClick = onAlways,
+                borderColor = theme.textMuted,
+                textColor = theme.textMuted,
+                modifier = Modifier.weight(1.4f)
+            )
         }
-        Button(
+        TuiKey(
+            label = "✓ ${stringResource(R.string.allow)}",
             onClick = onApprove,
-            modifier = Modifier.weight(1f).height(Sizing.buttonHeightSm),
-            shape = RoundedCornerShape(8.dp),
-            contentPadding = PaddingValues(horizontal = Spacing.md)
-        ) {
-            Text(stringResource(R.string.allow), style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace))
-        }
+            borderColor = theme.success,
+            textColor = theme.background,
+            fillColor = theme.success,
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 

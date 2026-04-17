@@ -3,6 +3,7 @@ package dev.blazelight.p4oc.data.remote.dto
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonElement
 
 // ============================================================================
 // Event Types (aligned with SDK Event union type)
@@ -15,9 +16,17 @@ data class EventDataDto(
 )
 
 @Serializable
+data class SyncPayloadDto(
+    val type: String,
+    @SerialName("syncEvent") val syncEvent: JsonObject? = null,
+    val properties: JsonObject? = null
+)
+
+@Serializable
 data class GlobalEventDto(
     val directory: String,
-    val payload: EventDataDto
+    val project: String? = null,
+    val payload: SyncPayloadDto
 )
 
 // Event-specific property DTOs

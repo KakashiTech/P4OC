@@ -4,11 +4,11 @@ import dev.blazelight.p4oc.domain.model.Message
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.PriorityQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 class MessageBuffer(private val maxSize: Int = 1000) {
-    private val buffer = ConcurrentLinkedQueue<Message>()
+    private val buffer = ArrayDeque<Message>(maxSize)
     private val currentSize = AtomicInteger(0)
     private val bufferMutex = Mutex()
     private var bufferScope: CoroutineScope? = null
@@ -40,10 +40,9 @@ class MessageBuffer(private val maxSize: Int = 1000) {
     suspend fun addMessage(message: Message): Boolean {
         return bufferMutex.withLock {
             if (currentSize.get() >= maxSize) {
-                evictOldestMessages(maxSize / 10) // Evict 10% when full
+                evictOldestMessages(maxSize / 10)
             }
-            
-            buffer.offer(message)
+            buffer.addLast(message)
             currentSize.incrementAndGet()
             totalProcessed++
             true
@@ -52,30 +51,31 @@ class MessageBuffer(private val maxSize: Int = 1000) {
     
     suspend fun getMessages(limit: Int = 50): List<Message> {
         return bufferMutex.withLock {
-            buffer.toList().takeLast(limit)
+            if (buffer.size <= limit) buffer.toList()
+            else buffer.drop(buffer.size - limit)
         }
     }
     
     suspend fun getMessageById(messageId: String): Message? {
         return bufferMutex.withLock {
-            buffer.find { it.id == messageId }
+            buffer.firstOrNull { it.id == messageId }
         }
     }
     
     suspend fun removeMessage(messageId: String): Boolean {
         return bufferMutex.withLock {
-            val removed = buffer.removeIf { it.id == messageId }
-            if (removed) {
-                currentSize.decrementAndGet()
-            }
-            removed
+            val before = buffer.size
+            buffer.removeAll { it.id == messageId }
+            val removedCount = before - buffer.size
+            if (removedCount > 0) currentSize.addAndGet(-removedCount)
+            removedCount > 0
         }
     }
     
     private suspend fun evictOldestMessages(count: Int) {
         val toEvict = minOf(count, currentSize.get())
         repeat(toEvict) {
-            buffer.poll()?.let {
+            if (buffer.removeFirstOrNull() != null) {
                 currentSize.decrementAndGet()
                 evictionCount++
             }
@@ -84,31 +84,34 @@ class MessageBuffer(private val maxSize: Int = 1000) {
     
     private suspend fun optimizeBuffer() {
         bufferMutex.withLock {
-            // Remove very old messages (older than 24 hours)
             val cutoffTime = System.currentTimeMillis() - (24 * 60 * 60 * 1000)
-            val beforeSize = currentSize.get()
-            
-            buffer.removeIf { message ->
+            buffer.removeAll { message ->
                 val isOld = message.createdAt < cutoffTime
-                if (isOld) {
-                    currentSize.decrementAndGet()
-                    evictionCount++
-                }
+                if (isOld) { currentSize.decrementAndGet(); evictionCount++ }
                 isOld
             }
-            
-            // If still too large, remove based on priority
-            if (currentSize.get() > maxSize * 0.8) {
-                val messagesToRemove = (currentSize.get() - (maxSize * 0.7)).toInt()
-                val sortedByPriority = buffer.sortedBy { 
-                    calculateMessagePriority(it) 
-                }
-                
-                repeat(messagesToRemove.coerceAtMost(sortedByPriority.size)) { index ->
-                    if (buffer.remove(sortedByPriority[index])) {
-                        currentSize.decrementAndGet()
-                        evictionCount++
+
+            val excess = currentSize.get() - (maxSize * 0.8).toInt()
+            if (excess > 0) {
+                // Max-heap of size `excess`: the root is always the HIGHEST priority among current
+                // candidates. We replace the root whenever we find a message with LOWER priority,
+                // so at the end the heap contains exactly the `excess` lowest-priority messages
+                // — the correct eviction set. O(N log excess) time.
+                val heap = PriorityQueue<Message>(excess, compareByDescending { calculateMessagePriority(it) })
+                for (msg in buffer) {
+                    if (heap.size < excess) {
+                        heap.offer(msg)
+                    } else if (heap.peek() != null &&
+                               calculateMessagePriority(msg) < calculateMessagePriority(heap.peek()!!)) {
+                        heap.poll()
+                        heap.offer(msg)
                     }
+                }
+                val toRemove = heap.toHashSet()
+                buffer.removeAll { msg ->
+                    val remove = msg in toRemove
+                    if (remove) { currentSize.decrementAndGet(); evictionCount++ }
+                    remove
                 }
             }
         }

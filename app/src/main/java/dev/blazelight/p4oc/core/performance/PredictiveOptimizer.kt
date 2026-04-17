@@ -62,32 +62,9 @@ object PredictiveOptimizer {
         predictionScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         isInitialized = true
         
-        predictionScope?.launch {
-            // Pattern analysis loop
-            while (isActive) {
-                try {
-                    analyzeUserPatterns()
-                    generatePredictions()
-                    optimizeBasedOnPredictions()
-                    delay(5000) // Analyze every 5 seconds
-                } catch (e: Exception) {
-                    delay(10000)
-                }
-            }
-        }
-        
-        predictionScope?.launch {
-            // Performance monitoring and learning
-            while (isActive) {
-                try {
-                    collectPerformanceData()
-                    updatePredictionModels()
-                    delay(1000) // Update every second
-                } catch (e: Exception) {
-                    delay(5000)
-                }
-            }
-        }
+        // Background prediction loops disabled — generated predictions from hardcoded
+        // fake behavior patterns (detectCurrentPattern returns static data).
+        // Re-enable only when wired to real navigation telemetry.
     }
     
     private suspend fun analyzeUserPatterns() {

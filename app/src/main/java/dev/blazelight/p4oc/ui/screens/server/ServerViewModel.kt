@@ -8,6 +8,7 @@ import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.core.network.ApiResult
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.network.DirectoryManager
+import dev.blazelight.p4oc.core.network.SessionDataCache
 import dev.blazelight.p4oc.core.network.DiscoveredServer
 import dev.blazelight.p4oc.core.network.DiscoveryState
 import dev.blazelight.p4oc.core.network.MdnsDiscoveryManager
@@ -28,7 +29,8 @@ class ServerViewModel constructor(
     private val connectionManager: ConnectionManager,
     private val directoryManager: DirectoryManager,
     private val credentialStore: CredentialStore,
-    private val mdnsDiscoveryManager: MdnsDiscoveryManager
+    private val mdnsDiscoveryManager: MdnsDiscoveryManager,
+    private val sessionDataCache: SessionDataCache
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ServerUiState())
@@ -65,6 +67,7 @@ class ServerViewModel constructor(
             result.fold(
                 onSuccess = {
                     AppLog.d(TAG, "Auto-reconnect successful")
+                    sessionDataCache.prewarm()
                     initializeProjectContext()
                     _uiState.update { it.copy(isConnecting = false, isConnected = true) }
                 },
@@ -122,10 +125,10 @@ class ServerViewModel constructor(
             result.fold(
                 onSuccess = {
                     AppLog.d(TAG, "Connection successful!")
-                    // Clear password from UI state after successful connection for security
                     _uiState.update { it.copy(password = "") }
                     settingsDataStore.saveLastConnection(config, password)
                     settingsDataStore.addRecentServer(url, "Remote Server", state.username.takeIf { it.isNotBlank() }, password)
+                    sessionDataCache.prewarm()
                     initializeProjectContext()
                     _uiState.update { it.copy(isConnecting = false, isConnected = true) }
                 },

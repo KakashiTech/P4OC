@@ -4,6 +4,7 @@ package dev.blazelight.p4oc.ui.tabs
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -527,6 +528,9 @@ fun MainTabScreen(
                 .statusBarsPadding()
                 .consumeWindowInsets(WindowInsets.statusBars)
         ) {
+            // Track whether the last tab change was from a click (not a swipe)
+            var isTabClick by remember { mutableStateOf(false) }
+
             // Unified top bar: tabs + path + controls in one compact terminal-style header
             UnifiedTopBar(
                 tabs = tabs,
@@ -534,7 +538,7 @@ fun MainTabScreen(
                 tabTitles = tabTitles,
                 tabIcons = tabIcons,
                 tabConnectionStates = tabConnectionStates,
-                onTabClick = { tabId -> tabManager.focusTab(tabId) },
+                onTabClick = { tabId -> isTabClick = true; tabManager.focusTab(tabId) },
                 onTabClose = closeTab,
                 onAddClick = { tabManager.createTab(focus = true) },
                 onSettings = {
@@ -551,11 +555,18 @@ fun MainTabScreen(
                 pageCount = { tabs.size }
             )
             
-            // Sync activeTabId -> pager (when tab clicked or closed)
+            // Sync activeTabId -> pager (when tab clicked or programmatically changed)
             LaunchedEffect(activeTabId, tabs.size) {
                 val index = tabs.indexOfFirst { it.id == activeTabId }
                 if (index >= 0 && pagerState.currentPage != index) {
-                    pagerState.animateScrollToPage(index)
+                    if (isTabClick) {
+                        // Instant jump — crossfade handles the visual transition
+                        pagerState.scrollToPage(index)
+                    } else {
+                        // Came from swipe settle — already there, no-op
+                        pagerState.scrollToPage(index)
+                    }
+                    isTabClick = false
                 }
             }
             
@@ -570,12 +581,13 @@ fun MainTabScreen(
             
             // Tab content area with HorizontalPager for swipe between tabs
             val saveableStateHolder = rememberSaveableStateHolder()
-            
+
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.weight(1f),
                 key = { tabs.getOrNull(it)?.id ?: it.toString() },
-                beyondViewportPageCount = 0
+                beyondViewportPageCount = 0,
+                userScrollEnabled = true
             ) { pageIndex ->
                 tabs.getOrNull(pageIndex)?.let { tab ->
                     saveableStateHolder.SaveableStateProvider(tab.id) {

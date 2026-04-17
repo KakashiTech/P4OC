@@ -1,6 +1,7 @@
 package dev.blazelight.p4oc.ui.screens.server
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -60,9 +61,23 @@ import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.opencode.OpenCodeTheme
-import dev.blazelight.p4oc.ui.theme.opencode.OptimizedThemeLoader
+
+import androidx.compose.runtime.Stable
 import kotlinx.coroutines.delay
 import org.koin.androidx.compose.koinViewModel
+
+@Stable
+private class ServerArtworkCallbacks(
+    val onSettings: () -> Unit,
+    val onDiscoveredClick: (DiscoveredServer) -> Unit,
+    val onStopDiscovery: () -> Unit,
+    val onRecentClick: (RecentServer) -> Unit,
+    val onRemoveRecent: (RecentServer) -> Unit,
+    val onUrlChange: (String) -> Unit,
+    val onUsernameChange: (String) -> Unit,
+    val onPasswordChange: (String) -> Unit,
+    val onConnect: () -> Unit
+)
 
 @Composable
 fun ServerScreen(
@@ -77,31 +92,21 @@ fun ServerScreen(
     // NO iniciar conexión automática inmediatamente
     // La conexión se iniciará solo después de que el tema esté cargado
 
-    LaunchedEffect(uiState.navigationDestination) {
-        when (uiState.navigationDestination) {
-            is NavigationDestination.Sessions -> {
-                viewModel.clearNavigationDestination()
-                onNavigateToSessions()
-            }
-            is NavigationDestination.Projects -> {
-                viewModel.clearNavigationDestination()
-                onNavigateToProjects()
-            }
-            null -> {}
+    // Navigate immediately — the NavHost exit transition is the single source of truth.
+    // A manual exitAlpha/exitScale here would fight the NavHost animation causing a jump.
+    val pendingDestination = uiState.navigationDestination
+    LaunchedEffect(pendingDestination) {
+        if (pendingDestination == null) return@LaunchedEffect
+        viewModel.clearNavigationDestination()
+        when (pendingDestination) {
+            is NavigationDestination.Sessions -> onNavigateToSessions()
+            is NavigationDestination.Projects -> onNavigateToProjects()
         }
     }
 
-    // Only start connection after theme is ready
+    // Start discovery shortly after first frame — theme is pre-warmed, no reason to wait 300ms
     LaunchedEffect(Unit) {
-        // Wait for theme to be ready AND user theme is loaded before starting discovery
-        while (!OptimizedThemeLoader.isThemeReady()) {
-            delay(50) // Check every 50ms
-        }
-        
-        // Additional delay to ensure user theme is completely loaded and entrance animation can complete
-        delay(260)
-        
-        // Now start discovery after theme is ready
+        delay(50)
         viewModel.startDiscovery()
     }
 
@@ -127,9 +132,9 @@ fun ServerScreen(
         targetValue = if (started) 1f else 0f,
         animationSpec = tween(320, easing = FastOutSlowInEasing), label = "pA"
     )
-    val pageOffset by animateDpAsState(
-        targetValue = if (started) Spacing.none else 24.dp,
-        animationSpec = smoothSpringDp, label = "pO"
+    val pageTranslationY by animateFloatAsState(
+        targetValue = if (started) 0f else 60f,
+        animationSpec = smoothSpringFlt, label = "pO"
     )
     val pageScale by animateFloatAsState(
         targetValue = if (started) 1f else 0.96f,
@@ -147,31 +152,39 @@ fun ServerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .alpha(pageAlpha)
-                .offset(y = pageOffset)
-                .graphicsLayer { scaleX = pageScale; scaleY = pageScale }
+                .graphicsLayer {
+                    alpha = pageAlpha
+                    translationY = pageTranslationY
+                    scaleX = pageScale
+                    scaleY = pageScale
+                }
                 .padding(horizontal = Spacing.sm)
         ) {
             // Hero + panel are ONE surface — no gap, no separate border
+            val callbacks = remember(viewModel) {
+                ServerArtworkCallbacks(
+                    onSettings        = onSettings,
+                    onDiscoveredClick = viewModel::connectToDiscoveredServer,
+                    onStopDiscovery   = viewModel::stopDiscovery,
+                    onRecentClick     = viewModel::connectToRecentServer,
+                    onRemoveRecent    = viewModel::removeRecentServer,
+                    onUrlChange       = viewModel::setRemoteUrl,
+                    onUsernameChange  = viewModel::setUsername,
+                    onPasswordChange  = viewModel::setPassword,
+                    onConnect         = viewModel::connectToRemote
+                )
+            }
             ServerArtwork(
-                theme = theme,
-                visible = showHeader,
-                uiState = uiState,
+                theme        = theme,
+                visible      = showHeader,
+                uiState      = uiState,
                 showDiscover = showDiscover,
                 showRecent   = showRecent,
                 showRemote   = showRemote,
                 showHelp     = showHelp,
                 springDp     = smoothSpringDp,
                 springFlt    = smoothSpringFlt,
-                onSettings          = onSettings,
-                onDiscoveredClick   = viewModel::connectToDiscoveredServer,
-                onStopDiscovery     = viewModel::stopDiscovery,
-                onRecentClick       = viewModel::connectToRecentServer,
-                onRemoveRecent      = viewModel::removeRecentServer,
-                onUrlChange         = viewModel::setRemoteUrl,
-                onUsernameChange    = viewModel::setUsername,
-                onPasswordChange    = viewModel::setPassword,
-                onConnect           = viewModel::connectToRemote
+                callbacks    = callbacks
             )
             Spacer(Modifier.height(Spacing.xl))
         }
@@ -212,37 +225,18 @@ private fun ServerArtwork(
     showHelp: Boolean,
     springDp: androidx.compose.animation.core.SpringSpec<Dp>,
     springFlt: androidx.compose.animation.core.SpringSpec<Float>,
-    onSettings: () -> Unit,
-    onDiscoveredClick: (DiscoveredServer) -> Unit,
-    onStopDiscovery: () -> Unit,
-    onRecentClick: (RecentServer) -> Unit,
-    onRemoveRecent: (RecentServer) -> Unit,
-    onUrlChange: (String) -> Unit,
-    onUsernameChange: (String) -> Unit,
-    onPasswordChange: (String) -> Unit,
-    onConnect: () -> Unit
+    callbacks: ServerArtworkCallbacks
 ) {
-    val hA by animateFloatAsState(if (visible) 1f else 0f,
-        tween(220, easing = FastOutSlowInEasing), label = "hA")
-    val hO by animateDpAsState(if (visible) Spacing.none else (-8).dp,
-        springDp, label = "hO")
-
-    val dA by animateFloatAsState(if (showDiscover) 1f else 0f,
-        tween(260, easing = FastOutSlowInEasing), label = "dA")
-    val dO by animateDpAsState(if (showDiscover) Spacing.none else 12.dp,
-        springDp, label = "dO")
-    val rA by animateFloatAsState(if (showRecent) 1f else 0f,
-        tween(280, easing = FastOutSlowInEasing), label = "rA")
-    val rO by animateDpAsState(if (showRecent) Spacing.none else 12.dp,
-        springDp, label = "rO")
-    val fA by animateFloatAsState(if (showRemote) 1f else 0f,
-        tween(300, easing = FastOutSlowInEasing), label = "fA")
-    val fO by animateDpAsState(if (showRemote) Spacing.none else 12.dp,
-        springDp, label = "fO")
-    val hpA by animateFloatAsState(if (showHelp) 1f else 0f,
-        tween(320, easing = FastOutSlowInEasing), label = "hpA")
-    val hpO by animateDpAsState(if (showHelp) Spacing.none else 12.dp,
-        springDp, label = "hpO")
+    val hA  by animateFloatAsState(if (visible) 1f else 0f,     tween(220, easing = FastOutSlowInEasing), label = "hA")
+    val hT  by animateFloatAsState(if (visible) 0f else -20f,   springFlt, label = "hT")
+    val dA  by animateFloatAsState(if (showDiscover) 1f else 0f, tween(260, easing = FastOutSlowInEasing), label = "dA")
+    val dT  by animateFloatAsState(if (showDiscover) 0f else 30f, springFlt, label = "dT")
+    val rA  by animateFloatAsState(if (showRecent) 1f else 0f,   tween(280, easing = FastOutSlowInEasing), label = "rA")
+    val rT  by animateFloatAsState(if (showRecent) 0f else 30f,  springFlt, label = "rT")
+    val fA  by animateFloatAsState(if (showRemote) 1f else 0f,   tween(300, easing = FastOutSlowInEasing), label = "fA")
+    val fT  by animateFloatAsState(if (showRemote) 0f else 30f,  springFlt, label = "fT")
+    val hpA by animateFloatAsState(if (showHelp) 1f else 0f,     tween(320, easing = FastOutSlowInEasing), label = "hpA")
+    val hpT by animateFloatAsState(if (showHelp) 0f else 30f,    springFlt, label = "hpT")
 
     // Hero glow
     val inf = rememberInfiniteTransition(label = "art")
@@ -256,8 +250,7 @@ private fun ServerArtwork(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .alpha(hA)
-            .offset(y = hO)
+            .graphicsLayer { alpha = hA; translationY = hT }
     ) {
         // ── TOP BORDER LINE with scan ─────────────────────────────────────
         Row(modifier = Modifier.fillMaxWidth(),
@@ -338,7 +331,7 @@ private fun ServerArtwork(
                     Box(
                         modifier = Modifier
                             .border(Sizing.strokeThin, theme.border.copy(alpha = 0.4f))
-                            .clickable(role = Role.Button) { onSettings() }
+                            .clickable(role = Role.Button) { callbacks.onSettings() }
                             .testTag("server_settings_button")
                             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
                         contentAlignment = Alignment.Center
@@ -354,40 +347,40 @@ private fun ServerArtwork(
                 if (uiState.discoveredServers.isNotEmpty() ||
                     uiState.discoveryState == DiscoveryState.SCANNING) {
                     ArtPanelDivider(theme)
-                    Column(modifier = Modifier.alpha(dA).offset(y = dO)) {
+                    Column(modifier = Modifier.graphicsLayer { alpha = dA; translationY = dT }) {
                         DiscoveredServersSection(
                             servers = uiState.discoveredServers,
                             discoveryState = uiState.discoveryState,
                             isConnecting = uiState.isConnecting,
-                            onServerClick = onDiscoveredClick,
-                            onStopClick = onStopDiscovery
+                            onServerClick = callbacks.onDiscoveredClick,
+                            onStopClick = callbacks.onStopDiscovery
                         )
                     }
                 }
 
                 if (uiState.recentServers.isNotEmpty()) {
                     ArtPanelDivider(theme)
-                    Column(modifier = Modifier.alpha(rA).offset(y = rO)) {
+                    Column(modifier = Modifier.graphicsLayer { alpha = rA; translationY = rT }) {
                         RecentServersSection(
                             servers = uiState.recentServers,
                             isConnecting = uiState.isConnecting,
-                            onServerClick = onRecentClick,
-                            onRemoveServer = onRemoveRecent
+                            onServerClick = callbacks.onRecentClick,
+                            onRemoveServer = callbacks.onRemoveRecent
                         )
                     }
                 }
 
                 ArtPanelDivider(theme)
-                Column(modifier = Modifier.alpha(fA).offset(y = fO)) {
+                Column(modifier = Modifier.graphicsLayer { alpha = fA; translationY = fT }) {
                     RemoteServerSection(
                         url = uiState.remoteUrl,
                         username = uiState.username,
                         password = uiState.password,
                         isConnecting = uiState.isConnecting,
-                        onUrlChange = onUrlChange,
-                        onUsernameChange = onUsernameChange,
-                        onPasswordChange = onPasswordChange,
-                        onConnect = onConnect
+                        onUrlChange = callbacks.onUrlChange,
+                        onUsernameChange = callbacks.onUsernameChange,
+                        onPasswordChange = callbacks.onPasswordChange,
+                        onConnect = callbacks.onConnect
                     )
                 }
 
@@ -397,7 +390,7 @@ private fun ServerArtwork(
                 }
 
                 ArtPanelDivider(theme)
-                Column(modifier = Modifier.alpha(hpA).offset(y = hpO)) {
+                Column(modifier = Modifier.graphicsLayer { alpha = hpA; translationY = hpT }) {
                     ServerSetupHelpSection()
                 }
             }
@@ -446,23 +439,8 @@ private fun ArtPanelDivider(theme: OpenCodeTheme, label: String = "") {
     }
 }
 
-// ── Unified Panel ────────────────────────────────────────────────────────────
-
-/**
- * One continuous ASCII art terminal panel that contains every section.
- * Structure:
- *
- *  ⌜─────────────────────────────────────────────────────────⌝
- *  ├─[ DISCOVERED SERVERS ]─────────────────── ● scan
- *  │ ...rows...
- *  ├─[ RECENT SERVERS ]───────────────────────
- *  │ ...rows...
- *  ├─[ REMOTE SERVER ]────────────────────────
- *  │ ...fields + button...
- *  ├─[ SERVER SETUP ]─────────────────────────
- *  │ ...collapsible...
- *  ⌞─────────────────────────────────────────────────────────⌟
- */
+// ── Unified Panel (legacy — kept as dead reference, not called) ──────────────
+@Suppress("unused")
 @Composable
 private fun UnifiedServerPanel(
     uiState: ServerUiState,
@@ -472,14 +450,7 @@ private fun UnifiedServerPanel(
     showHelp: Boolean,
     springDp: androidx.compose.animation.core.SpringSpec<Dp>,
     springFlt: androidx.compose.animation.core.SpringSpec<Float>,
-    onDiscoveredClick: (DiscoveredServer) -> Unit,
-    onStopDiscovery: () -> Unit,
-    onRecentClick: (RecentServer) -> Unit,
-    onRemoveRecent: (RecentServer) -> Unit,
-    onUrlChange: (String) -> Unit,
-    onUsernameChange: (String) -> Unit,
-    onPasswordChange: (String) -> Unit,
-    onConnect: () -> Unit
+    callbacks: ServerArtworkCallbacks
 ) {
     val theme = LocalOpenCodeTheme.current
 
@@ -523,8 +494,8 @@ private fun UnifiedServerPanel(
                         servers = uiState.discoveredServers,
                         discoveryState = uiState.discoveryState,
                         isConnecting = uiState.isConnecting,
-                        onServerClick = onDiscoveredClick,
-                        onStopClick = onStopDiscovery
+                        onServerClick = callbacks.onDiscoveredClick,
+                        onStopClick = callbacks.onStopDiscovery
                     )
                 }
                 PanelDivider()
@@ -536,8 +507,8 @@ private fun UnifiedServerPanel(
                     RecentServersSection(
                         servers = uiState.recentServers,
                         isConnecting = uiState.isConnecting,
-                        onServerClick = onRecentClick,
-                        onRemoveServer = onRemoveRecent
+                        onServerClick = callbacks.onRecentClick,
+                        onRemoveServer = callbacks.onRemoveRecent
                     )
                 }
                 PanelDivider()
@@ -550,10 +521,10 @@ private fun UnifiedServerPanel(
                     username = uiState.username,
                     password = uiState.password,
                     isConnecting = uiState.isConnecting,
-                    onUrlChange = onUrlChange,
-                    onUsernameChange = onUsernameChange,
-                    onPasswordChange = onPasswordChange,
-                    onConnect = onConnect
+                    onUrlChange = callbacks.onUrlChange,
+                    onUsernameChange = callbacks.onUsernameChange,
+                    onPasswordChange = callbacks.onPasswordChange,
+                    onConnect = callbacks.onConnect
                 )
             }
 

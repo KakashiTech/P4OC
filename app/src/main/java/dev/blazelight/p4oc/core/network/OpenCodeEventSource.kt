@@ -10,6 +10,10 @@ import com.launchdarkly.eventsource.background.ConnectionErrorHandler
 import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.data.remote.dto.EventDataDto
 import dev.blazelight.p4oc.data.remote.dto.GlobalEventDto
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import dev.blazelight.p4oc.data.remote.mapper.EventMapper
 import dev.blazelight.p4oc.domain.model.OpenCodeEvent
 import kotlinx.coroutines.channels.BufferOverflow
@@ -25,7 +29,6 @@ import java.net.URI
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
-import kotlin.random.Random
 
 class OpenCodeEventSource(
     private val okHttpClient: OkHttpClient,
@@ -40,25 +43,21 @@ class OpenCodeEventSource(
         private const val MAX_CONSECUTIVE_ERRORS = 15
     }
 
-    /**
-     * Compute exponential backoff with jitter for SSE retry delay.
-     * Base 2000ms doubled per tier, capped to 60000ms, with ±20% jitter.
-     */
+    // Native event buffer and backoff calculator
+    private val nativeEventBuf: Long = NativeSseSupport.createBuffer(256)
+    private val nativeBackoff: Long  = NativeSseSupport.createBackoff()
+
     private fun computeRetryDelayMs(): Long {
         val errors = consecutiveErrors.get().coerceAtLeast(0)
-        val tier = min(errors / 2, 5) // grow every 2 consecutive errors, cap exponent
-        val base = (2000L shl tier).coerceAtMost(60_000L)
-        val minMs = (base * 0.8).toLong().coerceAtLeast(0)
-        val maxMs = (base * 1.2).toLong().coerceAtLeast(minMs + 1)
-        val jittered = Random.nextLong(minMs, maxMs)
-        AppLog.d(TAG, "SSE retry backoff: errors=$errors, tier=$tier, base=${base}ms, jittered=${jittered}ms")
+        val jittered = NativeSseSupport.computeDelayMs(nativeBackoff, errors)
+        AppLog.d(TAG, "SSE retry backoff (native): errors=$errors, jittered=${jittered}ms")
         return jittered
     }
 
     private val _events = MutableSharedFlow<OpenCodeEvent>(
         replay = 0,
-        extraBufferCapacity = 128, // Reduced buffer size for better memory management
-        onBufferOverflow = BufferOverflow.SUSPEND // Better than DROP_OLDEST for performance
+        extraBufferCapacity = 128,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST // tryEmit never suspends; excess events are dropped oldest-first
     )
     val events: SharedFlow<OpenCodeEvent> = _events.asSharedFlow()
 
@@ -124,10 +123,11 @@ class OpenCodeEventSource(
             }
             toClose = detachLocked()
             _connectionState.value = ConnectionState.Connecting
-            consecutiveErrors.set(0)
-
+            // Capture backoff BEFORE reset so the builder uses the accumulated error count.
+            // After reconnect succeeds, onOpen() resets consecutiveErrors to 0.
             val gen = ++generation
             besRef = createBackgroundEventSource(gen)
+            consecutiveErrors.set(0)
             backgroundEventSource = besRef
         }
         toClose?.closeSafely()
@@ -148,6 +148,8 @@ class OpenCodeEventSource(
             _connectionState.value = ConnectionState.Disconnected
         }
         toClose?.closeSafely()
+        NativeSseSupport.destroyBuffer(nativeEventBuf)
+        NativeSseSupport.destroyBackoff(nativeBackoff)
     }
 
     /**
@@ -205,42 +207,57 @@ class OpenCodeEventSource(
     private fun isActiveGeneration(gen: Long): Boolean =
         !isShutdown && generation == gen
 
+    /**
+     * Strip version suffix from event type.
+     * The server sends versioned types like "message.part.updated.1" — strip the trailing digit
+     * so the EventMapper can match on the unversioned canonical name.
+     */
+    private fun normalizeEventType(type: String): String {
+        return type.replace(Regex("""\.\d+$"""), "")
+    }
+
+    private val SYNC_META_KEYS = setOf("type", "id", "seq", "aggregateID")
+
     private fun parseAndEmitEvent(data: String) {
-        AppLog.v(TAG, "parseAndEmitEvent: RAW DATA (${data.length} chars): ${data.take(200)}")
         try {
             val globalEvent = json.decodeFromString<GlobalEventDto>(data)
-            AppLog.d(TAG, "parseAndEmitEvent: GlobalEvent payloadType=${globalEvent.payload.type}")
-            val event = eventMapper.mapToEvent(globalEvent.payload)
-            if (event != null) {
-                val emitted = _events.tryEmit(event)
-                AppLog.d(TAG, "Event emitted: ${event::class.simpleName}, success=$emitted, bufferCapacity=${_events.subscriptionCount.value}")
-                if (!emitted) {
-                    AppLog.w(TAG, "Dropped event (buffer full): ${event::class.simpleName}")
+            val payload = globalEvent.payload
+
+            when (payload.type) {
+                "sync" -> {
+                    // Envelope: {type:"sync", syncEvent:{type:"message.part.updated.1", id, seq, aggregateID, ...data...}}
+                    val syncEvent = payload.syncEvent ?: return
+                    val rawType = syncEvent["type"]?.jsonPrimitive?.content ?: return
+                    val normalizedType = normalizeEventType(rawType)
+
+                    // Properties are either in a nested "properties" key, or spread at top level
+                    // alongside the meta-fields. Try nested first, fall back to stripping meta-keys.
+                    val props: JsonObject = (syncEvent["properties"] as? JsonObject)
+                        ?: buildJsonObject {
+                            syncEvent.entries
+                                .filter { it.key !in SYNC_META_KEYS }
+                                .forEach { (k, v) -> put(k, v) }
+                        }
+
+                    emitMappedEvent(EventDataDto(type = normalizedType, properties = props))
                 }
-            } else {
-                AppLog.w(TAG, "Event mapper returned null for type: ${globalEvent.payload?.type}")
+                else -> {
+                    // Legacy direct format: payload.type is the event type, payload.properties holds data
+                    val props = payload.properties ?: buildJsonObject {}
+                    emitMappedEvent(EventDataDto(type = normalizeEventType(payload.type), properties = props))
+                }
             }
         } catch (e: Exception) {
-            AppLog.d(TAG, "Failed to parse as GlobalEvent, trying EventDataDto: ${e.message}")
-            try {
-                val eventData = json.decodeFromString<EventDataDto>(data)
-                AppLog.d(TAG, "Parsed as EventDataDto: type=${eventData.type}")
-                val event = eventMapper.mapToEvent(eventData)
-                if (event != null) {
-                    val emitted = _events.tryEmit(event)
-                    AppLog.d(TAG, "Event emitted (fallback): ${event::class.simpleName}, success=$emitted")
-                    if (!emitted) {
-                        AppLog.w(TAG, "Dropped event (buffer full, fallback): ${event::class.simpleName}")
-                    }
-                } else {
-                    AppLog.w(TAG, "Event mapper returned null for fallback type: ${eventData.type}")
-                }
-            } catch (e2: Exception) {
-                if (!data.contains("server.heartbeat") && !data.contains("server.connected")) {
-                    AppLog.e(TAG, "Failed to parse event (${data.length} chars): ${data.take(200)}…", e2)
-                }
+            if (!data.contains("server.heartbeat") && !data.contains("server.connected")) {
+                AppLog.e(TAG, "Failed to parse event (${data.length} chars): ${data.take(200)}", e)
             }
         }
+    }
+
+    private fun emitMappedEvent(eventData: EventDataDto) {
+        val event = eventMapper.mapToEvent(eventData) ?: return
+        val emitted = _events.tryEmit(event)
+        if (!emitted) AppLog.w(TAG, "Dropped event (buffer full): ${event::class.simpleName}")
     }
 
     private fun emitEvent(event: OpenCodeEvent) {
@@ -282,7 +299,16 @@ class OpenCodeEventSource(
             if (!isActiveGeneration(gen)) return
             val data = messageEvent.data
             AppLog.v(TAG, "SSE message received: event=$event, length=${data.length}")
-            parseAndEmitEvent(data)
+            // Push to native lock-free buffer (hot path)
+            val pushed = NativeSseSupport.pushEvent(nativeEventBuf, data)
+            if (!pushed) {
+                AppLog.w(TAG, "SSE native buffer full, parsing directly")
+                parseAndEmitEvent(data)
+                return
+            }
+            // Drain and parse all buffered events
+            val events = NativeSseSupport.drainEvents(nativeEventBuf)
+            for (raw in events) parseAndEmitEvent(raw)
         }
 
         override fun onComment(comment: String) {

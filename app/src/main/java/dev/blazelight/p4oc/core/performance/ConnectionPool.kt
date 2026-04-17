@@ -11,8 +11,12 @@ import kotlin.system.measureTimeMillis
 
 object ConnectionPool {
     private val connectionMutex = Mutex()
-    private val activeConnections = ConcurrentHashMap<String, PooledConnection>()
-    private val connectionPool = ConcurrentHashMap<String, MutableList<PooledConnection>>()
+    // Native registry tracks metadata (timestamps, health, stats) — no GC pressure
+    private val registry: Long = NativeConnectionPool.create()
+    // Kotlin map for client objects keyed by native slotId
+    private val clientMap = ConcurrentHashMap<Int, PooledConnection>()
+    // URL → slotId for quick lookup on acquire
+    private val urlToSlot = ConcurrentHashMap<String, Int>()
     private val maxPoolSize = 5
     private val connectionTimeoutMs = 30000L
     private var poolScope: CoroutineScope? = null
@@ -41,165 +45,111 @@ object ConnectionPool {
     
     suspend fun getConnection(url: String, factory: (String) -> PtyWebSocketClient): PtyWebSocketClient {
         connectionMutex.withLock {
-            // Try to reuse existing connection
-            val existingConnection = findAvailableConnection(url)
-            if (existingConnection != null) {
-                existingConnection.lastUsed = System.currentTimeMillis()
-                existingConnection.isInUse = true
-                existingConnection.useCount++
-                return existingConnection.client
+            // Ask native registry for a healthy idle slot
+            val slotId = NativeConnectionPool.acquire(registry, url)
+            if (slotId >= 0) {
+                val conn = clientMap[slotId]
+                if (conn != null) {
+                    conn.isInUse = true
+                    conn.useCount++
+                    conn.lastUsed = System.currentTimeMillis()
+                    return conn.client
+                }
             }
-            
-            // Create new connection
-            val newConnection = PooledConnection(
-                client = factory(url),
+
+            // Create new connection and register in native registry
+            val client = factory(url)
+            val newConn = PooledConnection(
+                client = client,
                 url = url,
                 createdAt = System.currentTimeMillis(),
-                lastUsed = System.currentTimeMillis()
+                lastUsed = System.currentTimeMillis(),
+                isInUse = true,
+                useCount = 1
             )
-            
-            activeConnections[url] = newConnection
-            newConnection.isInUse = true
-            newConnection.useCount++
-            
-            return newConnection.client
+            val nativeSlot = NativeConnectionPool.register(
+                registry, url, System.identityHashCode(client))
+            clientMap[nativeSlot] = newConn
+            urlToSlot[url] = nativeSlot
+            return newConn.client
         }
     }
     
-    private fun findAvailableConnection(url: String): PooledConnection? {
-        // Check active connections first
-        val active = activeConnections[url]
-        if (active != null && !active.isInUse && isConnectionHealthy(active)) {
-            return active
-        }
-        
-        // Check pool
-        val pool = connectionPool[url]
-        if (pool != null) {
-            val available = pool.find { !it.isInUse && isConnectionHealthy(it) }
-            if (available != null) {
-                // Move to active
-                activeConnections[url] = available
-                pool.remove(available)
-                return available
-            }
-        }
-        
-        return null
-    }
-    
-    private fun isConnectionHealthy(connection: PooledConnection): Boolean {
-        val age = System.currentTimeMillis() - connection.createdAt
-        val idleTime = System.currentTimeMillis() - connection.lastUsed
-        
-        return age < connectionTimeoutMs && idleTime < connectionTimeoutMs / 2
-    }
+    private fun isConnectionHealthy(slotId: Int): Boolean =
+        NativeConnectionPool.isHealthy(registry, slotId)
     
     suspend fun releaseConnection(url: String) {
         connectionMutex.withLock {
-            val connection = activeConnections[url]
-            if (connection != null) {
-                connection.isInUse = false
-                connection.lastUsed = System.currentTimeMillis()
-                
-                // Move to pool if under limit
-                val pool = connectionPool.getOrPut(url) { mutableListOf() }
-                if (pool.size < maxPoolSize) {
-                    pool.add(connection)
-                    activeConnections.remove(url)
-                } else {
-                    // Close excess connection
-                    try {
-                        connection.client.close()
-                    } catch (e: Exception) {
-                        // Ignore cleanup errors
-                    }
-                    activeConnections.remove(url)
-                }
+            val slotId = urlToSlot[url] ?: return@withLock
+            val conn = clientMap[slotId] ?: return@withLock
+            conn.isInUse = false
+            conn.lastUsed = System.currentTimeMillis()
+
+            // Native registry decides: retain or evict (pool size enforced natively)
+            val retained = NativeConnectionPool.release(registry, slotId)
+            if (!retained) {
+                clientMap.remove(slotId)
+                urlToSlot.remove(url)
+                try { conn.client.close() } catch (_: Exception) { }
             }
         }
     }
     
     private suspend fun cleanupIdleConnections() {
         connectionMutex.withLock {
-            val now = System.currentTimeMillis()
-            
-            // Clean up pool
-            connectionPool.values.forEach { pool ->
-                val iterator = pool.iterator()
-                while (iterator.hasNext()) {
-                    val connection = iterator.next()
-                    if (now - connection.lastUsed > connectionTimeoutMs) {
-                        try {
-                            connection.client.close()
-                        } catch (e: Exception) {
-                            // Ignore
-                        }
-                        iterator.remove()
+            // Native registry returns clientIds of stale slots
+            val staleIds = NativeConnectionPool.evictStale(registry)
+            for (clientId in staleIds) {
+                // Find slot by clientId (identity hash)
+                val iter = clientMap.iterator()
+                while (iter.hasNext()) {
+                    val (slotId, conn) = iter.next()
+                    if (System.identityHashCode(conn.client) == clientId) {
+                        iter.remove()
+                        urlToSlot.remove(conn.url)
+                        try { conn.client.close() } catch (_: Exception) { }
+                        break
                     }
                 }
-            }
-            
-            // Clean up active connections that are too old
-            activeConnections.values.removeIf { connection ->
-                val shouldRemove = now - connection.createdAt > connectionTimeoutMs * 2
-                if (shouldRemove) {
-                    try {
-                        connection.client.close()
-                    } catch (e: Exception) {
-                        // Ignore
-                    }
-                }
-                shouldRemove
             }
         }
     }
     
     fun getPoolStats(): Map<String, Any> {
+        val s = NativeConnectionPool.getStats(registry)
         return mapOf(
-            "active_connections" to activeConnections.size,
-            "pooled_connections" to connectionPool.values.sumOf { it.size },
-            "total_connections" to (activeConnections.size + connectionPool.values.sumOf { it.size }),
-            "pool_utilization" to connectionPool.mapValues { (_, pool) -> 
-                mapOf(
-                    "size" to pool.size,
-                    "max_size" to maxPoolSize
-                )
-            }
+            "active_connections"  to s[0].toInt(),
+            "pooled_connections"  to s[1].toInt(),
+            "total_created"       to s[2].toInt(),
+            "total_evicted"       to s[3].toInt(),
+            "reuse_rate_pct"      to s[4]
         )
     }
     
     suspend fun clearPool() {
         connectionMutex.withLock {
-            // Close all active connections
-            activeConnections.values.forEach { connection ->
-                try {
-                    connection.client.close()
-                } catch (e: Exception) {
-                    // Ignore
-                }
-            }
-            activeConnections.clear()
-            
-            // Close all pooled connections
-            connectionPool.values.forEach { pool ->
-                pool.forEach { connection ->
-                    try {
-                        connection.client.close()
-                    } catch (e: Exception) {
-                        // Ignore
+            val allIds = NativeConnectionPool.clear(registry)
+            for (clientId in allIds) {
+                val iter = clientMap.iterator()
+                while (iter.hasNext()) {
+                    val (_, conn) = iter.next()
+                    if (System.identityHashCode(conn.client) == clientId) {
+                        iter.remove()
+                        try { conn.client.close() } catch (_: Exception) { }
+                        break
                     }
                 }
             }
-            connectionPool.clear()
+            clientMap.clear()
+            urlToSlot.clear()
         }
-        
         poolScope?.cancel()
         poolScope = null
     }
-    
+
     fun cleanup() {
         poolScope?.cancel()
         poolScope = null
+        NativeConnectionPool.destroy(registry)
     }
 }

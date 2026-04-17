@@ -22,7 +22,6 @@ class PocketCodeApp : Application() {
         super.onCreate()
         
         startKoin {
-            androidLogger()
             androidContext(this@PocketCodeApp)
             modules(allModules)
         }

@@ -47,7 +47,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.koin.androidx.compose.koinViewModel
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.ui.components.TuiConfirmDialog
 import dev.blazelight.p4oc.ui.components.TuiAlertDialog
@@ -124,6 +126,17 @@ fun SessionListScreen(
         } else null
     }
 
+    // Refresh session statuses after returning to this screen (e.g. pop from Chat/Settings).
+    // Delayed past the transition duration so API-driven recompositions don’t compete
+    // with the pop animation and cause frame drops / visual cuts.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            kotlinx.coroutines.delay(320) // wait for pop transition to finish (~250ms spring)
+            viewModel.refreshOnResume()
+        }
+    }
+
     LaunchedEffect(uiState.newSessionId, uiState.newSessionDirectory) {
         uiState.newSessionId?.let { sessionId ->
             onNewSession(sessionId, uiState.newSessionDirectory)
@@ -143,6 +156,11 @@ fun SessionListScreen(
     }
 
     val theme = LocalOpenCodeTheme.current
+
+    // Pre-compute session tree outside the loading check — ready before the pop
+    // transition starts so the first animation frame has zero layout work.
+    val expandedSessions = remember { mutableStateMapOf<String, Boolean>() }
+    val sessionTree = remember(displayedSessions) { buildSessionTree(displayedSessions) }
 
     Scaffold(
         containerColor = theme.background,
@@ -181,24 +199,21 @@ fun SessionListScreen(
                     modifier = Modifier.align(Alignment.Center)
                 )
             } else {
-                val expandedSessions = remember { mutableStateMapOf<String, Boolean>() }
-
-                val sessionTree = remember(displayedSessions) {
-                    buildSessionTree(displayedSessions)
-                }
-
                 // OPTIMIZED LazyColumn for smooth session scrolling
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().testTag("sessions_list"),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Animated PocketCode Logo Header
+                    // Animated PocketCode Logo Header — isolated on its own GPU layer
+                    // so its 45ms typewriter recompositions don't invalidate the parent list
                     item(
                         key = "logo_header",
                         contentType = "header"
                     ) {
-                        PocketCodeLogoHeader()
+                        Box(modifier = Modifier.graphicsLayer {}) {
+                            PocketCodeLogoHeader()
+                        }
                     }
 
                     // Pinned quick actions (only on unfiltered list)

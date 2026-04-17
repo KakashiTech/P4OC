@@ -168,60 +168,30 @@ fun PocketCodeTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
-    android.util.Log.d("POCKET_THEME", "🎨 ===== PocketCodeTheme START =====")
-    android.util.Log.d("POCKET_THEME", "📥 Parameters - themeName: '$themeName', darkTheme: $darkTheme")
-    
     val context = LocalContext.current
     var openCodeTheme by remember { mutableStateOf<OpenCodeTheme?>(null) }
     var colorScheme by remember { mutableStateOf<androidx.compose.material3.ColorScheme?>(null) }
 
-    android.util.Log.d("POCKET_THEME", "🔄 Initial state - openCodeTheme: $openCodeTheme, colorScheme: $colorScheme")
-
-    // Initialize theme loader immediately
     LaunchedEffect(Unit) {
-        android.util.Log.d("POCKET_THEME", "🚀 LaunchedEffect(Unit): Starting theme loader initialization...")
         OptimizedThemeLoader.initialize(context)
-        android.util.Log.d("POCKET_THEME", "✅ Theme loader initialization completed")
     }
 
-    // Load fallback theme instantly for immediate UI
-    android.util.Log.d("POCKET_THEME", "⚡ Starting fallback theme loading...")
     val fallbackTheme = remember(themeName, darkTheme) {
-        android.util.Log.d("POCKET_THEME", "🔄 remember block: loadThemeImmediate called")
-        android.util.Log.d("POCKET_THEME", "📥 loadThemeImmediate params - themeName: '$themeName', darkTheme: $darkTheme")
-        val theme = OptimizedThemeLoader.loadThemeImmediate(context, themeName, darkTheme)
-        android.util.Log.d("POCKET_THEME", "📦 loadThemeImmediate result: ${theme.name}")
-        android.util.Log.d("POCKET_THEME", "💾 Fallback theme stored in remember")
-        theme
+        OptimizedThemeLoader.loadThemeImmediate(context, themeName, darkTheme)
     }
 
-    android.util.Log.d("POCKET_THEME", "🎯 Fallback theme ready: ${fallbackTheme.name}")
-
-    // Load real theme asynchronously and update when ready
     LaunchedEffect(themeName, darkTheme) {
-        android.util.Log.d("POCKET_THEME", "🔄 LaunchedEffect(themeName, darkTheme): Starting real theme load")
-        android.util.Log.d("POCKET_THEME", "📥 Loading real theme for - themeName: '$themeName', darkTheme: $darkTheme")
         try {
             val loadedTheme = OptimizedThemeLoader.loadTheme(context, themeName, darkTheme)
-            android.util.Log.d("POCKET_THEME", "✅ Real theme successfully loaded: ${loadedTheme.name}")
             openCodeTheme = loadedTheme
             colorScheme = loadedTheme.toMaterial3ColorScheme()
-            android.util.Log.d("POCKET_THEME", "🎨 Theme state updated - openCodeTheme: ${loadedTheme.name}")
         } catch (e: Exception) {
-            android.util.Log.e("POCKET_THEME", "❌ Failed to load real theme, keeping fallback", e)
+            // Keep fallback
         }
     }
 
-    // Use real theme if available, otherwise fallback
     val currentTheme = openCodeTheme ?: fallbackTheme
     val currentColorScheme = colorScheme ?: currentTheme.toMaterial3ColorScheme()
-    
-    android.util.Log.d("POCKET_THEME", "🎯 FINAL THEME DECISION:")
-    android.util.Log.d("POCKET_THEME", "   - openCodeTheme (real): ${openCodeTheme?.name}")
-    android.util.Log.d("POCKET_THEME", "   - fallbackTheme: ${fallbackTheme.name}")
-    android.util.Log.d("POCKET_THEME", "   - currentTheme (chosen): ${currentTheme.name}")
-    android.util.Log.d("POCKET_THEME", "   - isUsingFallback: ${openCodeTheme == null}")
-    android.util.Log.d("POCKET_THEME", "🎨 ===== PocketCodeTheme END =====")
 
     val view = LocalView.current
     if (!view.isInEditMode) {

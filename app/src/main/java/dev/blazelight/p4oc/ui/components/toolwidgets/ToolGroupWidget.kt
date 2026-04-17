@@ -11,19 +11,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.domain.model.Part
@@ -31,8 +26,6 @@ import dev.blazelight.p4oc.domain.model.ToolState
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.TuiCodeFontSize
-import dev.blazelight.p4oc.ui.theme.Sizing
-import dev.blazelight.p4oc.R
 
 /**
  * Aggregated tool state for display purposes
@@ -220,32 +213,12 @@ private fun PendingApprovalButtonsInline(
     onDeny: () -> Unit
 ) {
     val theme = LocalOpenCodeTheme.current
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(theme.secondary.copy(alpha = 0.2f))
-            .padding(horizontal = Spacing.md, vertical = Spacing.xs),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+            .background(theme.backgroundPanel.copy(alpha = 0.6f))
+            .padding(horizontal = Spacing.md, vertical = Spacing.xs)
     ) {
-        OutlinedButton(
-            onClick = onDeny,
-            modifier = Modifier
-                .weight(1f)
-                .height(Sizing.chipHeight),
-            contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.none),
-            shape = RectangleShape
-        ) {
-            Text(stringResource(R.string.deny), style = MaterialTheme.typography.labelSmall)
-        }
-        Button(
-            onClick = onApprove,
-            modifier = Modifier
-                .weight(1f)
-                .height(Sizing.chipHeight),
-            contentPadding = PaddingValues(horizontal = Spacing.md, vertical = Spacing.none),
-            shape = RectangleShape
-        ) {
-            Text(stringResource(R.string.allow), style = MaterialTheme.typography.labelSmall)
-        }
+        PendingApprovalButtons(onApprove = onApprove, onDeny = onDeny)
     }
 }
