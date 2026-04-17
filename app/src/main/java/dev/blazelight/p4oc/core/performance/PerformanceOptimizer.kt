@@ -258,7 +258,7 @@ fun <T> rememberOptimized(
         }
     }
     
-    return derivedStateOf { state!! }
+    return remember { derivedStateOf { state!! } }
 }
 
 /**
