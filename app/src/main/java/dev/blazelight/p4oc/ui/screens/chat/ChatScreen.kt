@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import dev.blazelight.p4oc.ui.components.chat.SkillPickerBottomSheet
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.ScrollableDefaults
@@ -233,6 +234,7 @@ fun ChatScreen(
     var showTodoTracker by remember { mutableStateOf(false) }
     var showFilePicker by remember { mutableStateOf(false) }
     var showRevertDialog by remember { mutableStateOf<String?>(null) }
+    var showSkillPicker by remember { mutableStateOf(false) }
 
     val lastChangedIds by viewModel.lastChangedIds.collectAsStateWithLifecycle()
 
@@ -298,6 +300,9 @@ fun ChatScreen(
                 onTodos = {
                     viewModel.loadTodos()
                     showTodoTracker = true
+                },
+                onSkills = {
+                    showSkillPicker = true
                 }
             )
         },
@@ -453,6 +458,28 @@ fun ChatScreen(
         )
     }
 
+    if (showSkillPicker) {
+        val skillViewModel = koinViewModel<dev.blazelight.p4oc.ui.screens.settings.SkillsViewModel>()
+        val skillState by skillViewModel.state.collectAsStateWithLifecycle()
+        val skillItems = remember(skillState.skills) {
+            skillState.skills.map { 
+                dev.blazelight.p4oc.ui.components.chat.SkillItem(
+                    name = it.name,
+                    description = it.description,
+                    isEnabled = it.isEnabled
+                )
+            }
+        }
+        SkillPickerBottomSheet(
+            skills = skillItems,
+            onSkillSelected = { skillName: String ->
+                viewModel.injectSkill(skillName)
+            },
+            onDismiss = { showSkillPicker = false },
+            isLoading = skillState.isLoading
+        )
+    }
+
     if (showFilePicker) {
         FilePickerDialog(
             files = pickerFiles,
@@ -511,7 +538,8 @@ private fun ChatTopBar(
     branchName: String? = null,
     todoCount: Int = 0,
     inProgressCount: Int = 0,
-    onTodos: () -> Unit = {}
+    onTodos: () -> Unit = {},
+    onSkills: () -> Unit = {}
 ) {
     // Unified Chat TopBar - coherent with MainTabScreen style
     val theme = LocalOpenCodeTheme.current
@@ -807,6 +835,10 @@ private fun ChatTopBar(
             TuiDropdownMenuItem(
                 text = "▤ ${stringResource(R.string.cd_files)}",
                 onClick = { showOverflow = false; onFiles() }
+            )
+            TuiDropdownMenuItem(
+                text = "⚡ Skills",
+                onClick = { showOverflow = false; onSkills() }
             )
         }
 

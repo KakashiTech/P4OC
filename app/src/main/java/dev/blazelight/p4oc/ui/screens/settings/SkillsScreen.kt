@@ -73,27 +73,18 @@ class SkillsViewModel constructor(
                 _state.update { it.copy(isLoading = false, error = "Not connected") }
                 return@launch
             }
-            val result = safeApiCall { api.getMcpStatus() }
+            val result = safeApiCall { api.getSkills() }
             when (result) {
                 is ApiResult.Success -> {
-                    val skills = result.data.map { (name, status) ->
-                        val description = when {
-                            status.error != null -> status.error
-                            status.status == "connected" -> "Connected"
-                            status.status == "disabled" -> "Disabled"
-                            status.status == "failed" -> "Connection failed"
-                            status.status == "needs_auth" -> "Authentication required"
-                            status.status == "needs_client_registration" -> "Client registration required"
-                            else -> status.status.replaceFirstChar { it.uppercase() }
-                        }
+                    val skills = result.data.map { skillDto ->
                         SkillInfo(
-                            name = name,
-                            description = description,
-                            source = "mcp",
-                            isEnabled = status.status == "connected",
-                            tools = emptyList(),
-                            resources = emptyList(),
-                            prompts = emptyList()
+                            name = skillDto.name,
+                            description = skillDto.description,
+                            source = skillDto.author ?: "server",
+                            isEnabled = skillDto.isEnabled,
+                            tools = skillDto.tools,
+                            resources = skillDto.resources,
+                            prompts = skillDto.prompts
                         )
                     }
                     _state.update { it.copy(skills = skills, isLoading = false) }

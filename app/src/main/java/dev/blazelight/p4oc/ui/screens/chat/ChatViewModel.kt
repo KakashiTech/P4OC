@@ -149,6 +149,14 @@ class ChatViewModel constructor(
         _uiState.update { it.copy(inputText = text) }
     }
 
+    fun injectSkill(skillName: String) {
+        _uiState.update {
+            val current = it.inputText
+            val prefix = if (current.isBlank()) "" else "$current "
+            it.copy(inputText = "${prefix}@$skillName ")
+        }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(error = null) }
     }
