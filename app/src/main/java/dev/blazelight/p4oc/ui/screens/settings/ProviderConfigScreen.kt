@@ -93,12 +93,17 @@ fun ProviderConfigScreen(
                 }
             }
             else -> {
+                val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
+                DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
+                val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
+
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding),
                     contentPadding = PaddingValues(Spacing.md),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    flingBehavior = smoothFling
                 ) {
                     item {
                         CurrentModelCard(
@@ -124,7 +129,7 @@ fun ProviderConfigScreen(
                         )
                     }
 
-                    items(connectedProviders, key = { it.id }) { provider ->
+                    items(connectedProviders, key = { it.id }, contentType = { "provider" }) { provider ->
                         ProviderCard(
                             provider = provider,
                             isExpanded = uiState.selectedProviderId == provider.id,
@@ -145,7 +150,7 @@ fun ProviderConfigScreen(
                             )
                         }
 
-                        items(disconnectedProviders, key = { it.id }) { provider ->
+                        items(disconnectedProviders, key = { it.id }, contentType = { "provider_disabled" }) { provider ->
                             DisabledProviderCard(provider = provider)
                         }
                     }

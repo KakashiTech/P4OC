@@ -7,6 +7,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -48,6 +50,7 @@ fun ChatMessage(
     defaultToolWidgetState: ToolWidgetState = ToolWidgetState.COMPACT,
     pendingPermissionsByCallId: Map<String, Permission> = emptyMap(),
     onRevert: ((String) -> Unit)? = null,
+    onFork: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     if (messageWithParts.message is Message.User) {
@@ -62,8 +65,86 @@ fun ChatMessage(
             defaultToolWidgetState = defaultToolWidgetState,
             pendingPermissionsByCallId = pendingPermissionsByCallId,
             onRevert = onRevert,
+            onFork = onFork,
             modifier = modifier
         )
+    }
+}
+
+// Lightweight paragraph chunker for Markdown virtualization. We split on blank-line
+// paragraphs and pack them up to maxChars so each chunk is fast to layout/paint.
+private fun chunkMarkdown(text: String, maxChars: Int): List<String> {
+    if (text.length <= maxChars) return listOf(text)
+    val paras = text.split("\n\n")
+    val result = mutableListOf<String>()
+    var current = StringBuilder()
+    for (p in paras) {
+        val add = if (current.isEmpty()) p else "\n\n" + p
+        if (current.length + add.length > maxChars && current.isNotEmpty()) {
+            result.add(current.toString())
+            current = StringBuilder(p)
+        } else {
+            current.append(add)
+        }
+    }
+    if (current.isNotEmpty()) result.add(current.toString())
+    return result
+}
+
+@Composable
+internal fun ReasoningGroupView(items: List<Part.Reasoning>) {
+    val theme = LocalOpenCodeTheme.current
+    var expanded by remember(items) { mutableStateOf(false) }
+    val totalDuration = remember(items) {
+        val ms = items.sumOf { r ->
+            val t = r.time
+            if (t != null) (t.end ?: t.start) - t.start else 0L
+        }
+        when {
+            ms <= 0L -> null
+            ms < 1000L -> "${ms}ms"
+            ms < 60_000L -> "${ms/1000}s"
+            else -> "${ms/60_000}m${(ms%60_000)/1000}s"
+        }
+    }
+
+    val count = items.size
+    val header = remember(count, totalDuration, expanded) {
+        buildString {
+            append("· thoughts ($count)")
+            if (totalDuration != null) append("  [${totalDuration}]")
+            append(if (expanded) "  ▾" else "  ▸")
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = header,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            color = theme.textMuted.copy(alpha = 0.45f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(role = Role.Button) { expanded = !expanded }
+                .padding(vertical = Spacing.xxs)
+        )
+        if (expanded) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 260.dp)
+                    .padding(start = Spacing.sm),
+                contentPadding = PaddingValues(0.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                items(
+                    items = items,
+                    key = { it.id }
+                ) { r ->
+                    ReasoningPart(r)
+                }
+            }
+        }
     }
 }
 
@@ -84,6 +165,10 @@ private fun UserMessage(messageWithParts: MessageWithParts, modifier: Modifier =
     }
     val text = remember(textParts) { textParts.joinToString("\n") { it.text } }
     if (text.isBlank()) return
+
+    val shouldVirtualizeUser by remember(text) {
+        mutableStateOf(text.length > 1200 || text.count { it == '\n' } > 40)
+    }
 
     // Glass morphism transparent background - modern terminal style
     val promptColor = theme.success // Green for dev elegance
@@ -112,14 +197,52 @@ private fun UserMessage(messageWithParts: MessageWithParts, modifier: Modifier =
             fontWeight = FontWeight.Medium,
             color = promptColor,
         )
-        Text(
-            text = text,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            color = textColor,
-            modifier = Modifier.weight(1f),
-        )
+        if (shouldVirtualizeUser) {
+            Box(modifier = Modifier.weight(1f)) {
+                val lines = remember(text) { text.split('\n') }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                    contentPadding = PaddingValues(0.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                ) {
+                    items(
+                        items = lines,
+                        key = { it.hashCode() }
+                    ) { line ->
+                        Text(
+                            text = line,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = textColor,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        } else {
+            Text(
+                text = text,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                color = textColor,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
+}
+
+// ── Part grouping model used by AssistantMessage ───────────────────────────────
+/**
+ * Sealed class for grouping parts: either a batch of consecutive tools or a single other part.
+ * @Stable lets Compose skip recomposition of unchanged items in the forEach loop.
+ */
+@Stable
+private sealed class PartGroupItem {
+    @Stable data class Tools(val tools: List<Part.Tool>) : PartGroupItem()
+    @Stable data class ReasoningGroup(val items: List<Part.Reasoning>) : PartGroupItem()
+    @Stable data class Other(val part: Part) : PartGroupItem()
 }
 
 // ── ASSISTANT — terminal output with left accent bar ──────────────────────────
@@ -134,17 +257,35 @@ private fun AssistantMessage(
     defaultToolWidgetState: ToolWidgetState = ToolWidgetState.COMPACT,
     pendingPermissionsByCallId: Map<String, Permission> = emptyMap(),
     onRevert: ((String) -> Unit)? = null,
+    onFork: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalOpenCodeTheme.current
     val partGroups = remember(messageWithParts.parts) {
+        val reasoningParts = messageWithParts.parts.filterIsInstance<Part.Reasoning>()
+        val groupReasoning = reasoningParts.isNotEmpty() && reasoningParts.all { it.time?.end != null }
         buildList {
             var toolBatch = mutableListOf<Part.Tool>()
+            var reasoningGroupAdded = false
             for (part in messageWithParts.parts) {
                 when (part) {
                     is Part.Tool -> toolBatch.add(part)
                     is Part.StepStart, is Part.StepFinish, is Part.Snapshot,
                     is Part.Agent, is Part.Retry, is Part.Compaction, is Part.Subtask -> Unit
+                    is Part.Reasoning -> {
+                        if (toolBatch.isNotEmpty()) {
+                            add(PartGroupItem.Tools(toolBatch.toList()))
+                            toolBatch = mutableListOf()
+                        }
+                        if (groupReasoning) {
+                            if (!reasoningGroupAdded) {
+                                add(PartGroupItem.ReasoningGroup(reasoningParts))
+                                reasoningGroupAdded = true
+                            }
+                        } else {
+                            add(PartGroupItem.Other(part))
+                        }
+                    }
                     else -> {
                         if (toolBatch.isNotEmpty()) {
                             add(PartGroupItem.Tools(toolBatch.toList()))
@@ -187,6 +328,7 @@ private fun AssistantMessage(
             partGroups.forEach { group ->
                 val groupKey = when (group) {
                     is PartGroupItem.Tools -> "tools_${group.tools.firstOrNull()?.id ?: "empty"}"
+                    is PartGroupItem.ReasoningGroup -> "reasoning_group_${group.items.firstOrNull()?.messageID ?: ""}"
                     is PartGroupItem.Other -> "part_${group.part.id}"
                 }
                 key(groupKey) {
@@ -200,22 +342,23 @@ private fun AssistantMessage(
                                 onOpenSubSession = onOpenSubSession
                             )
                             group.tools.forEach { tool ->
-                                tool.callID?.let { callId ->
-                                    pendingPermissionsByCallId[callId]?.let { perm ->
-                                        key(perm.id) {
-                                            InlinePermissionPrompt(
-                                                permission = perm,
-                                                onAllow  = { onToolApprove(perm.id) },
-                                                onAlways = { onToolAlways(perm.id) },
-                                                onReject = { onToolDeny(perm.id) }
-                                            )
-                                        }
+                                pendingPermissionsByCallId[tool.callID]?.let { perm ->
+                                    key(perm.id) {
+                                        InlinePermissionPrompt(
+                                            permission = perm,
+                                            onAllow  = { onToolApprove(perm.id) },
+                                            onAlways = { onToolAlways(perm.id) },
+                                            onReject = { onToolDeny(perm.id) }
+                                        )
                                     }
                                 }
                             }
                         }
+                        is PartGroupItem.ReasoningGroup -> {
+                            ReasoningGroupView(items = group.items)
+                        }
                         is PartGroupItem.Other -> when (val part = group.part) {
-                            is Part.Text      -> TextPart(part)
+                            is Part.Text      -> TextPart(part, enableVirtualization = false)
                             is Part.Reasoning -> ReasoningPart(part)
                             is Part.File      -> FilePart(part)
                             is Part.Patch     -> CompactPatchPart(part)
@@ -232,7 +375,7 @@ private fun AssistantMessage(
                 val msgId = (messageWithParts.message as? Message.Assistant)?.id
                 if (msgId != null) {
                     Text(
-                        text = "↺ ${stringResource(R.string.revert_changes)}",
+                        text = "↺",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         color = theme.warning,
@@ -246,19 +389,9 @@ private fun AssistantMessage(
     }
 }
 
-/**
- * Sealed class for grouping parts: either a batch of consecutive tools or a single other part.
- * @Stable lets Compose skip recomposition of unchanged items in the forEach loop.
- */
-@Stable
-private sealed class PartGroupItem {
-    @Stable data class Tools(val tools: List<Part.Tool>) : PartGroupItem()
-    @Stable data class Other(val part: Part) : PartGroupItem()
-}
-
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
-internal fun FlatTextPart(part: Part.Text) = TextPart(part)
+internal fun FlatTextPart(part: Part.Text) = TextPart(part, enableVirtualization = false)
 
 @Composable
 internal fun FlatReasoningPart(part: Part.Reasoning) = ReasoningPart(part)
@@ -286,9 +419,28 @@ internal fun FlatInlinePermission(
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
-private fun TextPart(part: Part.Text) {
+private fun TextPart(part: Part.Text, enableVirtualization: Boolean = true) {
     val clipboardManager = LocalClipboardManager.current
     val haptic = LocalHapticFeedback.current
+    val theme = LocalOpenCodeTheme.current
+    var expanded by remember(part.id) { mutableStateOf(false) }
+
+    val isLarge by remember(part.text, part.isStreaming) {
+        mutableStateOf(!part.isStreaming && (part.text.length > 2000 || part.text.count { it == '\n' } > 60))
+    }
+    val isVeryLarge by remember(part.text, part.isStreaming) {
+        mutableStateOf(!part.isStreaming && (part.text.length > 6000 || part.text.count { it == '\n' } > 200))
+    }
+    var renderAsMarkdown by remember(part.id) { mutableStateOf(false) }
+    val shouldVirtualizeMarkdown by remember(part.text, part.isStreaming) {
+        mutableStateOf(!part.isStreaming && (part.text.length > 1200 || part.text.count { it == '\n' } > 40))
+    }
+    val previewText by remember(part.text) {
+        mutableStateOf(
+            if (part.text.length <= 2000) part.text
+            else part.text.take(2000)
+        )
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -307,11 +459,84 @@ private fun TextPart(part: Part.Text) {
                     onLongClickLabel = "Copy text"
                 )
         ) {
-            StreamingMarkdown(
-                text = part.text,
-                isStreaming = part.isStreaming,
-                modifier = Modifier.fillMaxWidth()
-            )
+            if (isLarge && !expanded) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    StreamingMarkdown(
+                        text = previewText,
+                        isStreaming = false,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "… more ▸",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = theme.accent,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .clickable(role = Role.Button) { expanded = true }
+                    )
+                }
+            } else if (enableVirtualization && expanded && isVeryLarge && !renderAsMarkdown) {
+                // Virtualized plain-text view for extremely large content to avoid heavy
+                // paragraph shaping/painting stalls when entering the viewport.
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // Header toggle to render full Markdown on demand
+                    Text(
+                        text = "Render markdown ▸",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = theme.accent,
+                        modifier = Modifier
+                            .padding(bottom = Spacing.xxs)
+                            .clickable(role = Role.Button) { renderAsMarkdown = true }
+                    )
+                    val lines = remember(part.id, part.text) { part.text.split('\n') }
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 360.dp),
+                        contentPadding = PaddingValues(0.dp),
+                        verticalArrangement = Arrangement.spacedBy(0.dp)
+                    ) {
+                        items(
+                            items = lines,
+                            key = { it.hashCode() }
+                        ) { line ->
+                            Text(
+                                text = line,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                                color = theme.text,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            } else if (enableVirtualization && shouldVirtualizeMarkdown) {
+                val chunks = remember(part.id, part.text) { chunkMarkdown(part.text, 1400) }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                    contentPadding = PaddingValues(0.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                ) {
+                    items(items = chunks, key = { chunk -> chunk.hashCode() }) { chunk ->
+                        StreamingMarkdown(
+                            text = chunk,
+                            isStreaming = false,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            } else {
+                StreamingMarkdown(
+                    text = part.text,
+                    isStreaming = part.isStreaming,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
         if (part.isStreaming) {
             // Keep indicator small and low-cost; could be a thin bar shimmer in future
@@ -391,24 +616,63 @@ private fun ReasoningPart(part: Part.Reasoning) {
         }
 
         if (expanded && part.text.isNotEmpty()) {
-            Text(
-                text = part.text,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                color = thoughtColorDim,
+            var prevText by remember(part.id) { mutableStateOf("") }
+            val parasState = remember(part.id) { mutableStateListOf<String>() }
+            LaunchedEffect(part.text) {
+                val new = part.text
+                if (new.startsWith(prevText)) {
+                    val delta = new.substring(prevText.length)
+                    if (delta.isNotEmpty()) {
+                        val segments = delta.split('\n')
+                        val lastEndedWithNewline = prevText.lastOrNull() == '\n'
+                        if (parasState.isEmpty()) {
+                            parasState.addAll(segments)
+                        } else {
+                            if (!lastEndedWithNewline && parasState.isNotEmpty()) {
+                                parasState[parasState.lastIndex] = parasState.last() + segments.first()
+                                segments.drop(1).forEach { parasState.add(it) }
+                            } else {
+                                segments.forEach { parasState.add(it) }
+                            }
+                        }
+                    }
+                } else {
+                    parasState.clear()
+                    parasState.addAll(new.split('\n'))
+                }
+                prevText = new
+            }
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = Spacing.sm, top = 2.dp, bottom = 2.dp)
-                    .combinedClickable(
-                        onClick = { expanded = !expanded },
-                        onLongClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            clipboard.setText(AnnotatedString(part.text))
-                        },
-                        onLongClickLabel = "Copy thought",
-                        role = Role.Button
+                    .heightIn(max = 220.dp)
+                    .padding(start = Spacing.sm, top = 2.dp, bottom = 2.dp),
+                contentPadding = PaddingValues(0.dp),
+                verticalArrangement = Arrangement.spacedBy(0.dp)
+            ) {
+                items(
+                    items = parasState,
+                    key = { it.hashCode() }
+                ) { para ->
+                    Text(
+                        text = para,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = thoughtColorDim,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = { expanded = !expanded },
+                                onLongClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    clipboard.setText(AnnotatedString(para))
+                                },
+                                onLongClickLabel = "Copy thought",
+                                role = Role.Button
+                            )
                     )
-            )
+                }
+            }
         }
     }
 }

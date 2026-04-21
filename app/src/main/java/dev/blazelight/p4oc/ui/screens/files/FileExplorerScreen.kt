@@ -23,8 +23,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenu
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenuItem
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenu
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenuItem
 import dev.blazelight.p4oc.ui.components.TuiTopBar
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -65,6 +65,10 @@ fun FileExplorerScreen(
     var isSearchActive by remember { mutableStateOf(false) }
     var isSymbolMode by remember { mutableStateOf(false) }
     var symbolQuery by remember { mutableStateOf("") }
+    // Native fling for silky vertical scroll
+    val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
+    DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
+    val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
     
     // Optimized derived state for file filtering to reduce recompositions
     val filteredFiles by remember(searchQuery) {
@@ -221,9 +225,14 @@ fun FileExplorerScreen(
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(Spacing.md),
-                        verticalArrangement = Arrangement.spacedBy(Spacing.xxs)
+                        verticalArrangement = Arrangement.spacedBy(Spacing.xxs),
+                        flingBehavior = smoothFling
                     ) {
-                        items(symbolResults, key = { "${it.uri}:${it.range.startLine}:${it.name}" }) { symbol ->
+                        items(
+                            symbolResults,
+                            key = { "${it.uri}:${it.range.startLine}:${it.name}" },
+                            contentType = { "symbol" }
+                        ) { symbol ->
                             SymbolResultItem(
                                 symbol = symbol,
                                 onClick = {
@@ -261,9 +270,14 @@ fun FileExplorerScreen(
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(Spacing.md),
-                            verticalArrangement = Arrangement.spacedBy(Spacing.xxs)
+                            verticalArrangement = Arrangement.spacedBy(Spacing.xxs),
+                            flingBehavior = smoothFling
                         ) {
-                            items(filteredFiles, key = { it.path }) { file ->
+                            items(
+                                filteredFiles,
+                                key = { it.path },
+                                contentType = { if (it.isDirectory) "dir" else "file" }
+                            ) { file ->
                                 TuiFileItem(
                                     file = file,
                                     onClick = {
@@ -420,25 +434,25 @@ private fun TuiFileItem(
             }
         }
         
-        TuiDropdownMenu(
+        TuiTerminalMenu(
             expanded = showContextMenu,
             onDismissRequest = { showContextMenu = false }
         ) {
-            TuiDropdownMenuItem(
-                text = stringResource(R.string.files_copy_path),
+            TuiTerminalMenuItem(
+                text = "Copy path",
+                symbol = "⌘",
                 onClick = {
                     clipboardManager.setText(AnnotatedString(file.path))
                     showContextMenu = false
-                },
-                leadingIcon = Icons.Default.ContentCopy
+                }
             )
-            TuiDropdownMenuItem(
-                text = stringResource(R.string.files_copy_name),
+            TuiTerminalMenuItem(
+                text = "Copy name",
+                symbol = "✎",
                 onClick = {
                     clipboardManager.setText(AnnotatedString(file.name))
                     showContextMenu = false
-                },
-                leadingIcon = Icons.Default.TextFields
+                }
             )
         }
     }

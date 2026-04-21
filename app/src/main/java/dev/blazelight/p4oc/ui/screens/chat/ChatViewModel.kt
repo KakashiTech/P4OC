@@ -11,6 +11,7 @@ import dev.blazelight.p4oc.core.network.DirectoryManager
 import dev.blazelight.p4oc.core.network.safeApiCall
 import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.data.remote.dto.ExecuteCommandRequest
+import dev.blazelight.p4oc.data.remote.dto.ForkSessionRequest
 import dev.blazelight.p4oc.data.remote.dto.PartInputDto
 import dev.blazelight.p4oc.data.remote.dto.PermissionResponseRequest
 import dev.blazelight.p4oc.data.remote.dto.QuestionReplyRequest
@@ -29,7 +30,10 @@ import dev.blazelight.p4oc.ui.navigation.Screen
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import java.util.concurrent.CopyOnWriteArraySet
 
 /**
  * Slim coordinator — delegates to sub-managers for message state,
@@ -49,7 +53,7 @@ class ChatViewModel constructor(
     private val sessionDirectory: String? = savedStateHandle.get<String>(Screen.Chat.ARG_DIRECTORY)
 
     // Child session IDs (subagent sessions whose parentID == this sessionId)
-    private val childSessionIds = mutableSetOf<String>()
+    private val childSessionIds = CopyOnWriteArraySet<String>()
 
     private fun isOwnedSession(eventSessionId: String): Boolean =
         eventSessionId == sessionId || eventSessionId in childSessionIds
@@ -139,6 +143,11 @@ class ChatViewModel constructor(
         loadVcsInfo()
     }
 
+    override fun onCleared() {
+        super.onCleared()
+        dialogManager.cleanup()
+    }
+
     // --- Public API (delegating) ---
 
     fun markAsRead() {
@@ -206,7 +215,10 @@ class ChatViewModel constructor(
             when (result) {
                 is ApiResult.Success -> {
                     AppLog.d(TAG, "Loaded ${result.data.size} messages")
-                    val mapped = result.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
+                    // Map DTOs to domain models off the main thread to avoid jank on first paint
+                    val mapped = withContext(Dispatchers.Default) {
+                        result.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
+                    }
                     messageStore.loadInitial(mapped)
                     _uiState.update { it.copy(isLoading = false) }
                 }
@@ -602,6 +614,45 @@ class ChatViewModel constructor(
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(error = "Failed to unrevert: ${result.message}") }
+                }
+            }
+        }
+    }
+
+    // --- Fork Session ---
+
+    fun forkSession(
+        messageId: String,
+        onForkCreated: (String) -> Unit,
+        onError: ((String) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            val api = connectionManager.getApi() ?: run {
+                val errorMsg = "Not connected"
+                _uiState.update { it.copy(isLoading = false, error = errorMsg) }
+                onError?.invoke(errorMsg)
+                return@launch
+            }
+            val request = ForkSessionRequest(messageID = messageId)
+            val result = safeApiCall { api.forkSession(sessionId, request, getDirectory()) }
+            when (result) {
+                is ApiResult.Success -> {
+                    val forkSessionId = result.data.id
+                    AppLog.d(TAG, "forkSession: Created fork with ID $forkSessionId from message $messageId")
+                    _uiState.update { it.copy(isLoading = false) }
+                    onForkCreated(forkSessionId)
+                }
+                is ApiResult.Error -> {
+                    val errorMsg = "Failed to fork session: ${result.message}"
+                    AppLog.e(TAG, "forkSession failed: ${result.message}", result.throwable)
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = errorMsg
+                        )
+                    }
+                    onError?.invoke(errorMsg)
                 }
             }
         }

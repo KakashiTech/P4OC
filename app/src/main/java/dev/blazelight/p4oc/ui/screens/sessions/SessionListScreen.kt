@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.koin.androidx.compose.koinViewModel
@@ -56,8 +57,9 @@ import dev.blazelight.p4oc.ui.components.TuiAlertDialog
 import dev.blazelight.p4oc.ui.components.TuiInputDialog
 import dev.blazelight.p4oc.ui.components.TuiButton
 import dev.blazelight.p4oc.ui.components.TuiTextButton
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenu
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenuItem
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenu
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenuItem
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenuDivider
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
 import dev.blazelight.p4oc.domain.model.Session
@@ -157,10 +159,15 @@ fun SessionListScreen(
 
     val theme = LocalOpenCodeTheme.current
 
-    // Pre-compute session tree outside the loading check — ready before the pop
-    // transition starts so the first animation frame has zero layout work.
+    // Pre-compute session tree with derivedStateOf for optimal recompositions
     val expandedSessions = remember { mutableStateMapOf<String, Boolean>() }
-    val sessionTree = remember(displayedSessions) { buildSessionTree(displayedSessions) }
+    val sessionTree by remember(displayedSessions) {
+        derivedStateOf { buildSessionTree(displayedSessions) }
+    }
+
+    val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
+    DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
+    val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
 
     Scaffold(
         containerColor = theme.background,
@@ -203,7 +210,8 @@ fun SessionListScreen(
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().testTag("sessions_list"),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    flingBehavior = smoothFling
                 ) {
                     // Animated PocketCode Logo Header — isolated on its own GPU layer
                     // so its 45ms typewriter recompositions don't invalidate the parent list
@@ -211,14 +219,14 @@ fun SessionListScreen(
                         key = "logo_header",
                         contentType = "header"
                     ) {
-                        Box(modifier = Modifier.graphicsLayer {}) {
+                        Box(modifier = Modifier.graphicsLayer { alpha = 0.99f }) {
                             PocketCodeLogoHeader()
                         }
                     }
 
                     // Pinned quick actions (only on unfiltered list)
                     if (filterProjectId == null) {
-                        item(key = "quick_actions_row") {
+                        item(key = "quick_actions_row", contentType = "actions") {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -253,7 +261,8 @@ fun SessionListScreen(
                     } else {
                         items(
                             items = sessionTree,
-                            key = { it.sessionWithProject.session.id }
+                            key = { it.sessionWithProject.session.id },
+                            contentType = { node -> if (node.children.isEmpty()) "leaf" else "branch" }
                         ) { node ->
                             SessionTreeNode(
                                 node = node,
@@ -479,31 +488,34 @@ private fun SessionCard(
         else      -> theme.success
     }
 
-    // Terminal TUI style with left accent bar
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(IntrinsicSize.Min)
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = { showContextMenu = true },
-                role = Role.Button
-            )
+    // Terminal TUI style with left accent bar - wrapped in Box for menu positioning
+    Box(
+        modifier = Modifier.fillMaxWidth()
     ) {
-        // Left accent bar - color indicates status
-        Box(
+        Row(
             modifier = Modifier
-                .width(4.dp)
-                .fillMaxHeight()
-                .background(indicatorColor)
-        )
-
-        // Main content area
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .background(cardColor)
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min)
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { showContextMenu = true },
+                    role = Role.Button
+                )
         ) {
+            // Left accent bar - color indicates status
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .background(indicatorColor)
+            )
+
+            // Main content area
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .background(cardColor)
+            ) {
             Row(
                 modifier = Modifier
                     .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 4.dp)
@@ -628,50 +640,52 @@ private fun SessionCard(
                     )
                 }
             }
-        }
-    }
-
-    // Long-press context menu
-    TuiDropdownMenu(
-        expanded = showContextMenu,
-        onDismissRequest = { showContextMenu = false }
-    ) {
-        TuiDropdownMenuItem(
-            text = stringResource(R.string.sessions_rename),
-            onClick = { showContextMenu = false; onRename() },
-            leadingIcon = Icons.Default.Edit
-        )
-        TuiDropdownMenuItem(
-            text = stringResource(R.string.sessions_view_changes),
-            onClick = { showContextMenu = false; onViewChanges() },
-            leadingIcon = Icons.Default.Description
-        )
-        TuiDropdownMenuItem(
-            text = stringResource(R.string.sessions_summarize),
-            onClick = { showContextMenu = false; onSummarize() },
-            leadingIcon = Icons.Default.Summarize
-        )
-        if (isShared) {
-            TuiDropdownMenuItem(
-                text = stringResource(R.string.sessions_unshare),
-                onClick = { showContextMenu = false; onShare() },
-                leadingIcon = Icons.Default.LinkOff
-            )
-        } else {
-            TuiDropdownMenuItem(
-                text = stringResource(R.string.sessions_share),
-                onClick = { showContextMenu = false; onShare() },
-                leadingIcon = Icons.Default.Share
-            )
-        }
-        HorizontalDivider(color = theme.borderSubtle)
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.sessions_delete), color = theme.error, fontFamily = FontFamily.Monospace) },
-            onClick = { showContextMenu = false; onDelete() },
-            leadingIcon = {
-                Icon(Icons.Default.Delete, contentDescription = null, tint = theme.error)
             }
-        )
+        }
+
+        // Long-press context menu (terminal-style ASCII) - anchored to top-end of card
+        TuiTerminalMenu(
+            expanded = showContextMenu,
+            onDismissRequest = { showContextMenu = false },
+            modifier = Modifier.align(Alignment.TopEnd),
+            offset = DpOffset((-4).dp, 4.dp)
+        ) {
+            TuiTerminalMenuItem(
+                text = "Rename",
+                symbol = "✎",
+                onClick = { showContextMenu = false; onRename() }
+            )
+            TuiTerminalMenuItem(
+                text = "Changes",
+                symbol = "±",
+                onClick = { showContextMenu = false; onViewChanges() }
+            )
+            TuiTerminalMenuItem(
+                text = "Summarize",
+                symbol = "Σ",
+                onClick = { showContextMenu = false; onSummarize() }
+            )
+            if (isShared) {
+                TuiTerminalMenuItem(
+                    text = "Unshare",
+                    symbol = "◈",
+                    onClick = { showContextMenu = false; onShare() }
+                )
+            } else {
+                TuiTerminalMenuItem(
+                    text = "Share",
+                    symbol = "◈",
+                    onClick = { showContextMenu = false; onShare() }
+                )
+            }
+            TuiTerminalMenuDivider()
+            TuiTerminalMenuItem(
+                text = "Delete",
+                symbol = "×",
+                onClick = { showContextMenu = false; onDelete() },
+                isDestructive = true
+            )
+        }
     }
 }
 

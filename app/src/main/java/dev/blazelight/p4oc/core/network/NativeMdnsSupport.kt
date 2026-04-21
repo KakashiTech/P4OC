@@ -13,10 +13,17 @@ package dev.blazelight.p4oc.core.network
  *  - ServiceCache: hash map upsert without GC pressure
  */
 object NativeMdnsSupport {
-
-    init {
-        System.loadLibrary("p4oc_mdns")
+    @Volatile private var loaded = false
+    @Synchronized fun ensureLoaded() {
+        if (loaded) return
+        try {
+            System.loadLibrary("p4oc_mdns")
+            loaded = true
+        } catch (t: Throwable) {
+            throw t
+        }
     }
+    fun warmup() = ensureLoaded()
 
     // ── IP Utilities ──────────────────────────────────────────────────────────
 

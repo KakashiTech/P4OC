@@ -57,31 +57,24 @@ fun ToolCallWidget(
     
     val canCycle = !isHitl // HITL tools don't cycle
     
-    AnimatedContent(
-        targetState = currentState,
-        modifier = modifier.fillMaxWidth(),
-        transitionSpec = { fadeIn() togetherWith fadeOut() },
-        label = "tool_widget_state"
-    ) { state ->
-        when (state) {
-            ToolWidgetState.ONELINE -> ToolCallOneline(
-                tool = tool,
-                onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
-                modifier = Modifier.fillMaxWidth()
-            )
-            ToolWidgetState.COMPACT -> ToolCallCompact(
-                tool = tool,
-                onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
-                modifier = Modifier.fillMaxWidth()
-            )
-            ToolWidgetState.EXPANDED -> ToolCallExpanded(
-                tool = tool,
-                onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
-                onToolApprove = onToolApprove,
-                onToolDeny = onToolDeny,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
+    when (currentState) {
+        ToolWidgetState.ONELINE -> ToolCallOneline(
+            tool = tool,
+            onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
+            modifier = modifier.fillMaxWidth()
+        )
+        ToolWidgetState.COMPACT -> ToolCallCompact(
+            tool = tool,
+            onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
+            modifier = modifier.fillMaxWidth()
+        )
+        ToolWidgetState.EXPANDED -> ToolCallExpanded(
+            tool = tool,
+            onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
+            onToolApprove = onToolApprove,
+            onToolDeny = onToolDeny,
+            modifier = modifier.fillMaxWidth()
+        )
     }
 }
 

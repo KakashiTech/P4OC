@@ -152,7 +152,10 @@ class MdnsDiscoveryManager(private val context: Context) {
     }
 
     // Native service cache (O(1) upsert/remove, no GC pressure)
-    private val nativeCache: Long = NativeMdnsSupport.createCache()
+    private val nativeCache: Long by lazy {
+        NativeMdnsSupport.ensureLoaded()
+        NativeMdnsSupport.createCache()
+    }
 
     private val _discoveredServers = MutableStateFlow<List<DiscoveredServer>>(emptyList())
     val discoveredServers: StateFlow<List<DiscoveredServer>> = _discoveredServers.asStateFlow()
@@ -367,6 +370,7 @@ class MdnsDiscoveryManager(private val context: Context) {
         sweepActive = true
 
         sweepJob = scope.launch {
+            kotlinx.coroutines.delay(800)
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val targets = mutableSetOf<String>()
 
@@ -418,9 +422,9 @@ class MdnsDiscoveryManager(private val context: Context) {
                 return@launch
             }
 
-            // Cap total hosts to avoid heavy scans
-            val capped = targets.take(512)
-            val semaphore = Semaphore(32)
+            val cap = if (seeds.isNotEmpty()) 96 else 256
+            val capped = targets.take(cap)
+            val semaphore = Semaphore(if (seeds.isNotEmpty()) 16 else 24)
 
             AppLog.d(TAG, "Extended sweep: probing ${capped.size} hosts on ports=${PROBE_PORTS.joinToString()}")
 

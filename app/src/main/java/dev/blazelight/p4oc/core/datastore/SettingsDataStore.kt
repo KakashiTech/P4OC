@@ -96,17 +96,16 @@ class SettingsDataStore constructor(
     private var cachedThemeName: String = DEFAULT_THEME_NAME
 
     init {
-        // Load cached values synchronously to ensure they're available immediately
-        try {
-            runBlocking {
+        scope.launch {
+            try {
                 val prefs = context.dataStore.data.first()
                 cachedServerUrl = prefs[KEY_SERVER_URL] ?: DEFAULT_LOCAL_URL
                 cachedUsername = prefs[KEY_USERNAME]
                 cachedThemeMode = prefs[KEY_THEME_MODE] ?: THEME_SYSTEM
                 cachedThemeName = prefs[KEY_THEME_NAME] ?: DEFAULT_THEME_NAME
+            } catch (e: Exception) {
+                AppLog.e(TAG, "Error during async init", e)
             }
-        } catch (e: Exception) {
-            AppLog.e(TAG, "Error during init", e)
         }
     }
 

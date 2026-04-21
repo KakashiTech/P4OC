@@ -417,6 +417,7 @@ private fun LogsDialog(
     var logs by remember { mutableStateOf("Loading logs...") }
     var isLoading by remember { mutableStateOf(true) }
     var copySuccess by remember { mutableStateOf(false) }
+    var errorSummary by remember { mutableStateOf<String?>(null) }
 
     // Load logs when dialog opens
     LaunchedEffect(Unit) {
@@ -425,14 +426,70 @@ private fun LogsDialog(
                 // Get app package name for filtering
                 val packageName = context.packageName
                 // Read last 200 lines of logcat filtered by app tags
-                val process = Runtime.getRuntime().exec(
-                    arrayOf("logcat", "-d", "-t", "200", "--pid=${android.os.Process.myPid()}")
+                val process = ProcessBuilder(
+                    "logcat", "-d", "-t", "2000", "--pid=${android.os.Process.myPid()}"
                 )
-                val logsText = process.inputStream.bufferedReader().use { it.readText() }
+                    .redirectErrorStream(true)
+                    .start()
+                val logsText = try {
+                    process.inputStream.bufferedReader().use { it.readText() }
+                } finally {
+                    try { process.destroy() } catch (_: Exception) {}
+                }
+                val lines = logsText.lineSequence().toList()
+                val patterns = listOf(
+                    "FATAL EXCEPTION",
+                    "AndroidRuntime",
+                    "Application Not Responding",
+                    "ANR",
+                    "Input dispatching timed out",
+                    "IllegalArgumentException",
+                    "IllegalStateException",
+                    "IndexOutOfBoundsException",
+                    "StackOverflowError",
+                    "Key \"",
+                    "not responding",
+                    "MessageBlockUtils",
+                    "patchFlatItems",
+                    "ChatScreen",
+                    "StrictMode policy violation"
+                )
+                val errorLines = lines.filter { l -> patterns.any { p -> l.contains(p, ignoreCase = true) } }
+                if (errorLines.isNotEmpty()) {
+                    try {
+                        val dir = java.io.File(context.filesDir, "logs"); if (!dir.exists()) dir.mkdirs()
+                        val out = java.io.File(dir, "recent_errors.txt")
+                        val header = "----- ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date())} -----\n"
+                        val newContent = header + errorLines.joinToString("\n") + "\n"
+                        
+                        // Check file size and rotate if needed (max 100KB)
+                        val maxSize = 100 * 1024 // 100KB
+                        val existingContent = if (out.exists() && out.length() > maxSize) {
+                            // Read last portion to stay within limit
+                            out.readText().takeLast(maxSize / 2)
+                        } else if (out.exists()) {
+                            out.readText()
+                        } else {
+                            ""
+                        }
+                        
+                        val tmp = java.io.File(dir, "recent_errors.txt.tmp")
+                        tmp.writeText(existingContent + newContent)
+                        if (!tmp.renameTo(out)) {
+                            out.writeText(existingContent + newContent)
+                            try { tmp.delete() } catch (_: Exception) {}
+                        }
+                        errorSummary = "Found ${errorLines.size} error lines. Saved to ${out.absolutePath}"
+                    } catch (_: Exception) {
+                        errorSummary = "Found ${errorLines.size} error lines."
+                    }
+                } else {
+                    errorSummary = null
+                }
                 logs = if (logsText.isBlank()) {
                     "No recent logs found.\n\nNote: Logs are only available in debug builds or with specific permissions."
                 } else {
-                    logsText
+                    if (errorSummary != null) errorSummary + "\n\n" + logsText else logsText
                 }
             } catch (e: Exception) {
                 logs = "Error reading logs: ${e.message}\n\nNote: Reading logs requires READ_LOGS permission on some Android versions."

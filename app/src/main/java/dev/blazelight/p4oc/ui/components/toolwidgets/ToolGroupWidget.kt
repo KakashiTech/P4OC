@@ -164,11 +164,10 @@ fun ToolGroupWidget(
             }
         }
         
-        // Compact/Expanded details - animateContentSize avoids the IntrinsicSize double-pass
-        // that expandVertically() triggers inside LazyColumn.
+        // Compact/Expanded details — no animateContentSize to avoid repeated intrinsic passes.
         if (currentState != ToolWidgetState.ONELINE) {
             Column(
-                modifier = Modifier.animateContentSize(animationSpec = tween(120)),
+                modifier = Modifier,
                 verticalArrangement = Arrangement.spacedBy(1.dp)
             ) {
                 tools.forEach { tool ->

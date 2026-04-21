@@ -16,10 +16,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.RectangleShape
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenu
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenuItem
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenu
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenuItem
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -176,24 +176,24 @@ fun AttachmentMenu(
     onSelectFromProject: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    TuiDropdownMenu(
+    TuiTerminalMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
         modifier = modifier
     ) {
-        TuiDropdownMenuItem(
-            text = stringResource(R.string.attachment_files),
-            leadingIcon = Icons.AutoMirrored.Filled.InsertDriveFile,
+        TuiTerminalMenuItem(
+            text = "Files",
+            symbol = "◈",
             onClick = { onSelectFiles(); onDismiss() }
         )
-        TuiDropdownMenuItem(
-            text = stringResource(R.string.attachment_images),
-            leadingIcon = Icons.Default.Image,
+        TuiTerminalMenuItem(
+            text = "Images",
+            symbol = "○",
             onClick = { onSelectImages(); onDismiss() }
         )
-        TuiDropdownMenuItem(
-            text = stringResource(R.string.attachment_from_project),
-            leadingIcon = Icons.Default.Folder,
+        TuiTerminalMenuItem(
+            text = "Project",
+            symbol = "⌂",
             onClick = { onSelectFromProject(); onDismiss() }
         )
     }

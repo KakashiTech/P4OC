@@ -2,13 +2,19 @@ package dev.blazelight.p4oc.ui.screens.chat
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -22,7 +28,11 @@ import dev.blazelight.p4oc.domain.model.MessageWithParts
 import dev.blazelight.p4oc.domain.model.Part
 import dev.blazelight.p4oc.domain.model.Permission
 import dev.blazelight.p4oc.ui.components.chat.ChatMessage
+import dev.blazelight.p4oc.ui.components.chat.FlatReasoningPart
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
+import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.font.FontFamily
 
 // ── Flat item model ───────────────────────────────────────────────────────────
 // Each element of this list becomes ONE LazyColumn item.
@@ -40,6 +50,7 @@ sealed class FlatChatItem {
     @Stable data class UserPart(val messageWithParts: MessageWithParts) : FlatChatItem()
     @Stable data class TextPart(val part: Part.Text, val msgId: String) : FlatChatItem()
     @Stable data class ReasoningPart(val part: Part.Reasoning, val msgId: String) : FlatChatItem()
+    @Stable data class ReasoningGroup(val items: List<Part.Reasoning>, val msgId: String, val groupIndex: Int) : FlatChatItem()
     @Stable data class ToolBatch(val tools: List<Part.Tool>, val msgId: String, val batchIndex: Int) : FlatChatItem()
     @Stable data class FilePart(val part: Part.File, val msgId: String) : FlatChatItem()
     @Stable data class PatchPart(val part: Part.Patch, val msgId: String) : FlatChatItem()
@@ -47,62 +58,108 @@ sealed class FlatChatItem {
 
 /**
  * Builds flat items already reversed for LazyColumn(reverseLayout = true).
- * Avoids a per-recomposition asReversed() O(N) alloc on the main thread hot path.
- * During streaming (50 tokens/sec) this eliminates ~50 full list copies per second.
+ * Keeps only the most recent MAX_FLAT_ITEMS using a bounded deque to avoid OOM
+ * while ensuring the newest content is retained.
  */
 fun buildFlatItems(blocks: List<MessageBlock>): List<FlatChatItem> {
-    val result = mutableListOf<FlatChatItem>()
+    // First pass: calculate items per block to ensure block-level atomicity
+    val blockItems = mutableListOf<Pair<MessageBlock, List<FlatChatItem>>>()
+    var totalItems = 0
+
     for (block in blocks) {
-        when (block) {
-            is MessageBlock.UserBlock -> result.add(FlatChatItem.UserPart(block.message))
-            is MessageBlock.AssistantBlock -> {
-                if (block.messages.isEmpty()) continue
-                // Use lastId (newest message) as the block anchor key.
-                // firstId changes when loadMore prepends older messages that merge
-                // into this block — LazyColumn then sees a new key for the same bar
-                // item and plays a reorder animation, briefly showing both old and new.
-                // lastId is always the most-recent message and never changes on prepend.
-                val lastId = block.messages.last().message.id
-                result.add(FlatChatItem.AssistantBarStart(lastId))
-                var toolBatch = mutableListOf<Part.Tool>()
-                var batchIndex = 0
-                for (msg in block.messages) {
-                    val msgId = msg.message.id
-                    for (part in msg.parts) {
-                        when (part) {
-                            is Part.Tool -> toolBatch.add(part)
-                            is Part.StepStart, is Part.StepFinish, is Part.Snapshot,
-                            is Part.Agent, is Part.Retry, is Part.Compaction,
-                            is Part.Subtask -> Unit
-                            else -> {
-                                if (toolBatch.isNotEmpty()) {
-                                    result.add(FlatChatItem.ToolBatch(toolBatch.toList(), msgId, batchIndex++))
-                                    toolBatch = mutableListOf()
+        val items = buildBlockItems(block)
+        blockItems.add(block to items)
+        totalItems += items.size
+    }
+
+    // If we exceed limit, drop oldest blocks (at the start of the list) atomically
+    val result = mutableListOf<FlatChatItem>()
+    var itemsToSkip = (totalItems - MAX_FLAT_ITEMS).coerceAtLeast(0)
+
+    for ((block, items) in blockItems) {
+        if (itemsToSkip >= items.size) {
+            // Skip this entire block
+            itemsToSkip -= items.size
+            continue
+        } else if (itemsToSkip > 0) {
+            // Partial skip within block - only valid for user blocks (single item)
+            // For assistant blocks, we must skip entirely or keep entirely to maintain integrity
+            if (block is MessageBlock.UserBlock && items.size == 1) {
+                itemsToSkip--
+                continue
+            }
+            // For assistant blocks, if we need to skip partially, skip the whole block
+            itemsToSkip = (itemsToSkip - items.size).coerceAtLeast(0)
+            continue
+        }
+        result.addAll(items)
+    }
+
+    // Reverse to bottom-first order
+    result.reverse()
+    return result
+}
+
+/**
+ * Build flat items for a single block without truncation.
+ */
+private fun buildBlockItems(block: MessageBlock): List<FlatChatItem> {
+    val result = mutableListOf<FlatChatItem>()
+    when (block) {
+        is MessageBlock.UserBlock -> {
+            result.add(FlatChatItem.UserPart(block.message))
+        }
+        is MessageBlock.AssistantBlock -> {
+            if (block.messages.isEmpty()) return result
+            val lastId = block.messages.last().message.id
+            result.add(FlatChatItem.AssistantBarStart(lastId))
+
+            var toolBatch = mutableListOf<Part.Tool>()
+            var batchIndex = 0
+            for (msg in block.messages) {
+                val msgId = msg.message.id
+                val reasoningParts = msg.parts.filterIsInstance<Part.Reasoning>()
+                val canGroupReasoning = reasoningParts.isNotEmpty() && reasoningParts.all { it.time?.end != null }
+                var reasoningGroupAdded = false
+                for (part in msg.parts) {
+                    when (part) {
+                        is Part.Tool -> toolBatch.add(part)
+                        is Part.StepStart, is Part.StepFinish, is Part.Snapshot,
+                        is Part.Agent, is Part.Retry, is Part.Compaction,
+                        is Part.Subtask -> Unit
+                        else -> {
+                            if (toolBatch.isNotEmpty()) {
+                                result.add(FlatChatItem.ToolBatch(toolBatch.toList(), msgId, batchIndex++))
+                                toolBatch = mutableListOf()
+                            }
+                            when (part) {
+                                is Part.Text -> result.add(FlatChatItem.TextPart(part, msgId))
+                                is Part.Reasoning -> {
+                                    if (canGroupReasoning && !reasoningGroupAdded) {
+                                        result.add(FlatChatItem.ReasoningGroup(reasoningParts, msgId, batchIndex++))
+                                        reasoningGroupAdded = true
+                                    } else if (!canGroupReasoning) {
+                                        result.add(FlatChatItem.ReasoningPart(part, msgId))
+                                    }
                                 }
-                                when (part) {
-                                    is Part.Text      -> result.add(FlatChatItem.TextPart(part, msgId))
-                                    is Part.Reasoning -> result.add(FlatChatItem.ReasoningPart(part, msgId))
-                                    is Part.File      -> result.add(FlatChatItem.FilePart(part, msgId))
-                                    is Part.Patch     -> result.add(FlatChatItem.PatchPart(part, msgId))
-                                    is Part.Tool, is Part.StepStart, is Part.StepFinish,
-                                    is Part.Snapshot, is Part.Agent, is Part.Retry,
-                                    is Part.Compaction, is Part.Subtask -> Unit
-                                }
+                                is Part.File  -> result.add(FlatChatItem.FilePart(part, msgId))
+                                is Part.Patch -> result.add(FlatChatItem.PatchPart(part, msgId))
+                                else -> Unit
                             }
                         }
                     }
                 }
-                if (toolBatch.isNotEmpty()) {
-                    result.add(FlatChatItem.ToolBatch(toolBatch.toList(), lastId, batchIndex))
-                }
-                val hasRevert = block.messages.any { msg ->
-                    msg.parts.any { it is Part.Tool }
-                }
-                result.add(FlatChatItem.AssistantBarEnd(lastId, hasRevert))
             }
+            // Flush any pending tool batch before closing the block
+            if (toolBatch.isNotEmpty()) {
+                result.add(FlatChatItem.ToolBatch(toolBatch.toList(), lastId, batchIndex))
+            }
+            val hasRevert = block.messages.any { msg ->
+                msg.parts.any { it is Part.Tool }
+            }
+            result.add(FlatChatItem.AssistantBarEnd(lastId, hasRevert))
         }
     }
-    result.reverse()
     return result
 }
 
@@ -118,35 +175,137 @@ fun buildFlatItems(blocks: List<MessageBlock>): List<FlatChatItem> {
  * Falls back to full rebuild if structural changes (new messages, pagination) are detected.
  * The list is returned already reversed (bottom-first) to match LazyColumn(reverseLayout=true).
  */
+private const val MAX_FLAT_ITEMS = 1500 // Prevent OOM by limiting visible items
+
 fun patchFlatItems(
     prev: List<FlatChatItem>,
     allMessages: List<MessageWithParts>,
     changedIds: Set<String>
 ): List<FlatChatItem>? {
     if (changedIds.isEmpty()) return null
-    // If any changed ID is NEW (not yet in prev), fall back to full rebuild
-    val prevMsgIds = buildPrevMsgIdSet(prev)
-    if (changedIds.any { it !in prevMsgIds }) return null
 
     // Rebuild only the blocks containing changed IDs
     val blocks = groupMessagesIntoBlocks(allMessages)
-    // Build a map: msgId -> the FlatChatItems it produces (in forward order)
+
+    // Build a map: blockAnchor (lastId) -> the FlatChatItems it produces
     val changedItemMap = buildChangedItemMap(blocks, changedIds)
 
+    // Pre-compute which message IDs belong to which assistant block anchors
+    val msgIdToBlockAnchor = buildMsgIdToBlockAnchorMap(blocks)
+
+    // Map changed IDs to their effective anchor (assistant lastId) when applicable
+    val effectiveAnchors: Set<String> = changedIds.map { id -> msgIdToBlockAnchor[id] ?: id }.toSet()
+
+    // If any effective anchor is NEW (not yet in prev), fall back to full rebuild
+    val prevMsgIds = buildPrevMsgIdSet(prev)
+    if (effectiveAnchors.any { it !in prevMsgIds }) {
+        AppLog.d("MessageBlockUtils", "patchFlatItems: fallback to full rebuild (new anchors in changed set): ${effectiveAnchors - prevMsgIds}")
+        return null
+    }
+
     // Walk prev (which is already reversed) and splice replacements in
-    val result = ArrayList<FlatChatItem>(prev.size)
+    val targetSize = prev.size.coerceAtMost(MAX_FLAT_ITEMS)
+    val result = ArrayList<FlatChatItem>(targetSize)
+    val processedBlocks = mutableSetOf<String>() // Track processed assistant block anchors
     var i = 0
-    while (i < prev.size) {
+    var itemCount = 0
+
+    while (i < prev.size && itemCount < MAX_FLAT_ITEMS) {
         val item = prev[i]
         val ownerId = flatItemOwnerId(item)
-        if (ownerId != null && ownerId in changedIds) {
-            // Skip all consecutive items owned by this message (they'll be replaced)
-            while (i < prev.size && flatItemOwnerId(prev[i]) == ownerId) i++
-            // Insert the replacement items (already in reversed order from changedItemMap)
-            changedItemMap[ownerId]?.let { result.addAll(it) }
-        } else {
-            result.add(item)
+
+        // Check if this item belongs to a changed assistant block
+        val blockAnchor = ownerId?.let { msgIdToBlockAnchor[it] }
+        val isInChangedBlock = blockAnchor != null && changedItemMap.containsKey(blockAnchor)
+
+        if (isInChangedBlock && blockAnchor !in processedBlocks) {
+            AppLog.d(TAG, "patch: replace block anchor=$blockAnchor at i=$i owner=$ownerId")
+            // First time encountering this changed block - skip entire old block and insert new one
+            processedBlocks.add(blockAnchor)
+
+            // Skip ALL items belonging to this block (from AssistantBarStart to AssistantBarEnd)
+            while (i < prev.size && isItemInBlock(prev[i], blockAnchor, msgIdToBlockAnchor)) {
+                i++
+            }
+
+            // Insert the replacement block atomically; if it doesn't fit fully, fall back to full rebuild
+            changedItemMap[blockAnchor]?.let { newItems ->
+                if (itemCount + newItems.size <= MAX_FLAT_ITEMS) {
+                    for (newItem in newItems) {
+                        result.add(newItem)
+                    }
+                    itemCount += newItems.size
+                } else {
+                    AppLog.w(TAG, "patch: cannot insert block anchor=$blockAnchor due to MAX_FLAT_ITEMS limit; falling back to full rebuild")
+                    return null
+                }
+            }
+        } else if (isInChangedBlock) {
+            AppLog.d(TAG, "patch: skip already-processed block anchor=$blockAnchor at i=$i")
+            // Already processed this block - skip these items (they were already replaced)
+            while (i < prev.size && isItemInBlock(prev[i], blockAnchor, msgIdToBlockAnchor)) {
+                i++
+            }
+        } else if (ownerId in changedIds) {
+            AppLog.d(TAG, "patch: replace single user item owner=$ownerId at i=$i")
+            // Changed user message - replace just this item (always size 1)
+            changedItemMap[ownerId]?.let { newItems ->
+                if (itemCount + newItems.size <= MAX_FLAT_ITEMS) {
+                    for (newItem in newItems) result.add(newItem)
+                    itemCount += newItems.size
+                } else {
+                    AppLog.w(TAG, "patch: cannot insert user item owner=$ownerId due to MAX_FLAT_ITEMS limit; falling back to full rebuild")
+                    return null
+                }
+            }
             i++
+        } else {
+            // unchanged path: keep
+            // Unchanged item - keep it
+            result.add(item)
+            itemCount++
+            i++
+        }
+    }
+    AppLog.d("MessageBlockUtils", "patchFlatItems: prev=${prev.size} -> result=${result.size}, changed=${changedIds.size}, anchors=${effectiveAnchors.size}")
+    return result
+}
+
+/**
+ * Check if an item belongs to a specific assistant block (by its anchor/lastId)
+ * Uses the msgId -> blockAnchor mapping to correctly associate items from any
+ * message within the block (not just the last message).
+ */
+private fun isItemInBlock(
+    item: FlatChatItem,
+    blockAnchor: String,
+    msgIdToBlockAnchor: Map<String, String>
+): Boolean {
+    return when (item) {
+        is FlatChatItem.AssistantBarStart -> item.messageId == blockAnchor
+        is FlatChatItem.AssistantBarEnd -> item.messageId == blockAnchor
+        is FlatChatItem.ToolBatch -> msgIdToBlockAnchor[item.msgId] == blockAnchor
+        is FlatChatItem.TextPart -> msgIdToBlockAnchor[item.msgId] == blockAnchor
+        is FlatChatItem.ReasoningPart -> msgIdToBlockAnchor[item.msgId] == blockAnchor
+        is FlatChatItem.ReasoningGroup -> msgIdToBlockAnchor[item.msgId] == blockAnchor
+        is FlatChatItem.FilePart -> msgIdToBlockAnchor[item.msgId] == blockAnchor
+        is FlatChatItem.PatchPart -> msgIdToBlockAnchor[item.msgId] == blockAnchor
+        is FlatChatItem.UserPart -> false // User items don't belong to assistant blocks
+    }
+}
+
+/**
+ * Build a map from message ID to its assistant block anchor (lastId)
+ * Returns null for messages not in assistant blocks
+ */
+private fun buildMsgIdToBlockAnchorMap(blocks: List<MessageBlock>): Map<String, String> {
+    val result = mutableMapOf<String, String>()
+    for (block in blocks) {
+        if (block is MessageBlock.AssistantBlock) {
+            val anchor = block.messages.last().message.id
+            for (msg in block.messages) {
+                result[msg.message.id] = anchor
+            }
         }
     }
     return result
@@ -161,6 +320,7 @@ private fun flatItemOwnerId(item: FlatChatItem): String? = when (item) {
     is FlatChatItem.AssistantBarEnd   -> item.messageId
     is FlatChatItem.TextPart          -> item.msgId
     is FlatChatItem.ReasoningPart     -> item.msgId
+    is FlatChatItem.ReasoningGroup    -> item.msgId
     is FlatChatItem.ToolBatch         -> item.msgId
     is FlatChatItem.FilePart          -> item.msgId
     is FlatChatItem.PatchPart         -> item.msgId
@@ -189,6 +349,9 @@ private fun buildChangedItemMap(
                 var batchIndex = 0
                 for (msg in block.messages) {
                     val msgId = msg.message.id
+                    val reasoningParts = msg.parts.filterIsInstance<Part.Reasoning>()
+                    val canGroupReasoning = reasoningParts.isNotEmpty() && reasoningParts.all { it.time?.end != null }
+                    var reasoningGroupAdded = false
                     for (part in msg.parts) {
                         when (part) {
                             is Part.Tool -> toolBatch.add(part)
@@ -201,10 +364,17 @@ private fun buildChangedItemMap(
                                     toolBatch = mutableListOf()
                                 }
                                 when (part) {
-                                    is Part.Text      -> items.add(FlatChatItem.TextPart(part, msgId))
-                                    is Part.Reasoning -> items.add(FlatChatItem.ReasoningPart(part, msgId))
-                                    is Part.File      -> items.add(FlatChatItem.FilePart(part, msgId))
-                                    is Part.Patch     -> items.add(FlatChatItem.PatchPart(part, msgId))
+                                    is Part.Text -> items.add(FlatChatItem.TextPart(part, msgId))
+                                    is Part.Reasoning -> {
+                                        if (canGroupReasoning && !reasoningGroupAdded) {
+                                            items.add(FlatChatItem.ReasoningGroup(reasoningParts, msgId, batchIndex++))
+                                            reasoningGroupAdded = true
+                                        } else if (!canGroupReasoning) {
+                                            items.add(FlatChatItem.ReasoningPart(part, msgId))
+                                        }
+                                    }
+                                    is Part.File  -> items.add(FlatChatItem.FilePart(part, msgId))
+                                    is Part.Patch -> items.add(FlatChatItem.PatchPart(part, msgId))
                                     is Part.Tool, is Part.StepStart, is Part.StepFinish,
                                     is Part.Snapshot, is Part.Agent, is Part.Retry,
                                     is Part.Compaction, is Part.Subtask -> Unit
@@ -220,11 +390,16 @@ private fun buildChangedItemMap(
                 items.add(FlatChatItem.AssistantBarEnd(lastId, hasRevert))
                 // Reverse so items are in bottom-first order (matching buildFlatItems output)
                 items.reverse()
-                // Map ALL msgIds in this block to the same reversed items
-                // Create a copy for each message to avoid key duplication in LazyColumn
-                block.messages.forEach { msg ->
-                    if (msg.message.id in changedIds) {
-                        result[msg.message.id] = items.toMutableList()
+                // Map under the block anchor (lastId)
+                if (lastId in changedIds || block.messages.any { it.message.id in changedIds }) {
+                    result[lastId] = items
+                }
+                // Also map under each CHANGED message id inside this block, so a change
+                // detected at any message id can resolve to the same replacement set.
+                block.messages.forEach { m ->
+                    val mid = m.message.id
+                    if (mid in changedIds) {
+                        result[mid] = items
                     }
                 }
             }
@@ -247,7 +422,8 @@ internal fun FlatChatItemView(
     onOpenSubSession: ((String) -> Unit)? = null,
     defaultToolWidgetState: ToolWidgetState = ToolWidgetState.COMPACT,
     pendingPermissionsByCallId: Map<String, Permission> = emptyMap(),
-    onRevert: ((String) -> Unit)? = null
+    onRevert: ((String) -> Unit)? = null,
+    onFork: ((String) -> Unit)? = null
 ) {
     when (item) {
         is FlatChatItem.UserPart -> {
@@ -259,27 +435,43 @@ internal fun FlatChatItemView(
                 onOpenSubSession = onOpenSubSession,
                 defaultToolWidgetState = defaultToolWidgetState,
                 pendingPermissionsByCallId = pendingPermissionsByCallId,
-                onRevert = onRevert
+                onRevert = onRevert,
+                onFork = null
             )
         }
         // AssistantBarStart: zero-height spacer that opens the visual turn grouping
         is FlatChatItem.AssistantBarStart -> {
             Spacer(modifier = Modifier.height(4.dp))
         }
-        // AssistantBarEnd: bottom spacing + optional revert button
+        // AssistantBarEnd: compact controls row (symbols only)
         is FlatChatItem.AssistantBarEnd -> {
-            if (item.showRevert && onRevert != null) {
-                val theme = dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme.current
-                androidx.compose.material3.Text(
-                    text = "↺ ${androidx.compose.ui.res.stringResource(dev.blazelight.p4oc.R.string.revert_changes)}",
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    color = theme.warning,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(role = Role.Button) { onRevert(item.messageId) }
-                        .padding(start = 10.dp, top = 2.dp, bottom = 2.dp)
-                )
+            val theme = dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme.current
+            androidx.compose.foundation.layout.Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 10.dp, top = 2.dp, bottom = 2.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
+            ) {
+                if (item.showRevert && onRevert != null) {
+                    androidx.compose.material3.Text(
+                        text = "↺",
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = theme.warning,
+                        modifier = Modifier
+                            .clickable(role = Role.Button) { onRevert(item.messageId) }
+                    )
+                }
+                onFork?.let { forkCb ->
+                    androidx.compose.material3.Text(
+                        text = "⎘",
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = theme.accent,
+                        modifier = Modifier
+                            .clickable(role = Role.Button) { forkCb(item.messageId) }
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(4.dp))
         }
@@ -291,6 +483,11 @@ internal fun FlatChatItemView(
         is FlatChatItem.ReasoningPart -> {
             AssistantPartRow {
                 dev.blazelight.p4oc.ui.components.chat.FlatReasoningPart(item.part)
+            }
+        }
+        is FlatChatItem.ReasoningGroup -> {
+            AssistantPartRow {
+                dev.blazelight.p4oc.ui.components.chat.ReasoningGroupView(items = item.items)
             }
         }
         is FlatChatItem.ToolBatch -> {
@@ -400,7 +597,8 @@ internal fun MessageBlockView(
     onOpenSubSession: ((String) -> Unit)? = null,
     defaultToolWidgetState: ToolWidgetState = ToolWidgetState.COMPACT,
     pendingPermissionsByCallId: Map<String, Permission> = emptyMap(),
-    onRevert: ((String) -> Unit)? = null
+    onRevert: ((String) -> Unit)? = null,
+    onFork: ((String) -> Unit)? = null
 ) {
     when (block) {
         is MessageBlock.UserBlock -> {
@@ -412,7 +610,8 @@ internal fun MessageBlockView(
                 onOpenSubSession = onOpenSubSession,
                 defaultToolWidgetState = defaultToolWidgetState,
                 pendingPermissionsByCallId = pendingPermissionsByCallId,
-                onRevert = onRevert
+                onRevert = onRevert,
+                onFork = null
             )
         }
         is MessageBlock.AssistantBlock -> {
@@ -443,7 +642,8 @@ internal fun MessageBlockView(
                 onOpenSubSession = onOpenSubSession,
                 defaultToolWidgetState = defaultToolWidgetState,
                 pendingPermissionsByCallId = pendingPermissionsByCallId,
-                onRevert = onRevert
+                onRevert = onRevert,
+                onFork = onFork?.let { cb -> { (mergedMessageWithParts.message as? Message.Assistant)?.id?.let(cb) } }
             )
         }
     }

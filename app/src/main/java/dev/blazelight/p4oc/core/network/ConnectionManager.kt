@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import android.content.Context
 import okhttp3.Cache
@@ -81,10 +82,13 @@ class ConnectionManager constructor(
         _connectionState.value = ConnectionState.Connecting
 
         return try {
-            val baseClient = buildBaseOkHttpClient(config, password)
-            val okHttpClient = buildOkHttpClient(baseClient)
-            val retrofit = buildRetrofit(config.url, okHttpClient)
-            val api = retrofit.create(OpenCodeApi::class.java)
+            val (baseClient, okHttpClient, api) = withContext(Dispatchers.IO) {
+                val base = buildBaseOkHttpClient(config, password)
+                val client = buildOkHttpClient(base)
+                val retrofit = buildRetrofit(config.url, client)
+                val api = retrofit.create(OpenCodeApi::class.java)
+                Triple(base, client, api)
+            }
 
             // Parallel health check with timeout for faster connection validation
             val healthResult = runCatching {
@@ -100,14 +104,7 @@ class ConnectionManager constructor(
 
             AppLog.d(TAG, "Health check passed, starting SSE")
 
-            // Pre-warm connection pool for upcoming requests
-            scope.launch(Dispatchers.IO) {
-                try {
-                    api.health() // Second call reuses warmed connection
-                } catch (_: Exception) { }
-            }
-
-            val sseClient = buildSseOkHttpClient(baseClient)
+            val sseClient = withContext(Dispatchers.IO) { buildSseOkHttpClient(baseClient) }
             val eventSource = OpenCodeEventSource(
                 okHttpClient = sseClient,
                 json = json,

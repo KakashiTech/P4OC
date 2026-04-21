@@ -567,6 +567,7 @@ private fun TuiKey(
     )
     Box(
         modifier = modifier
+            .fillMaxWidth()
             .height(height)
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .border(Sizing.strokeMd, borderColor.copy(alpha = if (isPressed) 1f else 0.65f), RectangleShape)

@@ -58,13 +58,12 @@ private val iosPopExit: AnimatedContentTransitionScope<*>.() -> ExitTransition =
 // CROSSFADE: used for stack-replace transitions (autoconnect Server→Sessions, disconnect
 // Sessions→Server). These have no inherent directionality so a slide would feel wrong.
 // A clean fade communicates "level change" without implying forward or back.
+// OPTIMIZED: Removed scale to prevent jank, faster timing for fluid feel
 private val crossFadeEnter: AnimatedContentTransitionScope<*>.() -> EnterTransition = {
-    fadeIn(tween(300, easing = iosEaseOut)) +
-    scaleIn(tween(300, easing = iosEaseOut), initialScale = 0.97f)
+    fadeIn(tween(120, easing = iosEaseOut))
 }
 private val crossFadeExit: AnimatedContentTransitionScope<*>.() -> ExitTransition = {
-    fadeOut(tween(220, easing = iosEaseInOut)) +
-    scaleOut(tween(220, easing = iosEaseInOut), targetScale = 0.97f)
+    fadeOut(tween(100, easing = iosEaseInOut))
 }
 
 /**

@@ -18,6 +18,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -465,7 +466,9 @@ fun ChatInputBar(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(horizontal = Spacing.xxs),
+                        .padding(horizontal = Spacing.xxs)
+                        .heightIn(min = 0.dp, max = 160.dp)
+                        .verticalScroll(rememberScrollState()),
                     contentAlignment = Alignment.CenterStart
                 ) {
                     if (value.isEmpty()) {
@@ -490,7 +493,7 @@ fun ChatInputBar(
                             color = theme.text
                         ),
                         cursorBrush = SolidColor(theme.accent),
-                        maxLines = 5
+                        maxLines = 8
                     )
                 }
 

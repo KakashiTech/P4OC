@@ -76,6 +76,8 @@ android {
         buildConfig = true
     }
 
+    // Compose Compiler handled by Kotlin Compose plugin (alias in plugins block)
+
     packaging {
         jniLibs {
             useLegacyPackaging = false
@@ -108,6 +110,13 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // Recomposition tracing enabled unconditionally - reports go to build/compose_compiler
+        // These are only generated during compilation, no runtime impact
+        freeCompilerArgs.addAll(
+            "-P",
+            "plugin:androidx.compose.compiler.plugins.kotlin:reportsDestination=" +
+                layout.buildDirectory.dir("compose_compiler").get().asFile.absolutePath
+        )
     }
 }
 

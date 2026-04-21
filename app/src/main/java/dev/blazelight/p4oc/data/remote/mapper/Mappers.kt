@@ -4,6 +4,7 @@ import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.data.remote.dto.*
 import dev.blazelight.p4oc.domain.model.*
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -50,9 +51,15 @@ object SessionMapper {
         parentID = dto.parentID,
         title = dto.title,
         version = dto.version,
-        createdAt = dto.time.created,
-        updatedAt = dto.time.updated ?: dto.time.created,
-        compactingAt = dto.time.compacting,
+        createdAt = dto.time?.created ?: run {
+            AppLog.w("SessionMapper", "Session ${dto.id} missing time.created; defaulting to 0L")
+            0L
+        },
+        updatedAt = dto.time?.updated ?: dto.time?.created ?: run {
+            AppLog.w("SessionMapper", "Session ${dto.id} missing time.updated/created; defaulting to 0L")
+            0L
+        },
+        compactingAt = dto.time?.compacting,
         summary = dto.summary?.let { mapSummaryToDomain(it) },
         shareUrl = dto.share?.url,
         revert = dto.revert?.let { mapRevertToDomain(it) }
@@ -563,12 +570,22 @@ class EventMapper constructor(
         when (dto.type) {
             "message.updated" -> {
                 val wrapper = json.decodeFromJsonElement<MessageEventDto>(dto.properties)
-                OpenCodeEvent.MessageUpdated(messageMapper.mapToDomain(wrapper.info))
+                // Handle missing info field from server
+                val info = wrapper.info ?: run {
+                    AppLog.w(TAG, "message.updated missing info field, skipping")
+                    return null
+                }
+                OpenCodeEvent.MessageUpdated(messageMapper.mapToDomain(info))
             }
             "message.part.updated" -> {
                 val partDto = json.decodeFromJsonElement<PartUpdateDto>(dto.properties)
+                // Handle missing part field from server
+                val part = partDto.part ?: run {
+                    AppLog.w(TAG, "message.part.updated missing part field, skipping")
+                    return null
+                }
                 OpenCodeEvent.MessagePartUpdated(
-                    part = PartMapper.mapToDomain(partDto.part),
+                    part = PartMapper.mapToDomain(part),
                     delta = partDto.delta
                 )
             }
@@ -581,18 +598,61 @@ class EventMapper constructor(
                 OpenCodeEvent.PartRemoved(props.sessionID, props.messageID, props.partID)
             }
             "session.created" -> {
-                val sessionDto = json.decodeFromJsonElement<SessionEventDto>(dto.properties).info
-                    ?: json.decodeFromJsonElement<SessionDto>(dto.properties)
+                val sessionDto = try {
+                    json.decodeFromJsonElement<SessionEventDto>(dto.properties).info
+                        ?: json.decodeFromJsonElement<SessionDto>(dto.properties)
+                } catch (e: SerializationException) {
+                    AppLog.w(TAG, "Failed to parse session event (malformed JSON): ${e.message}")
+                    null
+                } catch (e: IllegalArgumentException) {
+                    // Programming errors should propagate, not be silently caught
+                    throw e
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "Failed to parse session.created, skipping: ${e.message}")
+                    null
+                }
+                if (sessionDto == null || sessionDto.id.isEmpty()) {
+                    AppLog.w(TAG, "session.created with null or empty id, skipping")
+                    return null
+                }
                 OpenCodeEvent.SessionCreated(SessionMapper.mapToDomain(sessionDto))
             }
             "session.updated" -> {
-                val sessionDto = json.decodeFromJsonElement<SessionEventDto>(dto.properties).info
-                    ?: json.decodeFromJsonElement<SessionDto>(dto.properties)
+                val sessionDto = try {
+                    json.decodeFromJsonElement<SessionEventDto>(dto.properties).info
+                        ?: json.decodeFromJsonElement<SessionDto>(dto.properties)
+                } catch (e: SerializationException) {
+                    AppLog.w(TAG, "Failed to parse session.updated (malformed JSON): ${e.message}")
+                    return null
+                } catch (e: IllegalArgumentException) {
+                    throw e
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "Failed to parse session.updated, skipping: ${e.message}")
+                    return null
+                }
+                if (sessionDto.id.isEmpty()) {
+                    AppLog.w(TAG, "session.updated with empty id, skipping")
+                    return null
+                }
                 OpenCodeEvent.SessionUpdated(SessionMapper.mapToDomain(sessionDto))
             }
             "session.deleted" -> {
-                val sessionDto = json.decodeFromJsonElement<SessionEventDto>(dto.properties).info
-                    ?: json.decodeFromJsonElement<SessionDto>(dto.properties)
+                val sessionDto = try {
+                    json.decodeFromJsonElement<SessionEventDto>(dto.properties).info
+                        ?: json.decodeFromJsonElement<SessionDto>(dto.properties)
+                } catch (e: SerializationException) {
+                    AppLog.w(TAG, "Failed to parse session.deleted (malformed JSON): ${e.message}")
+                    return null
+                } catch (e: IllegalArgumentException) {
+                    throw e
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "Failed to parse session.deleted, skipping: ${e.message}")
+                    return null
+                }
+                if (sessionDto.id.isEmpty()) {
+                    AppLog.w(TAG, "session.deleted with empty id, skipping")
+                    return null
+                }
                 OpenCodeEvent.SessionDeleted(SessionMapper.mapToDomain(sessionDto))
             }
             "session.status" -> {
@@ -736,6 +796,10 @@ class EventMapper constructor(
         AppLog.e("EventMapper", "Failed to map event type=${dto.type}: ${e.message}", e)
         null
     }
+
+    private companion object {
+        const val TAG = "EventMapper"
+    }
 }
 
 // ============================================================================
@@ -744,7 +808,7 @@ class EventMapper constructor(
 
 @kotlinx.serialization.Serializable
 private data class PartUpdateDto(
-    val part: PartDto,
+    val part: PartDto? = null,
     val delta: String? = null
 )
 
@@ -761,7 +825,7 @@ private data class SessionEventDto(
 
 @kotlinx.serialization.Serializable
 private data class MessageEventDto(
-    val info: MessageInfoDto
+    val info: MessageInfoDto? = null
 )
 
 @kotlinx.serialization.Serializable

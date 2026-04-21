@@ -104,10 +104,13 @@ fun ServerScreen(
         }
     }
 
-    // Start discovery shortly after first frame — theme is pre-warmed, no reason to wait 300ms
-    LaunchedEffect(Unit) {
-        delay(50)
-        viewModel.startDiscovery()
+    LaunchedEffect(uiState.isConnected, uiState.isConnecting) {
+        if (!uiState.isConnected) {
+            delay(1200)
+            if (!uiState.isConnected) {
+                viewModel.startDiscovery()
+            }
+        }
     }
 
     val smoothSpringDp  = spring<Dp>(dampingRatio = 0.68f, stiffness = Spring.StiffnessMedium)

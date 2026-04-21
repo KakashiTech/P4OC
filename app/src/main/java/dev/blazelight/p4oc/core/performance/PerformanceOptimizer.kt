@@ -10,6 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import dev.blazelight.p4oc.core.log.AppLog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
@@ -75,6 +76,18 @@ object PerformanceOptimizer {
         // Background loops disabled — were firing every 16ms draining an empty channel
         // and every 1000ms with no-op predictive preloading. Real metrics still recorded
         // via recordPerformanceEvent() and queryable via getAllMetrics().
+
+        // Drain performance events at a low cadence to keep metrics fresh with minimal overhead.
+        optimizationScope?.launch {
+            while (isActive) {
+                try {
+                    processPerformanceEvents()
+                } catch (e: Exception) {
+                    AppLog.w("PerformanceOptimizer", "Error processing perf events: ${e.message}", e)
+                }
+                delay(250)
+            }
+        }
     }
     
     private suspend fun processPerformanceEvents() {
@@ -210,6 +223,12 @@ object PerformanceOptimizer {
         optimizationScope?.cancel()
         optimizationScope = null
         isInitialized = false
+
+        // Drain any remaining events before closing
+        while (performanceChannel.tryReceive().getOrNull() != null) {
+            // Events are discarded during cleanup
+        }
+
         performanceChannel.close()
         componentCache.clear()
         preloadQueue.clear()
@@ -219,46 +238,54 @@ object PerformanceOptimizer {
 
 /**
  * Performance-optimized remember with intelligent caching
+ * Note: Calculation is suspended, so initial value is computed on first composition.
+ * Use this for expensive calculations that benefit from caching across recompositions.
  */
 @Composable
 fun <T> rememberOptimized(
     key: Any?,
     calculation: suspend () -> T
 ): State<T> {
+    val component = key?.toString() ?: "unknown"
+    val state = remember { mutableStateOf<T?>(null) }
     val scope = rememberCoroutineScope()
-    var state by remember { mutableStateOf<T?>(null) }
-    
+
     LaunchedEffect(key) {
         val startTime = System.currentTimeMillis()
-        
         PerformanceOptimizer.recordPerformanceEvent(
             PerformanceOptimizer.PerformanceEvent(
                 PerformanceOptimizer.EventType.COMPOSITION_START,
-                key?.toString() ?: "unknown",
+                component,
                 0,
                 0
             )
         )
-        
         try {
             val result = calculation()
-            state = result
-            
+            state.value = result
             val duration = System.currentTimeMillis() - startTime
             PerformanceOptimizer.recordPerformanceEvent(
                 PerformanceOptimizer.PerformanceEvent(
                     PerformanceOptimizer.EventType.COMPOSITION_END,
-                    key?.toString() ?: "unknown",
+                    component,
                     duration,
                     0
                 )
             )
         } catch (e: Exception) {
-            // Handle error
+            AppLog.e("PerformanceOptimizer", "rememberOptimized calculation failed: ${e.message}", e)
         }
     }
-    
-    return remember { derivedStateOf { state!! } }
+
+    // Return derived state that throws if accessed before calculation completes
+    return remember(state) {
+        derivedStateOf {
+            state.value ?: throw IllegalStateException(
+                "rememberOptimized accessed before calculation completed. " +
+                "Use LaunchedEffect to wait for calculation or provide a default value."
+            )
+        }
+    }
 }
 
 /**
@@ -275,7 +302,6 @@ fun OptimizedLazyColumn(
     userScrollEnabled: Boolean = true,
     content: LazyListScope.() -> Unit
 ) {
-    val scope = rememberCoroutineScope()
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     
     // Track performance

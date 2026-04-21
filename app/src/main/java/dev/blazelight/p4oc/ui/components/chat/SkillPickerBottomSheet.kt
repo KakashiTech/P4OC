@@ -1,5 +1,7 @@
 package dev.blazelight.p4oc.ui.components.chat
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,7 +16,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Spacing
-import kotlinx.coroutines.launch
 
 data class SkillItem(
     val name: String,
@@ -31,8 +32,7 @@ fun SkillPickerBottomSheet(
     isLoading: Boolean = false
 ) {
     val theme = LocalOpenCodeTheme.current
-    val scope = rememberCoroutineScope()
-    
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = theme.backgroundPanel,
@@ -96,10 +96,8 @@ fun SkillPickerBottomSheet(
                         SkillRow(
                             skill = skill,
                             onClick = {
-                                scope.launch {
-                                    onSkillSelected(skill.name)
-                                    onDismiss()
-                                }
+                                onSkillSelected(skill.name)
+                                onDismiss()
                             }
                         )
                     }
@@ -118,17 +116,21 @@ private fun SkillRow(
 ) {
     val theme = LocalOpenCodeTheme.current
     
-    Surface(
-        onClick = onClick,
-        enabled = skill.isEnabled,
-        modifier = Modifier.fillMaxWidth(),
-        color = if (skill.isEnabled) theme.backgroundElement else theme.backgroundPanel,
-        shape = MaterialTheme.shapes.small
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                enabled = skill.isEnabled,
+                onClick = onClick,
+                role = Role.Button
+            )
+            .background(if (skill.isEnabled) theme.backgroundElement else theme.backgroundPanel)
+            .padding(Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Spacing.sm)
+            modifier = Modifier.weight(1f)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically
@@ -155,6 +157,21 @@ private fun SkillRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = theme.textMuted,
                     maxLines = 2
+                )
+            }
+        }
+        
+        if (skill.isEnabled) {
+            Spacer(modifier = Modifier.width(Spacing.sm))
+            Surface(
+                color = theme.accent.copy(alpha = 0.15f),
+                shape = MaterialTheme.shapes.small
+            ) {
+                Text(
+                    text = "Use",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.accent,
+                    modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 4.dp)
                 )
             }
         }

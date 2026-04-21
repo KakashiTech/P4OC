@@ -15,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
@@ -70,16 +71,14 @@ import dev.blazelight.p4oc.ui.components.question.InlineQuestionCard
 import dev.blazelight.p4oc.ui.components.todo.TodoLiveDot
 import dev.blazelight.p4oc.ui.components.todo.TodoTrackerSheet
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenu
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenuItem
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenu
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenuItem
 import dev.blazelight.p4oc.ui.components.TuiTopBar
 import dev.blazelight.p4oc.ui.components.TuiConfirmDialog
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
 import dev.blazelight.p4oc.ui.components.TuiSnackbar
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.RectangleShape
@@ -87,6 +86,7 @@ import androidx.compose.ui.text.font.FontWeight
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
+import dev.blazelight.p4oc.ui.components.LocalAnimationsPaused
 
 // Data classes for optimized state management (currently not used but kept for future optimization)
 data class CombinedChatState(
@@ -240,12 +240,18 @@ fun ChatScreen(
 
     // Delta-diff flatItems: on each version bump try patchFlatItems() first (O(changed)).
     // Falls back to full buildFlatItems() only when structure changes (new msg / loadMore).
-    // Uses a Ref so the previous value survives recompositions without triggering new ones.
-    val prevFlatItemsRef = remember { androidx.compose.runtime.mutableStateOf<List<FlatChatItem>>(emptyList()) }
-    val messageBlocks = remember(messagesVersion) { groupMessagesIntoBlocks(messages) }
+    // Uses mutableStateOf directly - the state read inside remember doesn't trigger recomposition.
+    val prevFlatItemsRef = remember { mutableStateOf<List<FlatChatItem>>(emptyList()) }
     val flatItems = remember(messagesVersion) {
-        val patched = patchFlatItems(prevFlatItemsRef.value, messages, lastChangedIds)
-        val result  = patched ?: buildFlatItems(messageBlocks)
+        // Read the ref value without triggering recomposition observation
+        val prevList = prevFlatItemsRef.value
+        val patched = patchFlatItems(prevList, messages, lastChangedIds)
+        if (patched != null) {
+            AppLog.d("ChatScreen", "flatItems patched: old=${prevList.size} new=${patched.size} changed=${lastChangedIds.size}")
+        } else {
+            AppLog.d("ChatScreen", "flatItems rebuild: messages=${messages.size}")
+        }
+        val result = patched ?: buildFlatItems(groupMessagesIntoBlocks(messages))
         prevFlatItemsRef.value = result
         result
     }
@@ -264,6 +270,14 @@ fun ChatScreen(
     val onToolDeny    = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "reject") } }
     val onToolAlways  = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "always") } }
     val onRevert      = remember<(String) -> Unit> { { id -> showRevertDialog = id } }
+    val onFork        = remember(viewModel, onOpenSubSession) {
+        { messageId: String ->
+            viewModel.forkSession(
+                messageId = messageId,
+                onForkCreated = { forkSessionId -> onOpenSubSession?.invoke(forkSessionId) }
+            )
+        }
+    }
 
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -275,6 +289,7 @@ fun ChatScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             // Session title from loaded session
             val displayTitle = uiState.session?.title ?: "Chat"
@@ -312,12 +327,16 @@ fun ChatScreen(
             if (!isSubAgent) {
                 Column(
                     modifier = Modifier
-                        .imePadding()
                         .navigationBarsPadding()
+                        .imePadding()
                         .background(LocalOpenCodeTheme.current.backgroundElement)
                 ) {
+                    var localInput by remember { mutableStateOf(uiState.inputText) }
+                    LaunchedEffect(uiState.inputText) {
+                        if (uiState.inputText != localInput) localInput = uiState.inputText
+                    }
                     ChatInputBar(
-                        value = uiState.inputText,
+                        value = localInput,
                         isThinking = isThinking,
                         modelSelector = {
                             ModelAgentSelectorBar(
@@ -334,17 +353,25 @@ fun ChatScreen(
                         },
                         agentSelector = { },
                         onValueChange = { text ->
-                            viewModel.updateInput(text)
+                            localInput = text
                             if (text.startsWith("/") && uiState.commands.isEmpty()) {
                                 viewModel.loadCommands()
                             }
                         },
-                        onSend = viewModel::sendMessage,
+                        onSend = {
+                            viewModel.updateInput(localInput)
+                            viewModel.sendMessage()
+                            localInput = ""
+                        },
                         isLoading = uiState.isSending,
                         enabled = connectionState is ConnectionState.Connected,
                         isBusy = uiState.isBusy,
                         hasQueuedMessage = uiState.queuedMessage != null,
-                        onQueueMessage = viewModel::queueMessage,
+                        onQueueMessage = {
+                            viewModel.updateInput(localInput)
+                            viewModel.queueMessage()
+                            localInput = ""
+                        },
                         onCancelQueue = { /* TODO: Implementar cancelacion de mensaje encolado */ },
                         queuedMessagePreview = uiState.queuedMessage?.text,
                         attachedFiles = attachedFiles,
@@ -361,11 +388,12 @@ fun ChatScreen(
             }
         }
     ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
+        CompositionLocalProvider(LocalAnimationsPaused provides listState.isScrollInProgress) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
             // Revert active banner — isolated, only reads uiState.session.revert
             val revert = uiState.session?.revert
             if (revert != null) {
@@ -396,6 +424,7 @@ fun ChatScreen(
                 defaultToolWidgetState = defaultToolWidgetState,
                 pendingPermissionsByCallId = pendingPermissionsByCallId,
                 onRevert = onRevert,
+                onFork = onFork,
                 showEmpty = messages.isEmpty() && !isBusy && !isLoading,
                 modifier = Modifier
                     .fillMaxSize()
@@ -435,6 +464,7 @@ fun ChatScreen(
                     .align(Alignment.BottomEnd)
                     .padding(end = Spacing.xl, bottom = Spacing.md)
             )
+            }
         }
     }
 
@@ -787,61 +817,72 @@ private fun ChatTopBar(
                     }
                 }
 
-                // ASCII menu button with special brackets
-                Text(
-                    text = "[",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = theme.textMuted.copy(alpha = 0.6f),
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "☰",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp,
-                    color = theme.accent.copy(alpha = 0.8f),
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .clickable(role = Role.Button, onClick = { showOverflow = true })
-                        .padding(horizontal = 4.dp, vertical = 0.dp)
-                )
-                Text(
-                    text = "]",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = theme.textMuted.copy(alpha = 0.6f),
-                    fontWeight = FontWeight.Bold
-                )
+                // ASCII menu button with special brackets - wrapped in Box for menu positioning
+                Box {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable(role = Role.Button, onClick = { showOverflow = true })
+                    ) {
+                        Text(
+                            text = "[",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = theme.textMuted.copy(alpha = 0.6f),
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "☰",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 14.sp,
+                            color = theme.accent.copy(alpha = 0.8f),
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.dp)
+                        )
+                        Text(
+                            text = "]",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = theme.textMuted.copy(alpha = 0.6f),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Terminal-style ASCII menu positioned below the button
+                    TuiTerminalMenu(
+                        expanded = showOverflow,
+                        onDismissRequest = { showOverflow = false },
+                        modifier = Modifier.align(Alignment.TopEnd),
+                        offset = DpOffset(8.dp, 22.dp)
+                    ) {
+                        TuiTerminalMenuItem(
+                            text = "Changes",
+                            symbol = "±",
+                            onClick = { showOverflow = false; onViewChanges() }
+                        )
+                        TuiTerminalMenuItem(
+                            text = "Commands",
+                            symbol = "/",
+                            onClick = { showOverflow = false; onCommands() }
+                        )
+                        TuiTerminalMenuItem(
+                            text = "Terminal",
+                            symbol = ">_",
+                            onClick = { showOverflow = false; onTerminal() }
+                        )
+                        TuiTerminalMenuItem(
+                            text = "Files",
+                            symbol = "#",
+                            onClick = { showOverflow = false; onFiles() }
+                        )
+                        TuiTerminalMenuItem(
+                            text = "Skills",
+                            symbol = ">",
+                            onClick = { showOverflow = false; onSkills() }
+                        )
+                    }
+                }
             }
         }
-
-        // Dropdown menu for terminal-style menu button
-        TuiDropdownMenu(
-            expanded = showOverflow,
-            onDismissRequest = { showOverflow = false }
-        ) {
-            TuiDropdownMenuItem(
-                text = "± ${stringResource(R.string.sessions_view_changes)}",
-                onClick = { showOverflow = false; onViewChanges() }
-            )
-            TuiDropdownMenuItem(
-                text = "/ ${stringResource(R.string.cd_commands)}",
-                onClick = { showOverflow = false; onCommands() }
-            )
-            TuiDropdownMenuItem(
-                text = ">_ ${stringResource(R.string.cd_terminal)}",
-                onClick = { showOverflow = false; onTerminal() }
-            )
-            TuiDropdownMenuItem(
-                text = "▤ ${stringResource(R.string.cd_files)}",
-                onClick = { showOverflow = false; onFiles() }
-            )
-            TuiDropdownMenuItem(
-                text = "⚡ Skills",
-                onClick = { showOverflow = false; onSkills() }
-            )
-        }
-
     }
 }
 
@@ -886,15 +927,14 @@ private fun ConnectionIndicator(state: ConnectionState) {
                 .size(Sizing.iconXxs)
                 .clickable(role = Role.Button) { showDetail = !showDetail }
         )
-        TuiDropdownMenu(
+        TuiTerminalMenu(
             expanded = showDetail,
             onDismissRequest = { showDetail = false }
         ) {
-            Text(
+            TuiTerminalMenuItem(
                 text = description,
-                modifier = Modifier.padding(Spacing.md),
-                style = MaterialTheme.typography.bodySmall,
-                color = theme.text
+                symbol = "●",
+                onClick = { showDetail = false }
             )
         }
     }
@@ -999,6 +1039,7 @@ private fun ChatMessageList(
     defaultToolWidgetState: ToolWidgetState,
     pendingPermissionsByCallId: Map<String, dev.blazelight.p4oc.domain.model.Permission>,
     onRevert: (String) -> Unit,
+    onFork: (String) -> Unit,
     showEmpty: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -1035,16 +1076,17 @@ private fun ChatMessageList(
         }
         itemsIndexed(
             items = flatItems,
-            key = { index, item ->
+            key = { _, item ->
                 when (item) {
                     is FlatChatItem.UserPart          -> "u_${item.messageWithParts.message.id}"
-                    is FlatChatItem.AssistantBarStart -> "abs_${item.messageId}_$index"
-                    is FlatChatItem.AssistantBarEnd   -> "abe_${item.messageId}_$index"
-                    is FlatChatItem.TextPart          -> "tp_${item.part.id}"
-                    is FlatChatItem.ReasoningPart     -> "rp_${item.part.id}"
+                    is FlatChatItem.AssistantBarStart -> "abs_${item.messageId}"
+                    is FlatChatItem.AssistantBarEnd   -> "abe_${item.messageId}"
+                    is FlatChatItem.TextPart          -> "txt_${item.msgId}_${item.part.id}"
+                    is FlatChatItem.ReasoningPart     -> "rea_${item.msgId}_${item.part.id}"
+                    is FlatChatItem.ReasoningGroup    -> "rg_${item.msgId}_${item.groupIndex}"
                     is FlatChatItem.ToolBatch         -> "tb_${item.msgId}_${item.batchIndex}"
-                    is FlatChatItem.FilePart          -> "fp_${item.part.id}"
-                    is FlatChatItem.PatchPart         -> "pp_${item.part.id}"
+                    is FlatChatItem.FilePart          -> "fp_${item.msgId}_${item.part.id}"
+                    is FlatChatItem.PatchPart         -> "pp_${item.msgId}_${item.part.id}"
                 }
             },
             contentType = { _, item ->
@@ -1054,6 +1096,7 @@ private fun ChatMessageList(
                     is FlatChatItem.AssistantBarEnd   -> "bar_end"
                     is FlatChatItem.TextPart          -> "text"
                     is FlatChatItem.ReasoningPart     -> "reasoning"
+                    is FlatChatItem.ReasoningGroup    -> "reasoning_group"
                     is FlatChatItem.ToolBatch         -> "tools"
                     is FlatChatItem.FilePart          -> "file"
                     is FlatChatItem.PatchPart         -> "patch"
@@ -1068,12 +1111,14 @@ private fun ChatMessageList(
                 onOpenSubSession = onOpenSubSession,
                 defaultToolWidgetState = defaultToolWidgetState,
                 pendingPermissionsByCallId = pendingPermissionsByCallId,
-                onRevert = onRevert
+                onRevert = onRevert,
+                onFork = onFork
             )
         }
         if (hasMoreMessages && visibleMessageCount < totalMessageCount) {
             item(key = "load_more_messages", contentType = "load_more") {
                 val theme = LocalOpenCodeTheme.current
+                val scope = rememberCoroutineScope()
                 var isLoadingMore by remember { mutableStateOf(false) }
                 Row(
                     modifier = Modifier
@@ -1083,8 +1128,13 @@ private fun ChatMessageList(
                         .clickable(role = Role.Button) {
                             if (!isLoadingMore) {
                                 isLoadingMore = true
-                                onLoadMore()
-                                isLoadingMore = false
+                                scope.launch {
+                                    try {
+                                        onLoadMore()
+                                    } finally {
+                                        isLoadingMore = false
+                                    }
+                                }
                             }
                         }
                         .padding(horizontal = 8.dp, vertical = 4.dp),

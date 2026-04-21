@@ -119,14 +119,23 @@ fun ProjectsScreen(
                 }
             }
             else -> {
+                val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
+                DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
+                val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
+
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding),
                     contentPadding = PaddingValues(Spacing.sm),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    flingBehavior = smoothFling
                 ) {
-                    items(uiState.projects, key = { it.id }) { project ->
+                    items(
+                        uiState.projects,
+                        key = { it.id },
+                        contentType = { "project" }
+                    ) { project ->
                         ProjectCard(
                             project = project,
                             onClick = { 

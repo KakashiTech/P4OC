@@ -102,7 +102,7 @@ class MessageStore(
      */
     fun loadInitial(messages: List<MessageWithParts>) {
         val sorted = messages.sortedBy { it.message.createdAt }
-        AppLog.d(TAG, "loadInitial: Total ${sorted.size} messages, loading last $INITIAL_MESSAGE_COUNT initially")
+        if (DEBUG_STREAM) AppLog.d(TAG, "loadInitial: Total ${sorted.size} messages, loading last $INITIAL_MESSAGE_COUNT initially")
 
         scope.launch {
             messagesMutex.withLock {
@@ -127,7 +127,7 @@ class MessageStore(
                     messageOrder.addAll(newIds)
                     _messagesVersion.value++
                 }
-                AppLog.d(TAG, "loadInitial: Loaded $visibleMessageCount messages (${sorted.size - visibleMessageCount} more available)")
+                if (DEBUG_STREAM) AppLog.d(TAG, "loadInitial: Loaded $visibleMessageCount messages (${sorted.size - visibleMessageCount} more available)")
             }
         }
     }
@@ -137,12 +137,12 @@ class MessageStore(
      * Returns true if more messages available, false if all loaded.
      */
     fun loadMore(count: Int = MESSAGES_PER_PAGE): Boolean {
-        val allMessageIds = allMessagesMap.keys.sortedBy { allMessagesMap[it]?.message?.createdAt }
+        val allMessageIds = allMessagesMap.keys.sortedBy { allMessagesMap[it]!!.message.createdAt }
         val currentVisibleIds = messageOrder.toSet()
 
         val oldestVisibleIndex = allMessageIds.indexOfFirst { it in currentVisibleIds }
         if (oldestVisibleIndex <= 0) {
-            AppLog.d(TAG, "loadMore: All messages already visible")
+            if (DEBUG_STREAM) AppLog.d(TAG, "loadMore: All messages already visible")
             return false
         }
 
@@ -163,7 +163,7 @@ class MessageStore(
         }
 
         val hasMore = startIndex > 0
-        AppLog.d(TAG, "loadMore: Loaded ${toInsert.size} older messages, total visible: $visibleMessageCount, hasMore: $hasMore")
+        if (DEBUG_STREAM) AppLog.d(TAG, "loadMore: Loaded ${toInsert.size} older messages, total visible: $visibleMessageCount, hasMore: $hasMore")
         return hasMore
     }
     
@@ -199,7 +199,7 @@ class MessageStore(
                     _messagesMap[message.id] = newEntry
                     _messagesVersion.value++
                 }
-                AppLog.d(TAG, "upsertMessage: msgId=${message.id}, isNew=$isNew, reposition=$needsReposition")
+                if (DEBUG_STREAM) AppLog.d(TAG, "upsertMessage: msgId=${message.id}, isNew=$isNew, reposition=$needsReposition")
             }
         }
     }
@@ -230,7 +230,7 @@ class MessageStore(
                     }
                     _messagesVersion.value++
                 }
-                AppLog.d(TAG, "upsertMessages: batch of ${messages.size}")
+                if (DEBUG_STREAM) AppLog.d(TAG, "upsertMessages: batch of ${messages.size}")
             }
         }
     }
@@ -243,7 +243,7 @@ class MessageStore(
      */
     fun upsertPartBuffered(part: Part, delta: String?) {
         scope.launch {
-            AppLog.d(TAG, "upsertPartBuffered: partId=${part.id}, msgId=${part.messageID}, delta=${delta?.length ?: 0} chars")
+            if (DEBUG_STREAM) AppLog.d(TAG, "upsertPartBuffered: partId=${part.id}, msgId=${part.messageID}, delta=${delta?.length ?: 0} chars")
             
             // Reasoning parts are buffered too — they stream dozens of tokens/sec.
             // Bypassing the buffer caused a full list recomposition per token = scroll jank.
@@ -253,28 +253,36 @@ class MessageStore(
                 val byPart = pendingUpdates.getOrPut(part.messageID) { mutableMapOf() }
                 val existing = byPart[part.id]
                 if (existing == null) {
-                    byPart[part.id] = PendingDelta(part, delta)
+                    byPart[part.id] = PendingDelta(part, delta?.let { StringBuilder(it) })
                 } else {
                     // Merge: accumulate deltas for streaming text+reasoning; last-write for others
-                    val merged = when {
+                    when {
                         existing.part is Part.Text && part is Part.Text -> {
-                            val acc = (existing.delta ?: "") + (delta ?: "")
-                            PendingDelta(part.copy(text = part.text, isStreaming = true), acc)
+                            val builder = existing.sb ?: StringBuilder()
+                            if (delta != null) builder.append(delta)
+                            byPart[part.id] = PendingDelta(part.copy(text = part.text, isStreaming = true), builder)
                         }
                         existing.part is Part.Reasoning && part is Part.Reasoning -> {
-                            // Accumulate reasoning delta too \u2014 avoids replace-on-every-token
-                            val acc = (existing.delta ?: "") + (delta ?: "")
-                            PendingDelta(part, acc)
+                            val builder = existing.sb ?: StringBuilder()
+                            if (delta != null) builder.append(delta)
+                            byPart[part.id] = PendingDelta(part, builder)
                         }
-                        else -> PendingDelta(part, delta)
+                        else -> {
+                            byPart[part.id] = PendingDelta(part, delta?.let { StringBuilder(it) })
+                        }
                     }
-                    byPart[part.id] = merged
                 }
 
                 if (flushJob?.isActive != true) {
-                    val delay = if (part is Part.Reasoning) reasoningFlushDelayMs else flushDelayMs
+                    val pendingSize = pendingUpdates.values.sumOf { it.size }
+                    val baseDelay = if (part is Part.Reasoning) reasoningFlushDelayMs else flushDelayMs
+                    val scaledDelay = when {
+                        pendingSize >= 32 -> (baseDelay * 2).coerceAtMost(140L)
+                        pendingSize >= 8  -> (baseDelay + baseDelay / 2).coerceAtMost(120L)
+                        else -> baseDelay
+                    }
                     flushJob = scope.launch {
-                        delay(delay)
+                        delay(scaledDelay)
                         flushPendingParts()
                     }
                 }
@@ -283,15 +291,24 @@ class MessageStore(
     }
 
     private suspend fun flushPendingParts() {
+        var hadTruncated = false
         val batch: Map<String, Map<String, PendingDelta>> = pendingMutex.withLock {
             if (pendingUpdates.isEmpty()) {
                 AppLog.v(TAG, "flushPendingParts: no pending updates")
                 return
             }
-            val snapshot = pendingUpdates.mapValues { it.value.toMap() }.toMap()
+            val snapshot = pendingUpdates.mapValues { entry ->
+                entry.value.mapValues { pd ->
+                    val sb = pd.value.sb
+                    if (sb != null && sb.length > 4000) {
+                        PendingDelta(pd.value.part, StringBuilder(sb.substring(0, 4000)))
+                    } else pd.value
+                }.toMutableMap()
+            }.toMap()
             val msgCount = snapshot.size
             val partCount = snapshot.values.sumOf { it.size }
-            AppLog.d(TAG, "flushPendingParts: flushing $msgCount messages, $partCount parts")
+            if (DEBUG_STREAM) AppLog.d(TAG, "flushPendingParts: flushing $msgCount messages, $partCount parts")
+            hadTruncated = pendingUpdates.any { it.value.values.any { pd -> (pd.sb?.length ?: 0) > 4000 } }
             pendingUpdates.clear()
             snapshot
         }
@@ -331,11 +348,18 @@ class MessageStore(
                 }
             }
         }
+
+        if (hadTruncated) {
+            scope.launch {
+                delay(24L)
+                flushPendingParts()
+            }
+        }
     }
 
     private fun applyDeltaIfNeeded(existing: MessageWithParts, pd: PendingDelta): Part {
         val incoming = pd.part
-        val delta = pd.delta
+        val delta = pd.sb?.toString()
         val current = existing.parts.firstOrNull { it.id == incoming.id }
         return when {
             delta != null && incoming is Part.Text && current is Part.Text ->
@@ -360,12 +384,12 @@ class MessageStore(
                 val existing = _messagesMap[messageId] ?: run {
                     val placeholder = createPlaceholderMessage(messageId)
                     _messagesMap[messageId] = placeholder
-                    AppLog.d(TAG, "upsertPart: Created placeholder for message $messageId")
+                    if (DEBUG_STREAM) AppLog.d(TAG, "upsertPart: Created placeholder for message $messageId")
                     placeholder
                 }
 
                 val partIndex = existing.parts.indexOfFirst { it.id == part.id }
-                AppLog.d(TAG, "upsertPart: existing parts=${existing.parts.size}, partIndex=$partIndex, partId=${part.id}")
+                if (DEBUG_STREAM) AppLog.d(TAG, "upsertPart: existing parts=${existing.parts.size}, partIndex=$partIndex, partId=${part.id}")
                 val updatedParts = if (partIndex >= 0) {
                     existing.parts.toMutableList().apply {
                         this[partIndex] = applyDelta(this[partIndex], part, delta)
@@ -377,7 +401,7 @@ class MessageStore(
                 // Single put — SnapshotStateMap.put() is atomic, no need for remove+put
                 _messagesMap[messageId] = existing.copy(parts = updatedParts)
                 _messagesVersion.value++
-                AppLog.d(TAG, "upsertPart: DONE - partId=${part.id}, messageId=$messageId, delta=${delta?.length ?: 0} chars, oldCount=${existing.parts.size}, newCount=${updatedParts.size}")
+                if (DEBUG_STREAM) AppLog.d(TAG, "upsertPart: DONE - partId=${part.id}, messageId=$messageId, delta=${delta?.length ?: 0} chars, oldCount=${existing.parts.size}, newCount=${updatedParts.size}")
             }
         }
     }
@@ -395,7 +419,7 @@ class MessageStore(
                         messageOrder.remove(messageId)
                         _messagesVersion.value++
                     }
-                    AppLog.d(TAG, "removeMessage: $messageId")
+                    if (DEBUG_STREAM) AppLog.d(TAG, "removeMessage: $messageId")
                 }
             }
         }
@@ -415,7 +439,7 @@ class MessageStore(
                         _messagesMap[messageId] = existing.copy(parts = updatedParts)
                         _messagesVersion.value++
                     }
-                    AppLog.d(TAG, "removePart: partId=$partId from messageId=$messageId")
+                    if (DEBUG_STREAM) AppLog.d(TAG, "removePart: partId=$partId from messageId=$messageId")
                 }
             }
         }
@@ -460,7 +484,7 @@ class MessageStore(
         }
     }
 
-    private data class PendingDelta(val part: Part, val delta: String?)
+    private data class PendingDelta(val part: Part, val sb: StringBuilder?)
 
     /**
      * Adjust flush cadence depending on scroll state.
@@ -520,5 +544,6 @@ class MessageStore(
 
     private companion object {
         const val TAG = "MessageStore"
+        const val DEBUG_STREAM = false
     }
 }

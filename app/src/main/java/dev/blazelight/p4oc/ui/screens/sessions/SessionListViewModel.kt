@@ -53,8 +53,12 @@ class SessionListViewModel constructor(
         }
     }
 
+    private var refreshJob: kotlinx.coroutines.Job? = null
     fun refresh() {
-        viewModelScope.launch {
+        // Debounce multiple rapid refresh() calls into one
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(120)
             loadSessionsAsync()
             loadSessionStatuses()
         }
@@ -77,26 +81,37 @@ class SessionListViewModel constructor(
             
             val allStatuses = mutableMapOf<String, SessionStatus>()
             
+            // Limit concurrency to avoid request storms on first load
+            val semaphore = java.util.concurrent.Semaphore(3)
+            val results = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
             directories.forEach { directory ->
-                val result = safeApiCall { api.getSessionStatuses(directory) }
-                when (result) {
-                    is ApiResult.Success -> {
-                        result.data.forEach { (sessionId, dto) ->
-                            allStatuses[sessionId] = when (dto.type) {
-                                "busy" -> SessionStatus.Busy
-                                "idle" -> SessionStatus.Idle
-                                "retry" -> SessionStatus.Retry(
-                                    attempt = dto.attempt ?: 0,
-                                    message = dto.message ?: "",
-                                    next = dto.next ?: 0L
-                                )
-                                else -> SessionStatus.Idle
+                results += viewModelScope.async {
+                    semaphore.acquire()
+                    try {
+                        val result = safeApiCall { api.getSessionStatuses(directory) }
+                        when (result) {
+                            is ApiResult.Success -> {
+                                result.data.forEach { (sessionId, dto) ->
+                                    allStatuses[sessionId] = when (dto.type) {
+                                        "busy" -> SessionStatus.Busy
+                                        "idle" -> SessionStatus.Idle
+                                        "retry" -> SessionStatus.Retry(
+                                            attempt = dto.attempt ?: 0,
+                                            message = dto.message ?: "",
+                                            next = dto.next ?: 0L
+                                        )
+                                        else -> SessionStatus.Idle
+                                    }
+                                }
                             }
+                            is ApiResult.Error -> {}
                         }
+                    } finally {
+                        semaphore.release()
                     }
-                    is ApiResult.Error -> {}
                 }
             }
+            results.awaitAll()
             
             _uiState.update { it.copy(sessionStatuses = allStatuses) }
         }

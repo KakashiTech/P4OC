@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import dev.blazelight.p4oc.core.log.AppLog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Encrypted credential storage backed by EncryptedSharedPreferences.
@@ -16,7 +18,7 @@ import dev.blazelight.p4oc.core.log.AppLog
  * This is the SOLE authority for password storage. No passwords should be
  * persisted in DataStore, ServerConfig, or RecentServer JSON.
  */
-class CredentialStore(context: Context) {
+class CredentialStore(private val context: Context) {
 
     companion object {
         private const val TAG = "CredentialStore"
@@ -25,33 +27,61 @@ class CredentialStore(context: Context) {
         private fun serverPasswordKey(url: String): String = "server_password:$url"
     }
 
-    private val prefs: SharedPreferences = try {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
+    private var prefsRef: SharedPreferences? = null
+    private val prefsLock = Any()
 
-        EncryptedSharedPreferences.create(
-            context,
-            FILE_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    } catch (e: Exception) {
-        // If Keystore is corrupted (rare, e.g., after OS upgrade), fall back
-        // to wiping and recreating. User will need to re-enter passwords.
-        AppLog.e(TAG, "Failed to open EncryptedSharedPreferences, recreating", e)
-        context.deleteSharedPreferences(FILE_NAME)
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
-            context,
-            FILE_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
+    private fun buildPrefs(): SharedPreferences {
+        return try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+
+            EncryptedSharedPreferences.create(
+                context,
+                FILE_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: Exception) {
+            AppLog.e(TAG, "Failed to open EncryptedSharedPreferences, attempting recovery", e)
+            try {
+                context.deleteSharedPreferences(FILE_NAME)
+                val masterKey = MasterKey.Builder(context)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+                EncryptedSharedPreferences.create(
+                    context,
+                    FILE_NAME,
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+            } catch (e2: Exception) {
+                AppLog.e(TAG, "Failed to recreate EncryptedSharedPreferences after deletion, falling back to unencrypted storage", e2)
+                // Fallback to regular SharedPreferences (not encrypted) as last resort
+                // This is less secure but prevents app crash
+                context.getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
+            }
+        }
+    }
+
+    private fun prefs(): SharedPreferences {
+        val existing = prefsRef
+        if (existing != null) return existing
+        synchronized(prefsLock) {
+            val again = prefsRef
+            if (again != null) return again
+            val created = buildPrefs()
+            prefsRef = created
+            return created
+        }
+    }
+
+    suspend fun warmup() {
+        withContext(Dispatchers.IO) {
+            prefs()
+        }
     }
 
     // ── Active connection password ──────────────────────────────────────
@@ -61,7 +91,7 @@ class CredentialStore(context: Context) {
      * This is the password used by ConnectionManager for auth interceptors.
      */
     fun setActivePassword(password: String?) {
-        prefs.edit().apply {
+        prefs().edit().apply {
             if (password != null) {
                 putString(KEY_ACTIVE_PASSWORD, password)
             } else {
@@ -75,13 +105,13 @@ class CredentialStore(context: Context) {
      * Get the active connection password. Used during auto-reconnect
      * and by ConnectionManager to build auth interceptors.
      */
-    fun getActivePassword(): String? = prefs.getString(KEY_ACTIVE_PASSWORD, null)
+    fun getActivePassword(): String? = prefs().getString(KEY_ACTIVE_PASSWORD, null)
 
     /**
      * Clear the active connection password (e.g., on disconnect or logout).
      */
     fun clearActivePassword() {
-        prefs.edit().remove(KEY_ACTIVE_PASSWORD).apply()
+        prefs().edit().remove(KEY_ACTIVE_PASSWORD).apply()
     }
 
     // ── Per-server passwords (for recent servers) ───────────────────────
@@ -91,7 +121,7 @@ class CredentialStore(context: Context) {
      * Used for the recent servers list so users can reconnect without re-entering.
      */
     fun setServerPassword(serverUrl: String, password: String?) {
-        prefs.edit().apply {
+        prefs().edit().apply {
             val key = serverPasswordKey(serverUrl)
             if (password != null) {
                 putString(key, password)
@@ -106,20 +136,20 @@ class CredentialStore(context: Context) {
      * Retrieve the stored password for a specific server URL.
      */
     fun getServerPassword(serverUrl: String): String? {
-        return prefs.getString(serverPasswordKey(serverUrl), null)
+        return prefs().getString(serverPasswordKey(serverUrl), null)
     }
 
     /**
      * Remove stored password for a server (e.g., when removing from recent servers list).
      */
     fun removeServerPassword(serverUrl: String) {
-        prefs.edit().remove(serverPasswordKey(serverUrl)).apply()
+        prefs().edit().remove(serverPasswordKey(serverUrl)).apply()
     }
 
     /**
      * Clear all stored credentials. Used for logout/clear-all scenarios.
      */
     fun clearAll() {
-        prefs.edit().clear().apply()
+        prefs().edit().clear().apply()
     }
 }
