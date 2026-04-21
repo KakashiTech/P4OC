@@ -6,12 +6,20 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.material3.ripple
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.ripple
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,16 +27,20 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
+import dev.blazelight.p4oc.core.performance.rememberOptimizedLoadingRotation
 
 // =============================================================================
 // CARDS
@@ -686,9 +698,8 @@ fun TuiDropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
             .background(theme.backgroundElement)
-            .border(1.dp, theme.border.copy(alpha = 0.35f), RoundedCornerShape(12.dp)),
+            .border(1.dp, theme.border.copy(alpha = 0.5f)),
         content = content
     )
 }
@@ -736,31 +747,179 @@ fun TuiDropdownMenuItem(
 }
 
 // =============================================================================
+// TERMINAL-STYLE ASCII MENUS
+// =============================================================================
+
+/**
+ * Terminal-style menu with ASCII box-drawing border.
+ * No rounded corners, no background — just clean ASCII lines.
+ */
+@Composable
+fun TuiTerminalMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    modifier: Modifier = Modifier,
+    offset: DpOffset = DpOffset(0.dp, 0.dp),
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val theme = LocalOpenCodeTheme.current
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismissRequest,
+        modifier = modifier
+            .widthIn(min = 140.dp, max = 220.dp),
+        shape = RectangleShape,
+        containerColor = theme.background,
+        shadowElevation = 0.dp,
+        tonalElevation = 0.dp,
+        offset = offset,
+        content = {
+            // Top border: ┌────┐
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text("┌", fontFamily = FontFamily.Monospace, color = theme.border)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(1.dp)
+                        .background(theme.border)
+                )
+                Text("┐", fontFamily = FontFamily.Monospace, color = theme.border)
+            }
+            // Content with side borders
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text("│", fontFamily = FontFamily.Monospace, color = theme.border)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .background(theme.background)
+                ) {
+                    content()
+                }
+                Text("│", fontFamily = FontFamily.Monospace, color = theme.border)
+            }
+            // Bottom border: └────┘
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text("└", fontFamily = FontFamily.Monospace, color = theme.border)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(1.dp)
+                        .background(theme.border)
+                )
+                Text("┘", fontFamily = FontFamily.Monospace, color = theme.border)
+            }
+        }
+    )
+}
+
+/**
+ * Terminal-style menu item with ASCII symbol prefix.
+ * No icons — just short text with ASCII symbols.
+ */
+@Composable
+fun TuiTerminalMenuItem(
+    text: String,
+    symbol: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    isDestructive: Boolean = false
+) {
+    val theme = LocalOpenCodeTheme.current
+    val textColor = when {
+        !enabled -> theme.textMuted
+        isDestructive -> theme.error
+        else -> theme.text
+    }
+    val bgColor = if (enabled) theme.background else Color.Transparent
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(bgColor)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = symbol,
+            fontFamily = FontFamily.Monospace,
+            color = if (isDestructive) theme.error else theme.textMuted,
+            modifier = Modifier.padding(end = Spacing.sm)
+        )
+        Text(
+            text = text,
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall,
+            color = textColor
+        )
+    }
+}
+
+/**
+ * Horizontal divider for terminal menus using ASCII line.
+ */
+@Composable
+fun TuiTerminalMenuDivider() {
+    val theme = LocalOpenCodeTheme.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("├", fontFamily = FontFamily.Monospace, color = theme.border)
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(1.dp)
+                .background(theme.borderSubtle)
+        )
+        Text("┤", fontFamily = FontFamily.Monospace, color = theme.border)
+    }
+}
+
+// =============================================================================
 // LOADING & PROGRESS
 // =============================================================================
 
 /**
- * TUI-style loading indicator with optional text.
+ * TUI-style loading indicator with no padding for perfect alignment in buttons.
  */
 @Composable
 fun TuiLoadingIndicator(
     modifier: Modifier = Modifier,
     text: String? = null
 ) {
+    val theme = LocalOpenCodeTheme.current
+    val animationsPaused = LocalAnimationsPaused.current
+    
     Row(
-        modifier = modifier.padding(Spacing.cardPadding),
+        modifier = modifier, // NO PADDING - crucial for button alignment
         horizontalArrangement = Arrangement.spacedBy(Spacing.inlineSpacing),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(Sizing.iconMd),
-            strokeWidth = Sizing.strokeMd
-        )
+        if (animationsPaused) {
+            androidx.compose.material3.Surface(
+                modifier = Modifier.size(Sizing.iconSm),
+                color = theme.accent,
+                shape = androidx.compose.foundation.shape.CircleShape
+            ) {}
+        } else {
+            CircularProgressIndicator(
+                modifier = Modifier.size(Sizing.iconMd),
+                strokeWidth = Sizing.strokeThin,
+                color = theme.accent,
+                trackColor = theme.backgroundElement,
+                strokeCap = StrokeCap.Round
+            )
+        }
+        
         text?.let {
             Text(
                 text = it,
                 style = MaterialTheme.typography.bodyMedium,
-                color = LocalOpenCodeTheme.current.textMuted
+                color = theme.textMuted
             )
         }
     }
@@ -825,6 +984,12 @@ fun TuiStatusDot(
         shape = androidx.compose.foundation.shape.CircleShape
     ) {}
 }
+
+// =============================================================================
+// PERFORMANCE LOCALS
+// =============================================================================
+
+val LocalAnimationsPaused = compositionLocalOf { false }
 
 // =============================================================================
 // UTILITY FUNCTIONS

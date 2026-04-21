@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.List
@@ -16,10 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.border
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
@@ -32,6 +32,7 @@ import dev.blazelight.p4oc.domain.model.SessionStateColors
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
+import dev.blazelight.p4oc.core.performance.rememberOptimizedPulse
 
 /**
  * Tab bar showing all open tabs with indicators and close buttons.
@@ -60,26 +61,61 @@ fun TabBar(
         }
     }
     
-    // Tab bar: background color, tabs sit on top with rounded corners
-    Box(
+    // Terminal-style tab bar - connected to SessionsTopBar
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .background(theme.background)
             .testTag("tab_bar")
     ) {
+        // Top connector line
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = Spacing.xs, end = Spacing.xs, top = 5.dp, bottom = 0.dp),
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(8.dp)
+                    .height(1.dp)
+                    .background(theme.border.copy(alpha = 0.3f))
+            )
+            Text(
+                text = "┬",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.border.copy(alpha = 0.3f)
+            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(1.dp)
+                    .background(theme.border.copy(alpha = 0.3f))
+            )
+        }
+
+        // Tab row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 4.dp),
             verticalAlignment = Alignment.Bottom
         ) {
+            // OPTIMIZED LazyRow for smooth tab scrolling
             LazyRow(
                 state = listState,
                 modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.Bottom
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                verticalAlignment = Alignment.Bottom,
+                // Performance optimizations
+                contentPadding = PaddingValues(horizontal = 2.dp)
             ) {
-                items(items = tabs, key = { it.id }) { tab ->
+                items(
+                    items = tabs, 
+                    key = { it.id },
+                    contentType = { "tab" }
+                ) { tab ->
                     val isActive = tab.id == activeTabId
                     val title = tabTitles[tab.id] ?: "Tab"
                     val icon = tabIcons[tab.id] ?: Icons.Default.Tab
@@ -96,28 +132,44 @@ fun TabBar(
                 }
             }
 
-            // Add tab button — aligned bottom
+            // Add tab button - terminal style
+            Text(
+                text = "[+new]",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.labelSmall,
+                color = theme.success,
+                modifier = Modifier
+                    .padding(start = 8.dp)
+                    .clickable(role = Role.Button, onClick = onAddClick)
+                    .testTag("tab_bar_add_button")
+            )
+        }
+
+        // Bottom connector line
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "├",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.border.copy(alpha = 0.3f)
+            )
             Box(
                 modifier = Modifier
-                    .padding(start = 4.dp, bottom = 2.dp)
-                    .height(28.dp)
-                    .width(28.dp)
-                    .clip(RoundedCornerShape(topStart = 7.dp, topEnd = 7.dp))
-                    .background(theme.backgroundPanel.copy(alpha = 0.5f))
-                    .border(1.dp, theme.border.copy(alpha = 0.25f), RoundedCornerShape(topStart = 7.dp, topEnd = 7.dp))
-                    .clickable(role = Role.Button, onClick = onAddClick)
-                    .testTag("tab_bar_add_button"),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "+",
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp
-                    ),
-                    color = theme.textMuted
-                )
-            }
+                    .weight(1f)
+                    .height(1.dp)
+                    .background(theme.border.copy(alpha = 0.3f))
+            )
+            Text(
+                text = "┤",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.border.copy(alpha = 0.3f)
+            )
         }
     }
 }
@@ -137,26 +189,13 @@ private fun TabIndicator(
 ) {
     val theme = LocalOpenCodeTheme.current
     
-    // Pulse animation for BUSY and AWAITING_INPUT states
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.6f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = EaseInOut),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseAlpha"
-    )
-    
-    val shouldPulse = connectionState?.shouldPulse == true
+    // Static colors to prevent redimensionamiento
     val indicatorColor = SessionStateColors.forStateOrNull(connectionState)
     val needsAttention = connectionState?.showsAttentionBadge == true
     
-    val tabShape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
     val activeTabBg = theme.backgroundElement
     val inactiveTabBg = theme.background
-    val attentionBg = theme.warning.copy(alpha = if (shouldPulse) pulseAlpha * 0.12f else 0.12f)
+    val attentionBg = theme.warning.copy(alpha = 0.12f) // Fixed alpha to prevent resizing
 
     val tabBg = when {
         needsAttention && !isActive -> attentionBg
@@ -169,81 +208,70 @@ private fun TabIndicator(
         else -> theme.textMuted
     }
     val borderColor = when {
-        isActive -> theme.accent.copy(alpha = 0.45f)
-        else -> theme.border.copy(alpha = 0.18f)
+        isActive -> theme.accent.copy(alpha = 0.6f)
+        else -> theme.border.copy(alpha = 0.3f)
     }
 
-    Box(
+    // Terminal-style tab with box drawing
+    Row(
         modifier = modifier
-            .height(30.dp)
-            .clip(tabShape)
+            .height(28.dp)
             .background(tabBg)
-            .border(width = 1.dp, color = borderColor, shape = tabShape)
+            .border(width = 1.dp, color = borderColor)
             .clickable(onClick = onClick, role = Role.Tab)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(start = 8.dp, end = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            // State dot or icon
-            if (indicatorColor != null) {
-                Box(
-                    modifier = Modifier
-                        .size(Sizing.indicatorDotActive)
-                        .alpha(if (shouldPulse) pulseAlpha else 1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Circle,
-                        contentDescription = connectionState?.name,
-                        modifier = Modifier.size(Sizing.indicatorDotActive),
-                        tint = indicatorColor
-                    )
-                    if (connectionState?.showsAttentionBadge == true) {
-                        Icon(
-                            imageVector = Icons.Default.PriorityHigh,
-                            contentDescription = "Needs attention",
-                            modifier = Modifier.size(5.dp).offset(x = 3.dp, y = (-3).dp),
-                            tint = theme.warning
-                        )
-                    }
-                }
-            } else {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = title,
-                    modifier = Modifier.size(12.dp),
-                    tint = textColor
-                )
-            }
+        // Left bracket
+        Text(
+            text = "[",
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = theme.border.copy(alpha = 0.5f)
+        )
 
-            // Title
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp
-                ),
-                color = textColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = Sizing.panelWidthSm)
-            )
-
-            // Close ×
-            if (isActive) {
-                Text(
-                    text = "×",
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp
-                    ),
-                    color = theme.textMuted,
-                    modifier = Modifier.clickable(onClick = onClose, role = Role.Button)
-                )
-            }
+        // State indicator (symbol instead of icon)
+        val stateSymbol = when {
+            connectionState?.shouldPulse == true -> "▶"
+            indicatorColor != null -> "●"
+            else -> "○"
         }
+        Text(
+            text = stateSymbol,
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = indicatorColor ?: textColor,
+            modifier = Modifier.alpha(1f) // Fixed alpha to prevent resizing
+        )
+
+        // Title
+        Text(
+            text = title,
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+            color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = Sizing.panelWidthSm)
+        )
+
+        // Close ×
+        Text(
+            text = "×",
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+            color = if (isActive) theme.error.copy(alpha = 0.8f) else theme.textMuted,
+            modifier = Modifier.clickable(onClick = onClose, role = Role.Button)
+        )
+
+        // Right bracket
+        Text(
+            text = "]",
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = theme.border.copy(alpha = 0.5f)
+        )
     }
 }
 

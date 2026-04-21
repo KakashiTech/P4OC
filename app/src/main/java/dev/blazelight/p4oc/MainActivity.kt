@@ -5,7 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -15,9 +14,9 @@ import androidx.navigation.compose.rememberNavController
 import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.ui.navigation.NavGraph
 import dev.blazelight.p4oc.ui.navigation.Screen
-import dev.blazelight.p4oc.ui.tabs.MainTabScreen
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.PocketCodeTheme
+import dev.blazelight.p4oc.ui.theme.opencode.OptimizedThemeLoader
 import org.koin.android.ext.android.inject
 
 class MainActivity : ComponentActivity() {
@@ -28,22 +27,31 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
 
+        // Pre-warm theme cache before first composition frame
+        OptimizedThemeLoader.initialize(this@MainActivity)
+        OptimizedThemeLoader.preloadFallbackThemes()
+
         setContent {
-            val themeMode by settingsDataStore.themeMode.collectAsStateWithLifecycle(initialValue = "system")
-            val themeName by settingsDataStore.themeName.collectAsStateWithLifecycle(initialValue = SettingsDataStore.DEFAULT_THEME_NAME)
+            val themeMode by settingsDataStore.themeMode.collectAsStateWithLifecycle(
+                initialValue = settingsDataStore.getCachedThemeMode()
+            )
+            val themeName by settingsDataStore.themeName.collectAsStateWithLifecycle(
+                initialValue = settingsDataStore.getCachedThemeName()
+            )
             val darkTheme = when (themeMode) {
                 "dark" -> true
                 "light" -> false
                 else -> isSystemInDarkTheme()
             }
             
+            // Apply user theme directly
             PocketCodeTheme(themeName = themeName, darkTheme = darkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = LocalOpenCodeTheme.current.background
                 ) {
                     // Use NavGraph for initial Server/Setup screens,
-                    // then MainTabScreen takes over after connection
+                    // but ensure theme is applied before any connection
                     val navController = rememberNavController()
                     NavGraph(
                         navController = navController,
@@ -52,5 +60,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
     }
 }

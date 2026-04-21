@@ -5,15 +5,12 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -25,6 +22,7 @@ import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.TuiCodeFontSize
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
+import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -52,44 +50,37 @@ fun ToolCallWidget(
     
     // Update state if tool becomes pending (HITL)
     LaunchedEffect(isHitl) {
-        if (isHitl) {
+        if (isHitl && coroutineContext.isActive) {
             currentState = ToolWidgetState.EXPANDED
         }
     }
     
     val canCycle = !isHitl // HITL tools don't cycle
     
-    AnimatedContent(
-        targetState = currentState,
-        modifier = modifier.fillMaxWidth(),
-        transitionSpec = { fadeIn() togetherWith fadeOut() },
-        label = "tool_widget_state"
-    ) { state ->
-        when (state) {
-            ToolWidgetState.ONELINE -> ToolCallOneline(
-                tool = tool,
-                onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
-                modifier = Modifier.fillMaxWidth()
-            )
-            ToolWidgetState.COMPACT -> ToolCallCompact(
-                tool = tool,
-                onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
-                modifier = Modifier.fillMaxWidth()
-            )
-            ToolWidgetState.EXPANDED -> ToolCallExpanded(
-                tool = tool,
-                onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
-                onToolApprove = onToolApprove,
-                onToolDeny = onToolDeny,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
+    when (currentState) {
+        ToolWidgetState.ONELINE -> ToolCallOneline(
+            tool = tool,
+            onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
+            modifier = modifier.fillMaxWidth()
+        )
+        ToolWidgetState.COMPACT -> ToolCallCompact(
+            tool = tool,
+            onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
+            modifier = modifier.fillMaxWidth()
+        )
+        ToolWidgetState.EXPANDED -> ToolCallExpanded(
+            tool = tool,
+            onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
+            onToolApprove = onToolApprove,
+            onToolDeny = onToolDeny,
+            modifier = modifier.fillMaxWidth()
+        )
     }
 }
 
 /**
- * Oneline view: minimal single-line display
- * Format: ✓ bash
+ * Oneline view: flat terminal log line
+ * Format: ✓ bash  |  ◐ Read Theme.kt
  */
 @Composable
 fun ToolCallOneline(
@@ -99,33 +90,29 @@ fun ToolCallOneline(
 ) {
     val theme = LocalOpenCodeTheme.current
     val (icon, color) = getToolStateIcon(tool.state, theme)
+    val description = getToolCompactDescription(tool)
 
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(theme.backgroundPanel.copy(alpha = 0.5f))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .padding(vertical = 1.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = icon,
-            style = MaterialTheme.typography.labelMedium.copy(
-                fontFamily = FontFamily.Monospace,
-                fontSize = TuiCodeFontSize.lg
-            ),
+            text = "$icon ",
+            fontFamily = FontFamily.Monospace,
+            fontSize = TuiCodeFontSize.lg,
             color = color
         )
         Text(
-            text = tool.toolName,
-            style = MaterialTheme.typography.labelMedium.copy(
-                fontFamily = FontFamily.Monospace,
-                fontSize = TuiCodeFontSize.lg
-            ),
-            color = theme.text,
+            text = description,
+            fontFamily = FontFamily.Monospace,
+            fontSize = TuiCodeFontSize.lg,
+            color = theme.textMuted,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
         )
         if (tool.state is ToolState.Running) {
             TuiLoadingIndicator()
@@ -134,10 +121,8 @@ fun ToolCallOneline(
 }
 
 /**
- * Compact view: tool name + brief description
- * Format: ✓ ./gradlew assembleDebug
- * Format: ✓ Read Theme.kt (230 lines)
- * Format: ✓ Modified Theme.kt (+45, -12)
+ * Compact view: terminal log line with left color bar
+ * Matches AssistantMessage visual language
  */
 @Composable
 fun ToolCallCompact(
@@ -148,65 +133,52 @@ fun ToolCallCompact(
     val theme = LocalOpenCodeTheme.current
     val (icon, color) = getToolStateIcon(tool.state, theme)
     val description = getToolCompactDescription(tool)
-    val cardShape = RoundedCornerShape(8.dp)
 
-    Row(
+    Box(
         modifier = modifier
-            .clip(cardShape)
-            .background(theme.backgroundPanel.copy(alpha = 0.6f))
-            .border(1.dp, color.copy(alpha = 0.2f), cardShape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 2.dp)
     ) {
-        // State icon badge
+        // Left state color bar
         Box(
             modifier = Modifier
-                .size(20.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(color.copy(alpha = 0.15f)),
-            contentAlignment = Alignment.Center
+                .align(Alignment.TopStart)
+                .width(2.dp)
+                .matchParentSize()
+                .background(color.copy(alpha = 0.55f))
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 10.dp, end = 4.dp, top = 3.dp, bottom = 3.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = icon,
-                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                fontFamily = FontFamily.Monospace,
+                fontSize = TuiCodeFontSize.lg,
                 color = color
             )
-        }
-
-        Text(
-            text = description,
-            style = MaterialTheme.typography.labelMedium.copy(
+            Text(
+                text = description,
                 fontFamily = FontFamily.Monospace,
-                fontSize = TuiCodeFontSize.xl
-            ),
-            color = theme.text,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-
-        // Running indicator
-        if (tool.state is ToolState.Running) {
-            TuiLoadingIndicator()
-        }
-
-        // Diff stats for edit tools
-        getDiffStats(tool)?.let { (added, removed) ->
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = "+$added",
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                    fontWeight = FontWeight.Medium,
-                    color = theme.success
-                )
-                Text(
-                    text = "-$removed",
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                    fontWeight = FontWeight.Medium,
-                    color = theme.error
-                )
+                fontSize = TuiCodeFontSize.xl,
+                color = theme.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            if (tool.state is ToolState.Running) {
+                TuiLoadingIndicator()
+            }
+            getDiffStats(tool)?.let { (added, removed) ->
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("+$added", fontFamily = FontFamily.Monospace,
+                        fontSize = TuiCodeFontSize.lg, color = theme.success)
+                    Text("-$removed", fontFamily = FontFamily.Monospace,
+                        fontSize = TuiCodeFontSize.lg, color = theme.error)
+                }
             }
         }
     }

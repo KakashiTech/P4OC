@@ -3,6 +3,7 @@ package dev.blazelight.p4oc.ui.components.chat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -25,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.data.remote.dto.AgentDto
@@ -74,7 +76,8 @@ fun ModelAgentSelectorBar(
 ) {
     val theme = LocalOpenCodeTheme.current
     var showModelPicker by remember { mutableStateOf(false) }
-    
+    var showAgentSheet by remember { mutableStateOf(false) }
+
     val selectModelText = stringResource(R.string.select_model)
     val selectedModelName = remember(selectedModel, availableModels, selectModelText) {
         if (selectedModel == null) return@remember selectModelText
@@ -82,95 +85,102 @@ fun ModelAgentSelectorBar(
             ?.second?.name ?: selectedModel.modelID
     }
 
-    Column(modifier = modifier.fillMaxWidth()) {
+    // ASCII terminal buttons - left-aligned, no background, with special parentheses
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 7.dp)
-            .testTag("agent_selector"),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // AGENT button — tap to cycle, long-press to open full switcher sheet
         if (availableAgents.isNotEmpty()) {
             val currentAgent = availableAgents.find { it.name == selectedAgent }
             val agentColor = getAgentColor(currentAgent)
 
-            Box(
+            Row(
                 modifier = Modifier
-                    .height(Sizing.buttonHeightMd)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(agentColor.copy(alpha = 0.12f))
-                    .border(1.dp, agentColor.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                    .clickable(role = Role.Button) {
-                        val currentIndex = availableAgents.indexOfFirst { it.name == selectedAgent }
-                        val nextIndex = (currentIndex + 1) % availableAgents.size
-                        onAgentSelected(availableAgents[nextIndex].name)
-                    }
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center
+                    .combinedClickable(
+                        role = Role.Button,
+                        onClick = {
+                            val currentIndex = availableAgents.indexOfFirst { it.name == selectedAgent }
+                            val nextIndex = (currentIndex + 1) % availableAgents.size
+                            onAgentSelected(availableAgents[nextIndex].name)
+                        },
+                        onLongClick = { showAgentSheet = true }
+                    )
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .testTag("agent_button"),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "@${(selectedAgent ?: "build").lowercase()}",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = "[",
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 10.sp,
+                    color = theme.textMuted,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = (selectedAgent ?: "build").lowercase(),
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
                     color = agentColor
+                )
+                Text(
+                    text = "]",
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = theme.textMuted,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
-
+        
+        // ASCII separator between buttons
         if (availableAgents.isNotEmpty() && availableModels.isNotEmpty()) {
-            Box(
-                modifier = Modifier
-                    .height(16.dp)
-                    .width(1.dp)
-                    .background(theme.border)
+            Text(
+                text = " • ",
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                fontSize = 12.sp,
+                color = theme.border.copy(alpha = 0.5f),
+                fontWeight = FontWeight.Bold
             )
         }
-
+        
+        // Model selector button - ASCII style with special parentheses
         if (availableModels.isNotEmpty()) {
-            Box(
+            Row(
                 modifier = Modifier
-                    .height(Sizing.buttonHeightMd)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(theme.background)
-                    .border(1.dp, theme.border, RoundedCornerShape(8.dp))
                     .clickable(role = Role.Button) { showModelPicker = true }
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .testTag("model_button"),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = selectedModelName,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        color = theme.text,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = Sizing.panelWidthLg)
-                    )
-                    Text(
-                        text = "▾",
-                        color = theme.textMuted,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
+                Text(
+                    text = "(",
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = theme.textMuted,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = selectedModelName.lowercase(),
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = theme.accent
+                )
+                Text(
+                    text = ")",
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = theme.textMuted,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }
-    // Thin divider line separating agent/model row from input field
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .background(theme.border.copy(alpha = 0.4f))
-    )
-    } // end Column
 
     if (showModelPicker) {
         ModelPickerDialog(
@@ -178,12 +188,21 @@ fun ModelAgentSelectorBar(
             selectedModel = selectedModel,
             favoriteModels = favoriteModels,
             recentModels = recentModels,
-            onModelSelected = { 
+            onModelSelected = {
                 onModelSelected(it)
                 showModelPicker = false
             },
             onToggleFavorite = onToggleFavorite,
             onDismiss = { showModelPicker = false }
+        )
+    }
+
+    if (showAgentSheet && availableAgents.isNotEmpty()) {
+        AgentSwitcherSheet(
+            agents = availableAgents,
+            selectedAgent = selectedAgent,
+            onAgentSelected = onAgentSelected,
+            onDismiss = { showAgentSheet = false }
         )
     }
 }

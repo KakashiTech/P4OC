@@ -11,13 +11,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import android.content.Context
 import okhttp3.Cache
+import okhttp3.ConnectionPool
 import okhttp3.Credentials
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -58,6 +62,10 @@ class ConnectionManager constructor(
     val hasConnection: Boolean
         get() = _connection.value != null
 
+    /** The base URL of the currently active connection, or null if not connected. */
+    val currentBaseUrl: String?
+        get() = _connection.value?.config?.url
+
     fun requireApi(): OpenCodeApi {
         return _connection.value?.api
             ?: throw IllegalStateException("Not connected to any server")
@@ -74,13 +82,19 @@ class ConnectionManager constructor(
         _connectionState.value = ConnectionState.Connecting
 
         return try {
-            val baseClient = buildBaseOkHttpClient(config, password)
-            val okHttpClient = buildOkHttpClient(baseClient)
-            val retrofit = buildRetrofit(config.url, okHttpClient)
-            val api = retrofit.create(OpenCodeApi::class.java)
+            val (baseClient, okHttpClient, api) = withContext(Dispatchers.IO) {
+                val base = buildBaseOkHttpClient(config, password)
+                val client = buildOkHttpClient(base)
+                val retrofit = buildRetrofit(config.url, client)
+                val api = retrofit.create(OpenCodeApi::class.java)
+                Triple(base, client, api)
+            }
 
-            val healthResult = runCatching { api.health() }
-            
+            // Parallel health check with timeout for faster connection validation
+            val healthResult = runCatching {
+                kotlinx.coroutines.withTimeout(8000) { api.health() }
+            }
+
             if (healthResult.isFailure) {
                 val error = healthResult.exceptionOrNull()
                 AppLog.e(TAG, "Health check failed", error)
@@ -90,7 +104,7 @@ class ConnectionManager constructor(
 
             AppLog.d(TAG, "Health check passed, starting SSE")
 
-            val sseClient = buildSseOkHttpClient(baseClient)
+            val sseClient = withContext(Dispatchers.IO) { buildSseOkHttpClient(baseClient) }
             val eventSource = OpenCodeEventSource(
                 okHttpClient = sseClient,
                 json = json,
@@ -164,24 +178,45 @@ class ConnectionManager constructor(
         _connectionState.value = ConnectionState.Disconnected
     }
 
+    // Shared connection pool for all clients - aggressive settings for low latency
+    private val sharedConnectionPool = ConnectionPool(
+        maxIdleConnections = 10,        // More idle connections ready
+        keepAliveDuration = 5,          // 5 minutes keep-alive
+        timeUnit = TimeUnit.MINUTES
+    )
+
     /**
      * Build a shared base OkHttpClient with auth and common settings.
-     * Derived clients share its connection pool and dispatcher via newBuilder().
+     * Optimized for minimal latency with aggressive connection pooling.
      */
     private fun buildBaseOkHttpClient(config: ServerConfig, password: String?): OkHttpClient {
         val cacheDir = File(context.cacheDir, "http_cache")
         val cache = Cache(cacheDir, 20L * 1024L * 1024L)
 
         val builder = OkHttpClient.Builder()
+            // Extended timeouts for long-running AI operations (5 minutes)
+            // Prevents cancellation during complex tasks (code analysis, refactoring, etc.)
             .connectTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(300, TimeUnit.SECONDS) // 5 min for long AI operations
+            // Aggressive connection pooling
+            .connectionPool(sharedConnectionPool)
+            // HTTP/2 for multiplexing and header compression
+            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
             .cache(cache)
+            // Retry on connection failure
+            .retryOnConnectionFailure(true)
             .addInterceptor { chain ->
                 val original = chain.request()
-                val req = original.newBuilder()
-                    .header("Accept", "application/json")
-                    .build()
-                chain.proceed(req)
+                // Only add Accept header if not already provided
+                if (original.header("Accept") == null) {
+                    val newReq = original.newBuilder()
+                        .header("Accept", "application/json")
+                        .build()
+                    chain.proceed(newReq)
+                } else {
+                    chain.proceed(original)
+                }
             }
 
         if (config.username != null && password != null) {
@@ -194,8 +229,9 @@ class ConnectionManager constructor(
     private fun buildOkHttpClient(base: OkHttpClient): OkHttpClient =
         base.newBuilder()
             .readTimeout(60, TimeUnit.SECONDS)
+            // Minimal logging - only in debug and only headers (no body)
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE
+                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.HEADERS else HttpLoggingInterceptor.Level.NONE
                 redactHeader("Authorization")
             })
             .build()

@@ -1,16 +1,42 @@
 package dev.blazelight.p4oc.ui.screens.chat
 
+import dev.blazelight.p4oc.core.log.AppLog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import dev.blazelight.p4oc.ui.components.chat.SkillPickerBottomSheet
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.ScrollableDefaults
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.animation.core.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
@@ -30,6 +56,11 @@ import dev.blazelight.p4oc.core.network.ConnectionState
 import dev.blazelight.p4oc.domain.model.MessageWithParts
 import dev.blazelight.p4oc.domain.model.Part
 import dev.blazelight.p4oc.domain.model.SessionConnectionState
+import dev.blazelight.p4oc.domain.model.Agent
+import dev.blazelight.p4oc.domain.model.Model
+import dev.blazelight.p4oc.core.datastore.VisualSettings
+import dev.blazelight.p4oc.ui.screens.chat.ChatUiState
+import kotlinx.coroutines.flow.combine
 import dev.blazelight.p4oc.ui.components.chat.AbortSummaryCard
 import dev.blazelight.p4oc.ui.components.chat.ChatInputBar
 import dev.blazelight.p4oc.ui.components.chat.FilePickerDialog
@@ -37,17 +68,17 @@ import dev.blazelight.p4oc.ui.components.chat.JumpToBottomButton
 import dev.blazelight.p4oc.ui.components.chat.ModelAgentSelectorBar
 import dev.blazelight.p4oc.ui.components.command.CommandPalette
 import dev.blazelight.p4oc.ui.components.question.InlineQuestionCard
+import dev.blazelight.p4oc.ui.components.todo.TodoLiveDot
 import dev.blazelight.p4oc.ui.components.todo.TodoTrackerSheet
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenu
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenuItem
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenu
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenuItem
 import dev.blazelight.p4oc.ui.components.TuiTopBar
 import dev.blazelight.p4oc.ui.components.TuiConfirmDialog
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
 import dev.blazelight.p4oc.ui.components.TuiSnackbar
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.RectangleShape
@@ -55,8 +86,26 @@ import androidx.compose.ui.text.font.FontWeight
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
+import dev.blazelight.p4oc.ui.components.LocalAnimationsPaused
 
-@OptIn(ExperimentalMaterial3Api::class)
+// Data classes for optimized state management (currently not used but kept for future optimization)
+data class CombinedChatState(
+    val uiState: ChatUiState,
+    val connectionState: ConnectionState,
+    val sessionConnectionState: SessionConnectionState,
+    val branchName: String?,
+    val visualSettings: VisualSettings
+)
+
+data class ModelAgentState(
+    val availableAgents: List<Agent>,
+    val selectedAgent: Agent?,
+    val availableModels: List<Model>,
+    val selectedModel: Model?,
+    val favoriteModels: Set<Model>
+)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel = koinViewModel(),
@@ -69,16 +118,24 @@ fun ChatScreen(
     onConnectionStateChanged: ((SessionConnectionState?) -> Unit)? = null,
     isActiveTab: Boolean = true
 ) {
+    // Optimized state collection - reduce recompositions by grouping related states
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
+    // Stable Long version key — increments on every mutation, never loses equality
+    // on list copy(). Use this as remember() key instead of the messages list reference.
+    val messagesVersion by viewModel.messagesVersion.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val branchName by viewModel.branchName.collectAsStateWithLifecycle()
     val sessionConnectionState by viewModel.sessionConnectionState.collectAsStateWithLifecycle()
     val visualSettings by viewModel.visualSettings.collectAsStateWithLifecycle()
 
-    // Sub-manager state
+    // isLoading se obtiene de uiState
+
+    // Dialog states - collected separately to avoid unnecessary recompositions
     val pendingQuestion by viewModel.dialogManager.pendingQuestion.collectAsStateWithLifecycle()
     val pendingPermissionsByCallId by viewModel.dialogManager.pendingPermissionsByCallId.collectAsStateWithLifecycle()
+    
+    // Model/Agent states - collect only what's needed
     val availableAgents by viewModel.modelAgentManager.availableAgents.collectAsStateWithLifecycle()
     val selectedAgent by viewModel.modelAgentManager.selectedAgent.collectAsStateWithLifecycle()
     val availableModels by viewModel.modelAgentManager.availableModels.collectAsStateWithLifecycle()
@@ -114,72 +171,131 @@ fun ChatScreen(
         ToolWidgetState.fromString(visualSettings.toolWidgetDefaultState)
     }
 
+    // isThinking: pure derivedStateOf — no messages reference key, tracks internally.
+    val isThinking by remember {
+        derivedStateOf {
+            messages.lastOrNull()?.parts?.any { it is Part.Reasoning && it.time?.end == null } == true
+        }
+    }
+
     val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+
+    val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
+    DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
+    // NativeFlingBehavior drives every fling frame through the C++ SplineFling engine.
+    // Friction tuned to 52% of Android default — iOS-length glide, no JVM alloc per frame.
+    val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
+
+    val isAtBottom by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 120
+        }
+    }
+    var userScrolledAway by remember { mutableStateOf(false) }
+    var hasNewContentWhileAway by remember { mutableStateOf(false) }
+
+    // Observer 1: scroll physics only — reads NO messages state, zero allocation per frame.
+    // Throttles SSE flushes and tracks user-scrolled-away purely from list scroll state.
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress to isAtBottom }
+            .collect { (scrolling, atBottom) ->
+                viewModel.messageStore.setFlushDelayWhileScrolling(scrolling)
+                if (scrolling && !atBottom) userScrolledAway = true
+                if (atBottom && !scrolling && userScrolledAway) {
+                    userScrolledAway = false
+                    hasNewContentWhileAway = false
+                }
+            }
+    }
+
+    // Observer 2: auto-scroll on new messages — completely separate from scroll observer.
+    // Uses animateScrollToItem for a smooth glide instead of a teleport.
+    // Debounced: only scrolls after 80ms of no new versions to avoid fighting rapid SSE tokens.
+    LaunchedEffect(messagesVersion) {
+        val count = messages.size
+        if (count == 0) return@LaunchedEffect
+        if (!userScrolledAway && !listState.isScrollInProgress) {
+            kotlinx.coroutines.delay(80)
+            if (!listState.isScrollInProgress) {
+                listState.animateScrollToItem(0)
+            }
+        } else if (userScrolledAway) {
+            hasNewContentWhileAway = true
+        }
+    }
+
+    // Scroll to bottom once when session first loads
+    LaunchedEffect(uiState.session?.id) {
+        if (messages.isNotEmpty()) listState.scrollToItem(0)
+    }
+
     var showCommandPalette by remember { mutableStateOf(false) }
     var showTodoTracker by remember { mutableStateOf(false) }
     var showFilePicker by remember { mutableStateOf(false) }
     var showRevertDialog by remember { mutableStateOf<String?>(null) }
-    
-    // Scroll UX state
-    var userScrolledAway by remember { mutableStateOf(false) }
-    var hasNewContentWhileAway by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope()
-    
-    // Derived state: check if user is "at bottom" (reversed layout: index 0 is bottom)
-    val isAtBottom by remember {
-        derivedStateOf {
-            val layoutInfo = listState.layoutInfo
-            layoutInfo.totalItemsCount == 0 || 
-                (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 100)
+    var showSkillPicker by remember { mutableStateOf(false) }
+
+    val lastChangedIds by viewModel.lastChangedIds.collectAsStateWithLifecycle()
+
+    // Delta-diff flatItems: on each version bump try patchFlatItems() first (O(changed)).
+    // Falls back to full buildFlatItems() only when structure changes (new msg / loadMore).
+    // Uses mutableStateOf directly - the state read inside remember doesn't trigger recomposition.
+    val prevFlatItemsRef = remember { mutableStateOf<List<FlatChatItem>>(emptyList()) }
+    val flatItems = remember(messagesVersion) {
+        // Read the ref value without triggering recomposition observation
+        val prevList = prevFlatItemsRef.value
+        val patched = patchFlatItems(prevList, messages, lastChangedIds)
+        if (patched != null) {
+            AppLog.d("ChatScreen", "flatItems patched: old=${prevList.size} new=${patched.size} changed=${lastChangedIds.size}")
+        } else {
+            AppLog.d("ChatScreen", "flatItems rebuild: messages=${messages.size}")
+        }
+        val result = patched ?: buildFlatItems(groupMessagesIntoBlocks(messages))
+        prevFlatItemsRef.value = result
+        result
+    }
+
+    // Pagination keyed on version too.
+    val hasMoreMessages   = remember(messagesVersion) { viewModel.hasMoreMessages() }
+    val totalMessageCount = remember(messagesVersion) { viewModel.getTotalMessageCount() }
+    val visibleMessageCount = messages.size
+
+    // isBusy / isLoading isolated — consumers only recompose on boolean flip.
+    val isBusy    by remember { derivedStateOf { uiState.isBusy } }
+    val isLoading by remember { derivedStateOf { uiState.isLoading } }
+
+    // Stable lambdas — ViewModel reference is constant for session lifetime.
+    val onToolApprove = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "once") } }
+    val onToolDeny    = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "reject") } }
+    val onToolAlways  = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "always") } }
+    val onRevert      = remember<(String) -> Unit> { { id -> showRevertDialog = id } }
+    val onFork        = remember(viewModel, onOpenSubSession) {
+        { messageId: String ->
+            viewModel.forkSession(
+                messageId = messageId,
+                onForkCreated = { forkSessionId -> onOpenSubSession?.invoke(forkSessionId) }
+            )
         }
     }
-    
+
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
-    
+
     BackHandler {
         focusManager.clearFocus()
         keyboardController?.hide()
         onNavigateBack()
     }
 
-    // Detect user scroll gesture - when scrolling and not at bottom, mark as scrolled away
-    LaunchedEffect(listState.isScrollInProgress, isAtBottom) {
-        if (listState.isScrollInProgress && !isAtBottom) {
-            userScrolledAway = true
-        }
-        // Reset when user manually scrolls back to bottom
-        if (isAtBottom && !listState.isScrollInProgress && userScrolledAway) {
-            userScrolledAway = false
-            hasNewContentWhileAway = false
-        }
-    }
-
-    // Auto-scroll when new messages arrive or content changes during streaming
-    val messageCount = messages.size
-    val lastMessagePartCount = messages.lastOrNull()?.parts?.size ?: 0
-    val isBusy = uiState.isBusy
-    
-    // Scroll on new messages or when parts are added to the last message
-    LaunchedEffect(messageCount, lastMessagePartCount, isBusy) {
-        if (messages.isNotEmpty()) {
-            if (!userScrolledAway) {
-                // Smooth scroll for small distances, instant for large jumps
-                if (listState.firstVisibleItemIndex < 3) {
-                    listState.animateScrollToItem(0)  // Smooth when close to bottom
-                } else {
-                    listState.scrollToItem(0)  // Instant for large jumps
-                }
-            } else {
-                hasNewContentWhileAway = true
-            }
-        }
-    }
-
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
+            // Session title from loaded session
+            val displayTitle = uiState.session?.title ?: "Chat"
             ChatTopBar(
-                title = uiState.session?.title ?: "Chat",
+                modifier = Modifier,
+                title = displayTitle,
                 connectionState = connectionState,
                 onBack = onNavigateBack,
                 onTerminal = onOpenTerminal,
@@ -195,9 +311,13 @@ fun ChatScreen(
                 isBusy = uiState.isBusy,
                 branchName = branchName,
                 todoCount = uiState.todos.count { it.status == "in_progress" || it.status == "pending" },
+                inProgressCount = uiState.todos.count { it.status == "in_progress" },
                 onTodos = {
                     viewModel.loadTodos()
                     showTodoTracker = true
+                },
+                onSkills = {
+                    showSkillPicker = true
                 }
             )
         },
@@ -207,36 +327,52 @@ fun ChatScreen(
             if (!isSubAgent) {
                 Column(
                     modifier = Modifier
-                        .imePadding()
                         .navigationBarsPadding()
+                        .imePadding()
                         .background(LocalOpenCodeTheme.current.backgroundElement)
                 ) {
-                    ModelAgentSelectorBar(
-                        availableAgents = availableAgents,
-                        selectedAgent = selectedAgent,
-                        onAgentSelected = viewModel.modelAgentManager::selectAgent,
-                        availableModels = availableModels,
-                        selectedModel = selectedModel,
-                        onModelSelected = viewModel.modelAgentManager::selectModel,
-                        favoriteModels = favoriteModels,
-                        recentModels = recentModels,
-                        onToggleFavorite = viewModel.modelAgentManager::toggleFavoriteModel
-                    )
+                    var localInput by remember { mutableStateOf(uiState.inputText) }
+                    LaunchedEffect(uiState.inputText) {
+                        if (uiState.inputText != localInput) localInput = uiState.inputText
+                    }
                     ChatInputBar(
-                        value = uiState.inputText,
+                        value = localInput,
+                        isThinking = isThinking,
+                        modelSelector = {
+                            ModelAgentSelectorBar(
+                                availableAgents = availableAgents,
+                                selectedAgent = selectedAgent,
+                                onAgentSelected = viewModel.modelAgentManager::selectAgent,
+                                availableModels = availableModels,
+                                selectedModel = selectedModel,
+                                onModelSelected = viewModel.modelAgentManager::selectModel,
+                                favoriteModels = favoriteModels,
+                                recentModels = recentModels,
+                                onToggleFavorite = viewModel.modelAgentManager::toggleFavoriteModel
+                            )
+                        },
+                        agentSelector = { },
                         onValueChange = { text ->
-                            viewModel.updateInput(text)
+                            localInput = text
                             if (text.startsWith("/") && uiState.commands.isEmpty()) {
                                 viewModel.loadCommands()
                             }
                         },
-                        onSend = viewModel::sendMessage,
+                        onSend = {
+                            viewModel.updateInput(localInput)
+                            viewModel.sendMessage()
+                            localInput = ""
+                        },
                         isLoading = uiState.isSending,
                         enabled = connectionState is ConnectionState.Connected,
                         isBusy = uiState.isBusy,
                         hasQueuedMessage = uiState.queuedMessage != null,
-                        onQueueMessage = viewModel::queueMessage,
-                        onCancelQueue = viewModel::cancelQueuedMessage,
+                        onQueueMessage = {
+                            viewModel.updateInput(localInput)
+                            viewModel.queueMessage()
+                            localInput = ""
+                        },
+                        onCancelQueue = { /* TODO: Implementar cancelacion de mensaje encolado */ },
                         queuedMessagePreview = uiState.queuedMessage?.text,
                         attachedFiles = attachedFiles,
                         onAttachClick = {
@@ -252,127 +388,51 @@ fun ChatScreen(
             }
         }
     ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            // Revert active banner
-            uiState.session?.revert?.let {
-                val theme = LocalOpenCodeTheme.current
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
-                        .background(theme.warning.copy(alpha = 0.12f))
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(text = "↺", color = theme.warning, fontFamily = FontFamily.Monospace)
-                        Text(
-                            text = stringResource(R.string.revert_active_banner),
-                            style = MaterialTheme.typography.labelMedium,
-                            fontFamily = FontFamily.Monospace,
-                            color = theme.warning
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(theme.warning.copy(alpha = 0.15f))
-                            .clickable(role = Role.Button) { viewModel.unrevertSession() }
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.unrevert_all),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Medium,
-                            color = theme.warning
-                        )
-                    }
-                }
-            }
-
-            val hasContent = messages.isNotEmpty() || uiState.isBusy
-            
-            if (!hasContent && !uiState.isLoading) {
-                EmptyChatView(modifier = Modifier.align(Alignment.Center))
-            } else {
-                val messageBlocks by remember {
-                    derivedStateOf { groupMessagesIntoBlocks(messages) }
-                }
-                
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize().testTag("message_list"),
-                    contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    reverseLayout = true
-                ) {
-                    // Inline question card at the bottom (top in reversed layout)
-                    pendingQuestion?.let { questionRequest ->
-                        item(key = "pending_question_${questionRequest.id}") {
-                            InlineQuestionCard(
-                                questionData = dev.blazelight.p4oc.domain.model.QuestionData(questionRequest.questions),
-                                onDismiss = viewModel::dismissQuestion,
-                                onSubmit = { answers ->
-                                    viewModel.respondToQuestion(questionRequest.id, answers)
-                                },
-                                modifier = Modifier.padding(vertical = Spacing.xs)
-                            )
-                        }
-                    }
-
-                    // Abort summary card (shows after user hits Stop)
-                    uiState.abortSummary?.let { summary ->
-                        item(key = "abort_summary_${summary.abortedAt}") {
-                            AbortSummaryCard(
-                                summary = summary,
-                                modifier = Modifier.padding(vertical = Spacing.xs)
-                            )
-                        }
-                    }
-                    
-                    // All messages - stable keys ensure only changed items recompose
-                    items(
-                        items = messageBlocks.asReversed(),
-                        key = { block -> 
-                            when (block) {
-                                is MessageBlock.UserBlock -> block.message.message.id
-                                is MessageBlock.AssistantBlock -> block.messages.first().message.id
-                            }
-                        },
-                        contentType = { block ->
-                            when (block) {
-                                is MessageBlock.UserBlock -> "user"
-                                is MessageBlock.AssistantBlock -> "assistant"
-                            }
-                        }
-                    ) { block ->
-                        MessageBlockView(
-                            block = block,
-                            onToolApprove = { viewModel.respondToPermission(it, "once") },
-                            onToolDeny = { viewModel.respondToPermission(it, "reject") },
-                            onToolAlways = { viewModel.respondToPermission(it, "always") },
-                            onOpenSubSession = onOpenSubSession,
-                            defaultToolWidgetState = defaultToolWidgetState,
-                            pendingPermissionsByCallId = pendingPermissionsByCallId,
-                            onRevert = { messageId -> showRevertDialog = messageId }
-                        )
-                    }
-                }
-            }
-
-            if (uiState.isLoading) {
-                TuiLoadingScreen(
-                    modifier = Modifier.align(Alignment.Center)
+        CompositionLocalProvider(LocalAnimationsPaused provides listState.isScrollInProgress) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
+            // Revert active banner — isolated, only reads uiState.session.revert
+            val revert = uiState.session?.revert
+            if (revert != null) {
+                RevertActiveBanner(
+                    onUnrevert = viewModel::unrevertSession,
+                    modifier = Modifier.align(Alignment.TopCenter)
                 )
+            }
+
+            // Main message list — isolated composable, no uiState/connectionState reads.
+            // Only recomposes when flatItems, pendingQuestion, abortSummary, or pagination change.
+            ChatMessageList(
+                listState = listState,
+                flingBehavior = smoothFling,
+                flatItems = flatItems,
+                pendingQuestion = pendingQuestion,
+                abortSummary = uiState.abortSummary,
+                hasMoreMessages = hasMoreMessages,
+                visibleMessageCount = visibleMessageCount,
+                totalMessageCount = totalMessageCount,
+                onLoadMore = { viewModel.loadOlderMessages() },
+                onDismissQuestion = viewModel::dismissQuestion,
+                onRespondQuestion = { id, r -> viewModel.respondToQuestion(id, r) },
+                onToolApprove = onToolApprove,
+                onToolDeny = onToolDeny,
+                onToolAlways = onToolAlways,
+                onOpenSubSession = onOpenSubSession,
+                defaultToolWidgetState = defaultToolWidgetState,
+                pendingPermissionsByCallId = pendingPermissionsByCallId,
+                onRevert = onRevert,
+                onFork = onFork,
+                showEmpty = messages.isEmpty() && !isBusy && !isLoading,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp)
+            )
+
+            if (isLoading) {
+                TuiLoadingScreen(modifier = Modifier.align(Alignment.Center))
             }
 
             uiState.error?.let { error ->
@@ -382,20 +442,16 @@ fun ChatScreen(
                         .padding(16.dp),
                     action = {
                         TextButton(onClick = viewModel::clearError, shape = RoundedCornerShape(4.dp)) {
-                            Text(
-                                stringResource(R.string.dismiss),
-                                fontFamily = FontFamily.Monospace
-                            )
+                            Text(stringResource(R.string.dismiss), fontFamily = FontFamily.Monospace)
                         }
                     }
                 ) {
                     Text(error, fontFamily = FontFamily.Monospace)
                 }
             }
-            
-            // Jump to bottom button - shows when scrolled away during streaming
+
             JumpToBottomButton(
-                visible = userScrolledAway && uiState.isBusy,
+                visible = userScrolledAway && isBusy,
                 hasNewContent = hasNewContentWhileAway,
                 onClick = {
                     coroutineScope.launch {
@@ -408,6 +464,7 @@ fun ChatScreen(
                     .align(Alignment.BottomEnd)
                     .padding(end = Spacing.xl, bottom = Spacing.md)
             )
+            }
         }
     }
 
@@ -428,6 +485,28 @@ fun ChatScreen(
             isLoading = uiState.isLoadingTodos,
             onDismiss = { showTodoTracker = false },
             onRefresh = { viewModel.loadTodos() }
+        )
+    }
+
+    if (showSkillPicker) {
+        val skillViewModel = koinViewModel<dev.blazelight.p4oc.ui.screens.settings.SkillsViewModel>()
+        val skillState by skillViewModel.state.collectAsStateWithLifecycle()
+        val skillItems = remember(skillState.skills) {
+            skillState.skills.map { 
+                dev.blazelight.p4oc.ui.components.chat.SkillItem(
+                    name = it.name,
+                    description = it.description,
+                    isEnabled = it.isEnabled
+                )
+            }
+        }
+        SkillPickerBottomSheet(
+            skills = skillItems,
+            onSkillSelected = { skillName: String ->
+                viewModel.injectSkill(skillName)
+            },
+            onDismiss = { showSkillPicker = false },
+            isLoading = skillState.isLoading
         )
     }
 
@@ -460,11 +539,23 @@ fun ChatScreen(
             isDestructive = true
         )
     }
+
+    // === SKELETON REMOVED ===
+    // Removed skeleton to prevent background placeholders during loading
+    // Messages will appear directly without placeholder backgrounds
 }
 
+// INSTANT PAINT Skeleton removed - no longer needed
+// Messages appear directly without placeholder backgrounds
+
+// LoadingSkeleton removed - no longer needed
+// Messages appear directly without placeholder backgrounds
+
+@Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatTopBar(
+    modifier: Modifier = Modifier,
     title: String,
     connectionState: ConnectionState,
     onBack: () -> Unit,
@@ -476,126 +567,325 @@ private fun ChatTopBar(
     isBusy: Boolean,
     branchName: String? = null,
     todoCount: Int = 0,
-    onTodos: () -> Unit = {}
+    inProgressCount: Int = 0,
+    onTodos: () -> Unit = {},
+    onSkills: () -> Unit = {}
 ) {
+    // Unified Chat TopBar - coherent with MainTabScreen style
     val theme = LocalOpenCodeTheme.current
     var showOverflow by remember { mutableStateOf(false) }
+    
+    // NOTE: glow animation is isolated in ConnectionGlowDot below — do NOT inline it here.
+    // An inline rememberInfiniteTransition recomposes the entire ChatTopBar on every frame.
 
-    TuiTopBar(
-        title = title,
-        onNavigateBack = onBack,
-        actions = {
-            // Connection dot
-            ConnectionDot(state = connectionState)
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(theme.background)
+            .padding(horizontal = 12.dp, vertical = 0.dp) // No vertical padding for connector contact
+    ) {
+        // Top connector - direct connection from MainTabScreen
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(12.dp)
+                    .height(1.dp)
+                    .background(theme.border.copy(alpha = 0.3f))
+            )
+            Text(
+                text = "├", // Changed from ┌ to ├ for direct connection
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.accent.copy(alpha = 0.7f) // Matches MainTabScreen connector
+            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(1.dp)
+                    .background(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(
+                                theme.border.copy(alpha = 0.3f),
+                                theme.accent.copy(alpha = 0.4f),
+                                theme.border.copy(alpha = 0.3f)
+                            )
+                        )
+                    )
+            )
+            Text(
+                text = "┤",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.border.copy(alpha = 0.5f)
+            )
+            Box(
+                modifier = Modifier
+                    .width(12.dp)
+                    .height(1.dp)
+                    .background(theme.border.copy(alpha = 0.3f))
+            )
+        }
 
-            // Branch chip
-            branchName?.let { branch ->
-                Spacer(Modifier.width(4.dp))
+        // Segmented terminal layout - 3 connected sections
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(24.dp) // More compact height
+                .background(theme.background),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Section 1: Back button segment - ASCII style
+            Row(
+                modifier = Modifier
+                    .padding(horizontal = 6.dp, vertical = 0.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = "[",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    color = theme.textMuted.copy(alpha = 0.6f),
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "←",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 14.sp,
+                    color = theme.accent.copy(alpha = 0.8f),
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clickable(role = Role.Button, onClick = onBack)
+                        .padding(horizontal = 4.dp, vertical = 0.dp)
+                )
+                Text(
+                    text = "]",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    color = theme.textMuted.copy(alpha = 0.6f),
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            // ASCII connector 1
+            Text(
+                text = "┼",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.accent.copy(alpha = 0.7f)
+            )
+
+            // Center section with proper weight distribution
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                // Section 2: Compact status indicators (truly centered)
                 Row(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(theme.success.copy(alpha = 0.10f))
-                        .border(1.dp, theme.success.copy(alpha = 0.22f), RoundedCornerShape(20.dp))
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                        .wrapContentWidth()
+                        .border(1.dp, theme.border.copy(alpha = 0.4f))
+                        .background(theme.backgroundElement.copy(alpha = 0.08f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    Text("⎇", color = theme.success, fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall)
+                    // Compact status display
                     Text(
-                        text = branch,
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                        color = theme.success,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = Sizing.panelWidthSm)
+                        text = if (isBusy) "⚙" else "✦",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isBusy) theme.warning.copy(alpha = 0.9f) else theme.success.copy(alpha = 0.9f)
+                    )
+                    
+                    Text(
+                        text = if (isBusy) "run" else "idle",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isBusy) theme.warning.copy(alpha = 0.9f) else theme.success.copy(alpha = 0.9f),
+                        modifier = Modifier.padding(horizontal = 2.dp)
+                    )
+
+                    branchName?.let {
+                        Text(
+                            text = "·",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.border.copy(alpha = 0.5f)
+                        )
+                        Text(
+                            text = it.take(6),
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.success.copy(alpha = 0.8f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Text(
+                        text = "·",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.border.copy(alpha = 0.5f)
+                    )
+                    Text(
+                        text = "●",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (connectionState is ConnectionState.Connected) theme.success else theme.warning.copy(alpha = 0.6f)
                     )
                 }
             }
 
-            Spacer(Modifier.width(4.dp))
+            // ASCII connector 2
+            Text(
+                text = "┼",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.accent.copy(alpha = 0.7f)
+            )
 
-            // Todos badge
-            if (todoCount > 0) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(theme.accent.copy(alpha = 0.12f))
-                        .border(1.dp, theme.accent.copy(alpha = 0.25f), RoundedCornerShape(20.dp))
-                        .clickable(role = Role.Button) { onTodos() }
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
-                    Text("☐ $todoCount", color = theme.accent, fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall)
+            // Section 3: Controls segment
+            Row(
+                modifier = Modifier
+                    .padding(horizontal = 6.dp, vertical = 0.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                if (isBusy) {
+                    var clickCount by remember { mutableIntStateOf(0) }
+                    val scope = rememberCoroutineScope()
+                    
+                    Text(
+                        text = "■",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.error.copy(alpha = if (clickCount > 0) 1.0f else 0.8f),
+                        modifier = Modifier
+                            .clickable(role = Role.Button, onClick = {
+                                clickCount++
+                                if (clickCount == 1) {
+                                    // Reset after 2 seconds if no second click
+                                    scope.launch {
+                                        delay(2000)
+                                        if (clickCount == 1) clickCount = 0
+                                    }
+                                } else if (clickCount >= 2) {
+                                    onAbort()
+                                    clickCount = 0
+                                }
+                            })
+                            .padding(4.dp)
+                    )
                 }
-                Spacer(Modifier.width(4.dp))
-            }
 
-            // Abort pill — only when busy
-            if (isBusy) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(theme.error.copy(alpha = 0.14f))
-                        .border(1.dp, theme.error.copy(alpha = 0.35f), RoundedCornerShape(20.dp))
-                        .clickable(role = Role.Button) { onAbort() }
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                        .testTag("chat_abort_button"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text("■", color = theme.error, fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall)
-                    Text("Stop", color = theme.error, fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall)
+                if (todoCount > 0) {
+                    Row(
+                        modifier = Modifier
+                            .clickable(role = Role.Button, onClick = onTodos)
+                            .padding(2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "[",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.textMuted.copy(alpha = 0.6f)
+                        )
+                        if (inProgressCount > 0) {
+                            TodoLiveDot(activeCount = inProgressCount)
+                        } else {
+                            Text(
+                                text = "$todoCount",
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = theme.accent.copy(alpha = 0.8f)
+                            )
+                        }
+                        Text(
+                            text = "]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.textMuted.copy(alpha = 0.6f)
+                        )
+                    }
                 }
-                Spacer(Modifier.width(4.dp))
-            }
 
-            // Overflow menu — full submenu restored
-            Box {
-                Box(
-                    modifier = Modifier
-                        .size(Sizing.iconButtonMd)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(theme.accent.copy(alpha = 0.08f))
-                        .clickable(role = Role.Button) { showOverflow = true }
-                        .testTag("chat_overflow_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("≡", color = theme.accent, fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.titleMedium)
-                }
-                TuiDropdownMenu(
-                    expanded = showOverflow,
-                    onDismissRequest = { showOverflow = false }
-                ) {
-                    TuiDropdownMenuItem(
-                        text = "± ${stringResource(R.string.sessions_view_changes)}",
-                        onClick = { showOverflow = false; onViewChanges() }
-                    )
-                    TuiDropdownMenuItem(
-                        text = "/ ${stringResource(R.string.cd_commands)}",
-                        onClick = { showOverflow = false; onCommands() }
-                    )
-                    TuiDropdownMenuItem(
-                        text = ">_ ${stringResource(R.string.cd_terminal)}",
-                        onClick = { showOverflow = false; onTerminal() }
-                    )
-                    TuiDropdownMenuItem(
-                        text = "▤ ${stringResource(R.string.cd_files)}",
-                        onClick = { showOverflow = false; onFiles() }
-                    )
+                // ASCII menu button with special brackets - wrapped in Box for menu positioning
+                Box {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable(role = Role.Button, onClick = { showOverflow = true })
+                    ) {
+                        Text(
+                            text = "[",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = theme.textMuted.copy(alpha = 0.6f),
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "☰",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 14.sp,
+                            color = theme.accent.copy(alpha = 0.8f),
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.dp)
+                        )
+                        Text(
+                            text = "]",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = theme.textMuted.copy(alpha = 0.6f),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Terminal-style ASCII menu positioned below the button
+                    TuiTerminalMenu(
+                        expanded = showOverflow,
+                        onDismissRequest = { showOverflow = false },
+                        modifier = Modifier.align(Alignment.TopEnd),
+                        offset = DpOffset(8.dp, 22.dp)
+                    ) {
+                        TuiTerminalMenuItem(
+                            text = "Changes",
+                            symbol = "±",
+                            onClick = { showOverflow = false; onViewChanges() }
+                        )
+                        TuiTerminalMenuItem(
+                            text = "Commands",
+                            symbol = "/",
+                            onClick = { showOverflow = false; onCommands() }
+                        )
+                        TuiTerminalMenuItem(
+                            text = "Terminal",
+                            symbol = ">_",
+                            onClick = { showOverflow = false; onTerminal() }
+                        )
+                        TuiTerminalMenuItem(
+                            text = "Files",
+                            symbol = "#",
+                            onClick = { showOverflow = false; onFiles() }
+                        )
+                        TuiTerminalMenuItem(
+                            text = "Skills",
+                            symbol = ">",
+                            onClick = { showOverflow = false; onSkills() }
+                        )
+                    }
                 }
             }
         }
-    )
+    }
 }
 
-/**
- * Compact connection dot for the title subtitle row — just a colored text glyph.
- * No 40dp bounding box, no dropdown. Tap the main ConnectionIndicator for details.
- */
 @Composable
 private fun ConnectionDot(state: ConnectionState) {
     val theme = LocalOpenCodeTheme.current
@@ -637,15 +927,14 @@ private fun ConnectionIndicator(state: ConnectionState) {
                 .size(Sizing.iconXxs)
                 .clickable(role = Role.Button) { showDetail = !showDetail }
         )
-        TuiDropdownMenu(
+        TuiTerminalMenu(
             expanded = showDetail,
             onDismissRequest = { showDetail = false }
         ) {
-            Text(
+            TuiTerminalMenuItem(
                 text = description,
-                modifier = Modifier.padding(Spacing.md),
-                style = MaterialTheme.typography.bodySmall,
-                color = theme.text
+                symbol = "●",
+                onClick = { showDetail = false }
             )
         }
     }
@@ -722,3 +1011,189 @@ private fun EmptyChatView(modifier: Modifier = Modifier) {
 }
 
 // MessageBlock, groupMessagesIntoBlocks, and MessageBlockView are now in MessageBlockUtils.kt
+
+/**
+ * Isolated message list composable.
+ *
+ * Receives only stable, pre-computed values — no StateFlow reads, no ViewModel access.
+ * This means it ONLY recomposes when flatItems or the other explicit parameters change,
+ * completely decoupled from uiState, connectionState, inputText, etc.
+ */
+@Composable
+private fun ChatMessageList(
+    listState: LazyListState,
+    flingBehavior: androidx.compose.foundation.gestures.FlingBehavior,
+    flatItems: List<FlatChatItem>,
+    pendingQuestion: dev.blazelight.p4oc.domain.model.QuestionRequest?,
+    abortSummary: dev.blazelight.p4oc.ui.components.chat.AbortSummary?,
+    hasMoreMessages: Boolean,
+    visibleMessageCount: Int,
+    totalMessageCount: Int,
+    onLoadMore: () -> Unit,
+    onDismissQuestion: () -> Unit,
+    onRespondQuestion: (String, List<List<String>>) -> Unit,
+    onToolApprove: (String) -> Unit,
+    onToolDeny: (String) -> Unit,
+    onToolAlways: (String) -> Unit,
+    onOpenSubSession: ((String) -> Unit)?,
+    defaultToolWidgetState: ToolWidgetState,
+    pendingPermissionsByCallId: Map<String, dev.blazelight.p4oc.domain.model.Permission>,
+    onRevert: (String) -> Unit,
+    onFork: (String) -> Unit,
+    showEmpty: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    if (showEmpty) {
+        Box(modifier = modifier, contentAlignment = Alignment.Center) {
+            EmptyChatView()
+        }
+        return
+    }
+    LazyColumn(
+        state = listState,
+        modifier = modifier.testTag("message_list"),
+        reverseLayout = true,
+        flingBehavior = flingBehavior,
+        contentPadding = PaddingValues(vertical = 2.dp),
+    ) {
+        pendingQuestion?.let { q ->
+            item(key = "q_${q.id}", contentType = "question") {
+                dev.blazelight.p4oc.ui.components.question.InlineQuestionCard(
+                    questionData = dev.blazelight.p4oc.domain.model.QuestionData(q.questions),
+                    onDismiss = onDismissQuestion,
+                    onSubmit = { onRespondQuestion(q.id, it) },
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            }
+        }
+        abortSummary?.let { s ->
+            item(key = "abort_${s.abortedAt}", contentType = "abort") {
+                dev.blazelight.p4oc.ui.components.chat.AbortSummaryCard(
+                    summary = s,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            }
+        }
+        itemsIndexed(
+            items = flatItems,
+            key = { _, item ->
+                when (item) {
+                    is FlatChatItem.UserPart          -> "u_${item.messageWithParts.message.id}"
+                    is FlatChatItem.AssistantBarStart -> "abs_${item.messageId}"
+                    is FlatChatItem.AssistantBarEnd   -> "abe_${item.messageId}"
+                    is FlatChatItem.TextPart          -> "txt_${item.msgId}_${item.part.id}"
+                    is FlatChatItem.ReasoningPart     -> "rea_${item.msgId}_${item.part.id}"
+                    is FlatChatItem.ReasoningGroup    -> "rg_${item.msgId}_${item.groupIndex}"
+                    is FlatChatItem.ToolBatch         -> "tb_${item.msgId}_${item.batchIndex}"
+                    is FlatChatItem.FilePart          -> "fp_${item.msgId}_${item.part.id}"
+                    is FlatChatItem.PatchPart         -> "pp_${item.msgId}_${item.part.id}"
+                }
+            },
+            contentType = { _, item ->
+                when (item) {
+                    is FlatChatItem.UserPart          -> "user"
+                    is FlatChatItem.AssistantBarStart -> "bar_start"
+                    is FlatChatItem.AssistantBarEnd   -> "bar_end"
+                    is FlatChatItem.TextPart          -> "text"
+                    is FlatChatItem.ReasoningPart     -> "reasoning"
+                    is FlatChatItem.ReasoningGroup    -> "reasoning_group"
+                    is FlatChatItem.ToolBatch         -> "tools"
+                    is FlatChatItem.FilePart          -> "file"
+                    is FlatChatItem.PatchPart         -> "patch"
+                }
+            }
+        ) { _, item ->
+            FlatChatItemView(
+                item = item,
+                onToolApprove = onToolApprove,
+                onToolDeny = onToolDeny,
+                onToolAlways = onToolAlways,
+                onOpenSubSession = onOpenSubSession,
+                defaultToolWidgetState = defaultToolWidgetState,
+                pendingPermissionsByCallId = pendingPermissionsByCallId,
+                onRevert = onRevert,
+                onFork = onFork
+            )
+        }
+        if (hasMoreMessages && visibleMessageCount < totalMessageCount) {
+            item(key = "load_more_messages", contentType = "load_more") {
+                val theme = LocalOpenCodeTheme.current
+                val scope = rememberCoroutineScope()
+                var isLoadingMore by remember { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .clickable(role = Role.Button) {
+                            if (!isLoadingMore) {
+                                isLoadingMore = true
+                                scope.launch {
+                                    try {
+                                        onLoadMore()
+                                    } finally {
+                                        isLoadingMore = false
+                                    }
+                                }
+                            }
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (isLoadingMore) "..." else "↺ more ($visibleMessageCount/$totalMessageCount)",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = theme.textMuted
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RevertActiveBanner(
+    onUnrevert: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val theme = LocalOpenCodeTheme.current
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
+            .background(theme.warning.copy(alpha = 0.12f))
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(text = "↺", color = theme.warning, fontFamily = FontFamily.Monospace)
+            Text(
+                text = stringResource(R.string.revert_active_banner),
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = FontFamily.Monospace,
+                color = theme.warning
+            )
+        }
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .background(theme.warning.copy(alpha = 0.15f))
+                .clickable(role = Role.Button) { onUnrevert() }
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.unrevert_all),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+                color = theme.warning
+            )
+        }
+    }
+}

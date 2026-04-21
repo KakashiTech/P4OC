@@ -1,6 +1,8 @@
 package dev.blazelight.p4oc.ui.screens.sessions
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -18,6 +20,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -25,28 +28,38 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.koin.androidx.compose.koinViewModel
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.ui.components.TuiConfirmDialog
 import dev.blazelight.p4oc.ui.components.TuiAlertDialog
 import dev.blazelight.p4oc.ui.components.TuiInputDialog
 import dev.blazelight.p4oc.ui.components.TuiButton
 import dev.blazelight.p4oc.ui.components.TuiTextButton
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenu
-import dev.blazelight.p4oc.ui.components.TuiDropdownMenuItem
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenu
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenuItem
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenuDivider
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
 import dev.blazelight.p4oc.domain.model.Session
@@ -63,12 +76,14 @@ import dev.blazelight.p4oc.ui.components.TuiCard
 import dev.blazelight.p4oc.ui.components.TuiSnackbar
 import android.content.Intent
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.delay
 
-// Corner radius tokens matching ServerScreen
-private val CardRadius = 8.dp
-private val BadgeRadius = 4.dp
-private val DotRadius = 2.dp
-private val ButtonRadius = 6.dp
+// Terminal style dimensions
+private val CardRadius = 0.dp
+private val BadgeRadius = 0.dp
+private val DotRadius = 0.dp
+private val ButtonRadius = 0.dp
+private val TerminalLineHeight = 2.dp
 
 private data class SessionNode(
     val sessionWithProject: SessionWithProject,
@@ -89,7 +104,8 @@ fun SessionListScreen(
     onProjects: () -> Unit = {},
     onProjectClick: (projectId: String) -> Unit = {},
     onViewChanges: (sessionId: String) -> Unit = {},
-    onNavigateBack: (() -> Unit)? = null
+    onNavigateBack: (() -> Unit)? = null,
+    showTopBar: Boolean = true
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var showNewSessionDialog by remember { mutableStateOf(false) }
@@ -112,6 +128,17 @@ fun SessionListScreen(
         } else null
     }
 
+    // Refresh session statuses after returning to this screen (e.g. pop from Chat/Settings).
+    // Delayed past the transition duration so API-driven recompositions don’t compete
+    // with the pop animation and cause frame drops / visual cuts.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            kotlinx.coroutines.delay(320) // wait for pop transition to finish (~250ms spring)
+            viewModel.refreshOnResume()
+        }
+    }
+
     LaunchedEffect(uiState.newSessionId, uiState.newSessionDirectory) {
         uiState.newSessionId?.let { sessionId ->
             onNewSession(sessionId, uiState.newSessionDirectory)
@@ -132,51 +159,41 @@ fun SessionListScreen(
 
     val theme = LocalOpenCodeTheme.current
 
+    // Pre-compute session tree with derivedStateOf for optimal recompositions
+    val expandedSessions = remember { mutableStateMapOf<String, Boolean>() }
+    val sessionTree by remember(displayedSessions) {
+        derivedStateOf { buildSessionTree(displayedSessions) }
+    }
+
+    val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
+    DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
+    val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
+
     Scaffold(
         containerColor = theme.background,
         topBar = {
-            TuiTopBar(
-                title = projectName ?: "", // No title when showing all sessions (tab already shows "Sessions")
-                onNavigateBack = onNavigateBack,
-                actions = {
-                    if (projectName != null) {
-                        // Only show folder button when not in project view
-                        IconButton(
-                            onClick = onProjects,
-                            modifier = Modifier.size(Sizing.iconButtonMd)
-                        ) {
-                            Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.cd_projects), modifier = Modifier.size(Sizing.iconAction), tint = theme.textMuted)
-                        }
-                    }
-                    IconButton(
-                        onClick = viewModel::refresh,
-                        modifier = Modifier.size(Sizing.iconButtonMd)
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.cd_refresh), modifier = Modifier.size(Sizing.iconAction), tint = theme.textMuted)
-                    }
-                    IconButton(
-                        onClick = onSettings,
-                        modifier = Modifier.size(Sizing.iconButtonMd).testTag("sessions_settings_button")
-                    ) {
-                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.cd_settings), modifier = Modifier.size(Sizing.iconAction), tint = theme.textMuted)
-                    }
-                }
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showNewSessionDialog = true },
-                shape = RoundedCornerShape(ButtonRadius),
-                containerColor = theme.accent,
-                contentColor = theme.background,
-                modifier = Modifier.testTag("fab_new_session")
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = stringResource(R.string.sessions_new),
-                    modifier = Modifier.size(20.dp)
+            if (showTopBar) {
+                SessionsTopBar(
+                    projectName = projectName,
+                    onNavigateBack = onNavigateBack,
+                    onProjects = onProjects,
+                    onRefresh = viewModel::refresh,
+                    onSettings = onSettings
                 )
             }
+        },
+        floatingActionButton = {
+            Text(
+                text = "+",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold,
+                color = theme.accent,
+                modifier = Modifier
+                    .clickable { showNewSessionDialog = true }
+                    .testTag("fab_new_session")
+                    .padding(16.dp)
+            )
         }
     ) { padding ->
         Box(
@@ -189,20 +206,27 @@ fun SessionListScreen(
                     modifier = Modifier.align(Alignment.Center)
                 )
             } else {
-                val expandedSessions = remember { mutableStateMapOf<String, Boolean>() }
-
-                val sessionTree = remember(displayedSessions) {
-                    buildSessionTree(displayedSessions)
-                }
-
+                // OPTIMIZED LazyColumn for smooth session scrolling
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().testTag("sessions_list"),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    flingBehavior = smoothFling
                 ) {
+                    // Animated PocketCode Logo Header — isolated on its own GPU layer
+                    // so its 45ms typewriter recompositions don't invalidate the parent list
+                    item(
+                        key = "logo_header",
+                        contentType = "header"
+                    ) {
+                        Box(modifier = Modifier.graphicsLayer { alpha = 0.99f }) {
+                            PocketCodeLogoHeader()
+                        }
+                    }
+
                     // Pinned quick actions (only on unfiltered list)
                     if (filterProjectId == null) {
-                        item(key = "quick_actions_row") {
+                        item(key = "quick_actions_row", contentType = "actions") {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -237,7 +261,8 @@ fun SessionListScreen(
                     } else {
                         items(
                             items = sessionTree,
-                            key = { it.sessionWithProject.session.id }
+                            key = { it.sessionWithProject.session.id },
+                            contentType = { node -> if (node.children.isEmpty()) "leaf" else "branch" }
                         ) { node ->
                             SessionTreeNode(
                                 node = node,
@@ -463,180 +488,204 @@ private fun SessionCard(
         else      -> theme.success
     }
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = { showContextMenu = true },
-                role = Role.Button
-            ),
-        shape = RoundedCornerShape(CardRadius),
-        colors = CardDefaults.cardColors(containerColor = cardColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (isBusy) 2.dp else 1.dp)
+    // Terminal TUI style with left accent bar - wrapped in Box for menu positioning
+    Box(
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 14.dp, vertical = 12.dp)
-                .fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Status indicator dot / busy spinner
-            if (isBusy) {
-                BusyDot(color = theme.accent)
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(indicatorColor.copy(alpha = if (isSubAgent) 0.5f else 1f))
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min)
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { showContextMenu = true },
+                    role = Role.Button
                 )
-            }
+        ) {
+            // Left accent bar - color indicates status
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .background(indicatorColor)
+            )
 
-            // Expand toggle (parent sessions with children)
-            if (onExpandToggle != null) {
-                Box(
-                    modifier = Modifier
-                        .size(20.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(theme.backgroundElement)
-                        .clickable(role = Role.Button) { onExpandToggle() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (isExpanded) stringResource(R.string.cd_collapse) else stringResource(R.string.cd_expand),
-                        modifier = Modifier.size(14.dp),
-                        tint = theme.textMuted
+            // Main content area
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .background(cardColor)
+            ) {
+            Row(
+                modifier = Modifier
+                    .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 4.dp)
+                    .fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Status prefix icon
+                val statusChar = when {
+                    isBusy -> "▶"
+                    isRetrying -> "⚠"
+                    isSubAgent -> "├"
+                    else -> if (status != null) "●" else "○"
+                }
+                Text(
+                    text = statusChar,
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = indicatorColor.copy(alpha = if (isSubAgent) 0.5f else 1f)
+                )
+
+                // Expand toggle (parent sessions with children)
+                if (onExpandToggle != null) {
+                    Text(
+                        text = if (isExpanded) "▼" else "▶",
+                        modifier = Modifier.clickable(role = Role.Button) { onExpandToggle() },
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.textMuted
+                    )
+                } else if (isSubAgent) {
+                    Text(
+                        text = "╰",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.textMuted
                     )
                 }
-            } else if (isSubAgent) {
-                Text(
-                    text = "╰",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = theme.textMuted
-                )
-            }
 
-            // Main content
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
+                // Session title
                 Text(
                     text = session.title,
                     style = MaterialTheme.typography.bodyMedium,
                     fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Medium,
-                    color = theme.text,
+                    fontWeight = if (isBusy) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isBusy) theme.accent else theme.text,
                     maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    SessionStatusIndicator(status = status)
-                    Text(
-                        text = formatDateTime(session.updatedAt),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = theme.textMuted
+
+                // Menu indicator
+                Text(
+                    text = "≡",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.textMuted.copy(alpha = 0.5f),
+                    modifier = Modifier.clickable(role = Role.Button) { showContextMenu = true }
+                )
+            }
+
+            // Bottom info line
+            Row(
+                modifier = Modifier
+                    .padding(start = 8.dp, end = 8.dp, bottom = 8.dp)
+                    .fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "[${session.id.take(6)}]",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = theme.textMuted.copy(alpha = 0.7f)
+                )
+
+                SessionStatusIndicator(status = status)
+
+                Text(
+                    text = formatDateTime(session.updatedAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = theme.textMuted
+                )
+
+                if (childCount > 0) {
+                    MetaBadge(
+                        text = "$childCount sub",
+                        color = theme.info
                     )
-                    if (childCount > 0) {
-                        MetaBadge(
-                            text = "$childCount sub",
-                            color = theme.info
+                }
+
+                session.summary?.let { summary ->
+                    if (summary.additions > 0) {
+                        Text(
+                            text = "+${summary.additions}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.success
                         )
                     }
-                    session.summary?.let { summary ->
-                        if (summary.additions > 0) {
-                            Text(
-                                text = "+${summary.additions}",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = theme.success
-                            )
-                        }
-                        if (summary.deletions > 0) {
-                            Text(
-                                text = "-${summary.deletions}",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = theme.error
-                            )
-                        }
-                    }
-                    if (session.shareUrl != null) {
-                        MetaBadge(text = stringResource(R.string.sessions_shared_badge), color = theme.info)
+                    if (summary.deletions > 0) {
+                        Text(
+                            text = "-${summary.deletions}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.error
+                        )
                     }
                 }
-            }
 
-            // Project chip on far right
-            if (showProjectChip && projectId != null && !projectName.isNullOrEmpty()) {
-                ProjectChip(
-                    projectId = projectId,
-                    projectName = projectName,
-                    onClick = { onProjectClick(projectId) }
+                if (session.shareUrl != null) {
+                    MetaBadge(text = stringResource(R.string.sessions_shared_badge), color = theme.info)
+                }
+
+                // Project chip on far right
+                if (showProjectChip && projectId != null && !projectName.isNullOrEmpty()) {
+                    ProjectChip(
+                        projectId = projectId,
+                        projectName = projectName,
+                        onClick = { onProjectClick(projectId) }
+                    )
+                }
+            }
+            }
+        }
+
+        // Long-press context menu (terminal-style ASCII) - anchored to top-end of card
+        TuiTerminalMenu(
+            expanded = showContextMenu,
+            onDismissRequest = { showContextMenu = false },
+            modifier = Modifier.align(Alignment.TopEnd),
+            offset = DpOffset((-4).dp, 4.dp)
+        ) {
+            TuiTerminalMenuItem(
+                text = "Rename",
+                symbol = "✎",
+                onClick = { showContextMenu = false; onRename() }
+            )
+            TuiTerminalMenuItem(
+                text = "Changes",
+                symbol = "±",
+                onClick = { showContextMenu = false; onViewChanges() }
+            )
+            TuiTerminalMenuItem(
+                text = "Summarize",
+                symbol = "Σ",
+                onClick = { showContextMenu = false; onSummarize() }
+            )
+            if (isShared) {
+                TuiTerminalMenuItem(
+                    text = "Unshare",
+                    symbol = "◈",
+                    onClick = { showContextMenu = false; onShare() }
+                )
+            } else {
+                TuiTerminalMenuItem(
+                    text = "Share",
+                    symbol = "◈",
+                    onClick = { showContextMenu = false; onShare() }
                 )
             }
-
-            // More icon hint
-            Icon(
-                Icons.Default.MoreVert,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(16.dp)
-                    .clickable(role = Role.Button) { showContextMenu = true },
-                tint = theme.textMuted.copy(alpha = 0.5f)
+            TuiTerminalMenuDivider()
+            TuiTerminalMenuItem(
+                text = "Delete",
+                symbol = "×",
+                onClick = { showContextMenu = false; onDelete() },
+                isDestructive = true
             )
         }
-    }
-
-    // Long-press context menu
-    TuiDropdownMenu(
-        expanded = showContextMenu,
-        onDismissRequest = { showContextMenu = false }
-    ) {
-        TuiDropdownMenuItem(
-            text = stringResource(R.string.sessions_rename),
-            onClick = { showContextMenu = false; onRename() },
-            leadingIcon = Icons.Default.Edit
-        )
-        TuiDropdownMenuItem(
-            text = stringResource(R.string.sessions_view_changes),
-            onClick = { showContextMenu = false; onViewChanges() },
-            leadingIcon = Icons.Default.Description
-        )
-        TuiDropdownMenuItem(
-            text = stringResource(R.string.sessions_summarize),
-            onClick = { showContextMenu = false; onSummarize() },
-            leadingIcon = Icons.Default.Summarize
-        )
-        if (isShared) {
-            TuiDropdownMenuItem(
-                text = stringResource(R.string.sessions_unshare),
-                onClick = { showContextMenu = false; onShare() },
-                leadingIcon = Icons.Default.LinkOff
-            )
-        } else {
-            TuiDropdownMenuItem(
-                text = stringResource(R.string.sessions_share),
-                onClick = { showContextMenu = false; onShare() },
-                leadingIcon = Icons.Default.Share
-            )
-        }
-        HorizontalDivider(color = theme.borderSubtle)
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.sessions_delete), color = theme.error, fontFamily = FontFamily.Monospace) },
-            onClick = { showContextMenu = false; onDelete() },
-            leadingIcon = {
-                Icon(Icons.Default.Delete, contentDescription = null, tint = theme.error)
-            }
-        )
     }
 }
 
@@ -650,7 +699,6 @@ private fun ProjectChip(
     val textColor = ProjectColors.textColorForProject(projectId)
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(BadgeRadius))
             .background(bgColor)
             .clickable(role = Role.Button, onClick = onClick)
             .widthIn(max = Sizing.chipMaxWidth)
@@ -673,9 +721,8 @@ private fun ProjectChip(
 private fun MetaBadge(text: String, color: androidx.compose.ui.graphics.Color) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(BadgeRadius))
             .background(color.copy(alpha = 0.12f))
-            .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(BadgeRadius))
+            .border(1.dp, color.copy(alpha = 0.3f))
             .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
         Text(
@@ -697,12 +744,11 @@ private fun BusyDot(color: androidx.compose.ui.graphics.Color) {
         animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
         label = "alpha"
     )
-    Box(
-        modifier = Modifier
-            .size(10.dp)
-            .clip(RoundedCornerShape(3.dp))
-            .alpha(alpha)
-            .background(color)
+    Text(
+        text = "▶",
+        fontFamily = FontFamily.Monospace,
+        style = MaterialTheme.typography.bodySmall,
+        color = color.copy(alpha = alpha)
     )
 }
 
@@ -715,7 +761,12 @@ private fun SessionStatusIndicator(status: SessionStatus?) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TuiLoadingIndicator()
+                Text(
+                    text = "▶",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.accent
+                )
                 Text(
                     text = stringResource(R.string.session_working),
                     style = MaterialTheme.typography.labelSmall,
@@ -729,11 +780,11 @@ private fun SessionStatusIndicator(status: SessionStatus?) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Default.Refresh,
-                    contentDescription = stringResource(R.string.retry),
-                    modifier = Modifier.size(Sizing.iconXs),
-                    tint = theme.error
+                Text(
+                    text = "↻",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.error
                 )
                 Text(
                     text = stringResource(R.string.session_retry_format, status.attempt),
@@ -787,6 +838,387 @@ private fun EmptySessionsHint(text: String) {
     }
 }
 
+// Animated PocketCode Logo Header - ultra terminal style with typewriter effect
+@Composable
+private fun PocketCodeLogoHeader(
+    modifier: Modifier = Modifier
+) {
+    val theme = LocalOpenCodeTheme.current
+    val infiniteTransition = rememberInfiniteTransition(label = "logo_pulse")
+
+    // Funny rotating terminal commands
+    val funnyCommands = remember {
+        listOf(
+            "make coffee",
+            "sudo apt-get life",
+            "git commit -m \"oops\"",
+            "rm -rf /problems",
+            "./fix-bugs.sh",
+            "npm install happiness",
+            "docker run sanity",
+            "chmod 777 world",
+            "echo \"hello world\"",
+            "ping 127.0.0.1",
+            "while(alive) { code() }",
+            "import antigravity",
+            "System.exit(0)",
+            ":(){ :|:& };:",
+            "tree /dev/brain",
+            "cat /etc/motd",
+            "man happiness",
+            "alias sleep=code",
+            "kill -9 procrastination",
+            "service life restart"
+        )
+    }
+
+    // Animation states
+    var typedLogo by remember { mutableStateOf("") }
+    var displayedCommand by remember { mutableStateOf("") }
+    var currentCommandIndex by remember { mutableIntStateOf(0) }
+    var cursorVisible by remember { mutableStateOf(true) }
+    var animationPhase by remember { mutableIntStateOf(0) } // 0=typing logo, 1=blink logo, 2=typing cmd, 3=show cmd, 4=clearing
+
+    // Main animation loop - single controlled coroutine
+    LaunchedEffect(Unit) {
+        val logoText = "PocketCode"
+
+        // Phase 0: Type logo
+        animationPhase = 0
+        logoText.forEachIndexed { i, _ ->
+            typedLogo = logoText.substring(0, i + 1)
+            delay(60)
+        }
+
+        // Phase 1: Blink cursor after logo
+        animationPhase = 1
+        repeat(3) {
+            cursorVisible = !cursorVisible
+            delay(400)
+        }
+        cursorVisible = true
+        delay(500)
+
+        // Loop through commands forever
+        while (true) {
+            val command = funnyCommands[currentCommandIndex]
+
+            // Phase 2: Type command
+            animationPhase = 2
+            command.forEachIndexed { i, _ ->
+                displayedCommand = command.substring(0, i + 1)
+                delay(45)
+            }
+
+            // Phase 3: Show command with blinking cursor
+            animationPhase = 3
+            repeat(5) {
+                cursorVisible = !cursorVisible
+                delay(350)
+            }
+            cursorVisible = true
+            delay(600)
+
+            // Next command - keep text visible while blinking then clear
+            repeat(2) {
+                cursorVisible = !cursorVisible
+                delay(250)
+            }
+
+            // Clear and move to next - maintain space to prevent resizing
+            currentCommandIndex = (currentCommandIndex + 1) % funnyCommands.size
+            displayedCommand = " "  // Use space instead of empty to maintain layout
+            delay(150)
+        }
+    }
+
+    // Animated values for ambient glow moving around
+    val glowPosition by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "glow_pos"
+    )
+
+    val accentGlow by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.9f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "accent"
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Column {
+            // Top connection line
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(24.dp)
+                        .height(2.dp)
+                        .background(theme.accent.copy(alpha = accentGlow))
+                )
+                Text(
+                    text = "┬",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.accent.copy(alpha = accentGlow)
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(1.dp)
+                        .background(theme.border.copy(alpha = 0.3f))
+                )
+            }
+
+            // Terminal-style header container
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(
+                        width = Spacing.hairline,
+                        color = theme.border.copy(alpha = 0.6f)
+                    )
+                    .background(
+                        color = theme.backgroundElement.copy(alpha = 0.12f)
+                    )
+                    .padding(vertical = Spacing.xs),
+                contentAlignment = Alignment.Center
+            ) {
+                // Subtle terminal scanline effect
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    theme.accent.copy(alpha = 0.03f),
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                    androidx.compose.ui.graphics.Color.Transparent,
+                                    theme.accent.copy(alpha = 0.02f)
+                                )
+                            )
+                        )
+                )
+
+                // Terminal-style content
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+                ) {
+                    // Compact terminal header line
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Compact terminal window controls
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(theme.error.copy(alpha = 0.9f))
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(theme.warning.copy(alpha = 0.9f))
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(theme.success.copy(alpha = 0.9f))
+                            )
+                        }
+                        
+                        // Compact terminal title
+                        Text(
+                            text = "p4oc@terminal",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = MaterialTheme.typography.labelSmall.fontSize * 0.85
+                            ),
+                            color = theme.text.copy(alpha = 0.6f)
+                        )
+                        
+                        Spacer(Modifier.width(24.dp)) // Balance the controls
+                    }
+                    
+                    // Main logo section - compact terminal style
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.md),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Compact terminal prompt
+                        Text(
+                            text = "$",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = theme.accent.copy(alpha = accentGlow)
+                        )
+                        
+                        Spacer(Modifier.width(Spacing.xs))
+                        
+                        // Compact logo brackets
+                        Text(
+                            text = "[",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.ExtraBold
+                            ),
+                            color = theme.accent.copy(alpha = accentGlow)
+                        )
+                        
+                        // Compact core symbol
+                        Text(
+                            text = "◈",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = theme.accent
+                        )
+                        
+                        Text(
+                            text = "]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.ExtraBold
+                            ),
+                            color = theme.accent.copy(alpha = accentGlow)
+                        )
+                        
+                        // Compact terminal pipe separator
+                        Text(
+                            text = " ",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = theme.border.copy(alpha = 0.6f)
+                        )
+                        
+                        // Compact typewriter effect with reduced spacing
+                        Text(
+                            text = typedLogo,
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.5.sp
+                            ),
+                            color = theme.text
+                        )
+                        
+                        // Compact blinking cursor - always takes space
+                        Text(
+                            text = "▊",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = if (cursorVisible && animationPhase <= 1) {
+                                theme.accent.copy(alpha = 0.9f)
+                            } else {
+                                Color.Transparent // Takes space but invisible
+                            }
+                        )
+                    }
+
+                    // Row 2: Terminal prompt + animated command (estilo terminal pegado a la izquierda)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Start
+                    ) {
+                        // Prompt
+                        Text(
+                            text = "~$",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = theme.textMuted.copy(alpha = 0.5f)
+                        )
+
+                        // Spacer para separar prompt del comando
+                        Box(modifier = Modifier.width(6.dp))
+
+                        // Command text
+                        Text(
+                            text = displayedCommand,
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = theme.success.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+
+                        // Blinking cursor after command - always takes space
+                        Text(
+                            text = "█",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (cursorVisible && animationPhase >= 2 && displayedCommand.isNotEmpty()) {
+                                theme.accent.copy(alpha = 0.6f)
+                            } else {
+                                Color.Transparent // Takes space but invisible
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Master unified connector system - topbar integration
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "├",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.accent.copy(alpha = 0.7f) // Matches topbar connector
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(1.dp)
+                        .background(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    theme.border.copy(alpha = 0.3f),
+                                    theme.accent.copy(alpha = 0.4f),
+                                    theme.border.copy(alpha = 0.3f)
+                                )
+                            )
+                        )
+                )
+                Text(
+                    text = "┤",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.border.copy(alpha = 0.5f)
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun QuickActionCard(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -795,42 +1227,47 @@ private fun QuickActionCard(
     modifier: Modifier = Modifier
 ) {
     val theme = LocalOpenCodeTheme.current
-    Card(
+    val isGlobal = icon == Icons.Default.PlayArrow
+    val symbol = if (isGlobal) "▶" else "►"
+    val color = if (isGlobal) theme.success else theme.accent
+
+    Row(
         modifier = modifier
-            .clip(RoundedCornerShape(CardRadius))
-            .clickable(role = Role.Button, onClick = onClick),
-        shape = RoundedCornerShape(CardRadius),
-        colors = CardDefaults.cardColors(containerColor = theme.backgroundElement),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(theme.accent.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = theme.accent,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
+        // Animated/cycling bracket effect
+        Text(
+            text = if (isGlobal) "┌" else "╭",
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall,
+            color = color.copy(alpha = 0.6f)
+        )
+
+        Column {
             Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
+                text = "$symbol $label",
                 fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium,
-                color = theme.text
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = color
+            )
+            Text(
+                text = if (isGlobal) "~/global" else "~/custom",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = theme.textMuted.copy(alpha = 0.7f)
             )
         }
+
+        Text(
+            text = if (isGlobal) "┘" else "╯",
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall,
+            color = color.copy(alpha = 0.6f)
+        )
     }
 }
 
@@ -980,6 +1417,254 @@ private fun NewSessionDialog(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+@Composable
+private fun SessionsTopBar(
+    projectName: String?,
+    onNavigateBack: (() -> Unit)?,
+    onProjects: () -> Unit,
+    onRefresh: () -> Unit,
+    onSettings: () -> Unit
+) {
+    val theme = LocalOpenCodeTheme.current
+    val infiniteTransition = rememberInfiniteTransition(label = "topbar_pulse")
+
+    // Ambient glow animation
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(3000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glow"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(theme.background)
+    ) {
+        Spacer(Modifier.windowInsetsPadding(WindowInsets.statusBars))
+
+        // Terminal-style unified header
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            // Top connector line
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(16.dp)
+                        .height(1.dp)
+                        .background(theme.border.copy(alpha = 0.3f))
+                )
+                Text(
+                    text = "┌",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.border.copy(alpha = 0.5f)
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(1.dp)
+                        .background(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    theme.border.copy(alpha = 0.3f),
+                                    theme.accent.copy(alpha = glowAlpha),
+                                    theme.border.copy(alpha = 0.3f)
+                                )
+                            )
+                        )
+                )
+                Text(
+                    text = "┐",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.border.copy(alpha = 0.5f)
+                )
+                Box(
+                    modifier = Modifier
+                        .width(16.dp)
+                        .height(1.dp)
+                        .background(theme.border.copy(alpha = 0.3f))
+                )
+            }
+
+            // Main content box
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, theme.border.copy(alpha = 0.4f))
+                    .background(theme.backgroundElement.copy(alpha = 0.1f))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Left side: Navigation and path
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Back button or root indicator
+                    if (onNavigateBack != null) {
+                        Text(
+                            text = "⟨",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = theme.accent,
+                            modifier = Modifier.clickable(role = Role.Button) { onNavigateBack() }
+                        )
+                    } else {
+                        Text(
+                            text = "~",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = theme.accent.copy(alpha = 0.6f)
+                        )
+                    }
+
+                    // Path separator
+                    Text(
+                        text = "/",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = theme.border.copy(alpha = 0.4f)
+                    )
+
+                    // Current location
+                    val locationText = projectName ?: "sessions"
+                    val subText = if (projectName != null) "project" else "all"
+
+                    Column {
+                        Text(
+                            text = locationText,
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = theme.text
+                        )
+                        Text(
+                            text = subText,
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.textMuted.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+
+                // Right side: Action buttons in terminal style
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Projects button
+                    if (projectName.isNullOrEmpty()) {
+                        Text(
+                            text = "[P]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.textMuted,
+                            modifier = Modifier.clickable(role = Role.Button) { onProjects() }
+                        )
+                    }
+
+                    // Separator
+                    Text(
+                        text = "│",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.border.copy(alpha = 0.3f)
+                    )
+
+                    // Refresh
+                    Text(
+                        text = "[↻]",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.textMuted,
+                        modifier = Modifier.clickable(role = Role.Button) { onRefresh() }
+                    )
+
+                    // Separator
+                    Text(
+                        text = "│",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.border.copy(alpha = 0.3f)
+                    )
+
+                    // Settings with accent
+                    Text(
+                        text = "[⚙]",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.accent,
+                        modifier = Modifier.clickable(role = Role.Button) { onSettings() }
+                    )
+                }
+            }
+
+            // Bottom connector to TabBar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(16.dp)
+                        .height(1.dp)
+                        .background(theme.border.copy(alpha = 0.3f))
+                )
+                Text(
+                    text = "├",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.border.copy(alpha = 0.5f)
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(1.dp)
+                        .background(theme.border.copy(alpha = 0.3f))
+                )
+                // Center connector for tabs
+                Text(
+                    text = "┴",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.accent.copy(alpha = glowAlpha)
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(1.dp)
+                        .background(theme.border.copy(alpha = 0.3f))
+                )
+                Text(
+                    text = "┤",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.border.copy(alpha = 0.5f)
+                )
+                Box(
+                    modifier = Modifier
+                        .width(16.dp)
+                        .height(1.dp)
+                        .background(theme.border.copy(alpha = 0.3f))
+                )
+            }
+        }
     }
 }
 

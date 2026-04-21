@@ -4,25 +4,35 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import android.content.Intent
 import android.net.Uri
 import org.koin.androidx.compose.koinViewModel
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.semantics.Role
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blazelight.p4oc.BuildConfig
@@ -50,6 +60,7 @@ fun SettingsScreen(
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     var showDisconnectDialog by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
+    var showLogsDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val theme = LocalOpenCodeTheme.current
@@ -70,6 +81,12 @@ fun SettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
         ) {
+            // Connection Section
+            SettingsSectionHeader(
+                title = "Connection",
+                icon = Icons.Default.Cloud
+            )
+            
             // Server info (non-clickable)
             SettingsItem(
                 icon = if (uiState.isLocal) Icons.Default.PhoneAndroid else Icons.Default.Cloud,
@@ -117,6 +134,14 @@ fun SettingsScreen(
                 enabled = isConnected
             )
 
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // App Settings Section
+            SettingsSectionHeader(
+                title = "App Settings",
+                icon = Icons.Default.Settings
+            )
+
             // These don't require connection
             SettingsItem(
                 icon = Icons.Default.Palette,
@@ -145,6 +170,14 @@ fun SettingsScreen(
                 testTag = "settings_connection_item"
             )
 
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // About Section
+            SettingsSectionHeader(
+                title = "About",
+                icon = Icons.Default.Info
+            )
+
             SettingsItem(
                 icon = Icons.Default.Info,
                 title = stringResource(R.string.settings_about),
@@ -152,6 +185,23 @@ fun SettingsScreen(
                 onClick = { showAboutDialog = true },
                 showChevron = true,
                 testTag = "settings_about_item"
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Diagnostics Section
+            SettingsSectionHeader(
+                title = "Diagnostics",
+                icon = Icons.Default.BugReport
+            )
+
+            SettingsItem(
+                icon = Icons.Default.Description,
+                title = "View Logs",
+                subtitle = "View and copy recent app logs",
+                onClick = { showLogsDialog = true },
+                showChevron = true,
+                testTag = "settings_logs_item"
             )
 
             Spacer(Modifier.weight(1f))
@@ -167,6 +217,12 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+
+    if (showLogsDialog) {
+        LogsDialog(
+            onDismiss = { showLogsDialog = false }
+        )
     }
 
     if (showDisconnectDialog) {
@@ -248,9 +304,11 @@ private fun SettingsItem(
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
-        color = theme.background,
-        shape = RectangleShape
+        color = theme.backgroundElement,
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = if (onClick != null && enabled) 2.dp else 0.dp
     ) {
         Row(
             modifier = Modifier
@@ -260,20 +318,32 @@ private fun SettingsItem(
                         Modifier.clickable(role = Role.Button, onClick = onClick)
                     } else Modifier
                 )
-                .padding(horizontal = Spacing.lg, vertical = Spacing.mdLg),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.lg)
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Icon(
-                icon,
-                contentDescription = title,
-                modifier = Modifier.size(Sizing.iconMd),
-                tint = iconColor
-            )
+            // Modern icon container
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(iconColor.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = title,
+                    modifier = Modifier.size(20.dp),
+                    tint = iconColor
+                )
+            }
+            
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.Medium
+                    ),
                     color = titleColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -283,25 +353,271 @@ private fun SettingsItem(
                         text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = theme.textMuted.copy(alpha = contentAlpha),
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
             }
+            
             if (showChevron) {
-                Text(
-                    text = "→",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = theme.textMuted.copy(alpha = contentAlpha)
+                Icon(
+                    Icons.Default.KeyboardArrowRight,
+                    contentDescription = "Navigate",
+                    modifier = Modifier.size(20.dp),
+                    tint = theme.textMuted.copy(alpha = contentAlpha * 0.7f)
                 )
             }
         }
     }
-    // Thin separator
-    HorizontalDivider(
-        thickness = Sizing.dividerThickness,
-        color = theme.borderSubtle
-    )
 }
 
 
+
+@Composable
+private fun SettingsSectionHeader(
+    title: String,
+    icon: ImageVector
+) {
+    val theme = LocalOpenCodeTheme.current
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = theme.accent
+        )
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge.copy(
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace
+            ),
+            color = theme.textMuted,
+            letterSpacing = 0.5.sp
+        )
+    }
+}
+
+@Composable
+private fun LogsDialog(
+    onDismiss: () -> Unit
+) {
+    val theme = LocalOpenCodeTheme.current
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var logs by remember { mutableStateOf("Loading logs...") }
+    var isLoading by remember { mutableStateOf(true) }
+    var copySuccess by remember { mutableStateOf(false) }
+    var errorSummary by remember { mutableStateOf<String?>(null) }
+
+    // Load logs when dialog opens
+    LaunchedEffect(Unit) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                // Get app package name for filtering
+                val packageName = context.packageName
+                // Read last 200 lines of logcat filtered by app tags
+                val process = ProcessBuilder(
+                    "logcat", "-d", "-t", "2000", "--pid=${android.os.Process.myPid()}"
+                )
+                    .redirectErrorStream(true)
+                    .start()
+                val logsText = try {
+                    process.inputStream.bufferedReader().use { it.readText() }
+                } finally {
+                    try { process.destroy() } catch (_: Exception) {}
+                }
+                val lines = logsText.lineSequence().toList()
+                val patterns = listOf(
+                    "FATAL EXCEPTION",
+                    "AndroidRuntime",
+                    "Application Not Responding",
+                    "ANR",
+                    "Input dispatching timed out",
+                    "IllegalArgumentException",
+                    "IllegalStateException",
+                    "IndexOutOfBoundsException",
+                    "StackOverflowError",
+                    "Key \"",
+                    "not responding",
+                    "MessageBlockUtils",
+                    "patchFlatItems",
+                    "ChatScreen",
+                    "StrictMode policy violation"
+                )
+                val errorLines = lines.filter { l -> patterns.any { p -> l.contains(p, ignoreCase = true) } }
+                if (errorLines.isNotEmpty()) {
+                    try {
+                        val dir = java.io.File(context.filesDir, "logs"); if (!dir.exists()) dir.mkdirs()
+                        val out = java.io.File(dir, "recent_errors.txt")
+                        val header = "----- ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date())} -----\n"
+                        val newContent = header + errorLines.joinToString("\n") + "\n"
+                        
+                        // Check file size and rotate if needed (max 100KB)
+                        val maxSize = 100 * 1024 // 100KB
+                        val existingContent = if (out.exists() && out.length() > maxSize) {
+                            // Read last portion to stay within limit
+                            out.readText().takeLast(maxSize / 2)
+                        } else if (out.exists()) {
+                            out.readText()
+                        } else {
+                            ""
+                        }
+                        
+                        val tmp = java.io.File(dir, "recent_errors.txt.tmp")
+                        tmp.writeText(existingContent + newContent)
+                        if (!tmp.renameTo(out)) {
+                            out.writeText(existingContent + newContent)
+                            try { tmp.delete() } catch (_: Exception) {}
+                        }
+                        errorSummary = "Found ${errorLines.size} error lines. Saved to ${out.absolutePath}"
+                    } catch (_: Exception) {
+                        errorSummary = "Found ${errorLines.size} error lines."
+                    }
+                } else {
+                    errorSummary = null
+                }
+                logs = if (logsText.isBlank()) {
+                    "No recent logs found.\n\nNote: Logs are only available in debug builds or with specific permissions."
+                } else {
+                    if (errorSummary != null) errorSummary + "\n\n" + logsText else logsText
+                }
+            } catch (e: Exception) {
+                logs = "Error reading logs: ${e.message}\n\nNote: Reading logs requires READ_LOGS permission on some Android versions."
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Description,
+                contentDescription = null,
+                tint = theme.accent
+            )
+        },
+        title = {
+            Text(
+                text = "Recent Logs",
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 200.dp, max = 400.dp)
+            ) {
+                if (isLoading) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(32.dp),
+                            color = theme.accent
+                        )
+                    }
+                } else {
+                    // Log display area
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        color = theme.backgroundElement,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(8.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            Text(
+                                text = logs,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                color = theme.textMuted,
+                                lineHeight = 14.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Copy button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (copySuccess) {
+                            Text(
+                                text = "Copied to clipboard!",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                color = theme.success
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+
+                        Button(
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(logs))
+                                copySuccess = true
+                                // Reset copy success message after 2 seconds
+                                scope.launch {
+                                    delay(2000)
+                                    copySuccess = false
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = theme.accent
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Copy All",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    text = "Close",
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        },
+        containerColor = theme.background,
+        shape = RoundedCornerShape(16.dp)
+    )
+}

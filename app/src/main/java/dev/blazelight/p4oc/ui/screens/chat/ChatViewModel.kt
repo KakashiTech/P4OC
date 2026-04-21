@@ -11,6 +11,7 @@ import dev.blazelight.p4oc.core.network.DirectoryManager
 import dev.blazelight.p4oc.core.network.safeApiCall
 import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.data.remote.dto.ExecuteCommandRequest
+import dev.blazelight.p4oc.data.remote.dto.ForkSessionRequest
 import dev.blazelight.p4oc.data.remote.dto.PartInputDto
 import dev.blazelight.p4oc.data.remote.dto.PermissionResponseRequest
 import dev.blazelight.p4oc.data.remote.dto.QuestionReplyRequest
@@ -26,12 +27,13 @@ import dev.blazelight.p4oc.ui.components.chat.AbortSummary
 import dev.blazelight.p4oc.ui.components.chat.InterruptedTool
 import dev.blazelight.p4oc.ui.components.chat.SelectedFile
 import dev.blazelight.p4oc.ui.navigation.Screen
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import java.util.concurrent.CopyOnWriteArraySet
 
 /**
  * Slim coordinator — delegates to sub-managers for message state,
@@ -51,7 +53,7 @@ class ChatViewModel constructor(
     private val sessionDirectory: String? = savedStateHandle.get<String>(Screen.Chat.ARG_DIRECTORY)
 
     // Child session IDs (subagent sessions whose parentID == this sessionId)
-    private val childSessionIds = mutableSetOf<String>()
+    private val childSessionIds = CopyOnWriteArraySet<String>()
 
     private fun isOwnedSession(eventSessionId: String): Boolean =
         eventSessionId == sessionId || eventSessionId in childSessionIds
@@ -72,6 +74,12 @@ class ChatViewModel constructor(
     /** Convenience alias — ChatScreen reads this directly. */
     val messages: StateFlow<List<MessageWithParts>> = messageStore.messages
 
+    /** Monotonic version — use as remember() key instead of messages list reference. */
+    val messagesVersion: StateFlow<Long> = messageStore.messagesVersion
+
+    /** IDs mutated in the last SSE flush — used for incremental flatItems patching. */
+    val lastChangedIds: StateFlow<Set<String>> = messageStore.lastChangedIds
+
     val connectionState: StateFlow<ConnectionState> = connectionManager.connectionState
 
     private val _branchName = MutableStateFlow<String?>(null)
@@ -86,21 +94,17 @@ class ChatViewModel constructor(
      * - BUSY: LLM is processing, streaming, or tools are running
      * - AWAITING_INPUT: LLM finished but user hasn't viewed (tab not active)
      * - IDLE: User has viewed the response
+     *
+     * NOTE: does NOT combine with `messages` flow — scanning all parts on every message
+     * update is O(N×M) and fires on every streaming token. isBusy from SessionStatusChanged
+     * is sufficient; the server already tracks running tools and streaming state.
      */
     val sessionConnectionState: StateFlow<TabConnectionState> = combine(
         _uiState.map { it.isBusy }.distinctUntilChanged(),
-        _hasUnreadResponse,
-        messages
-    ) { isBusy, hasUnread, msgs ->
-        val hasRunningTools = msgs.any { msg ->
-            msg.parts.any { part -> part is Part.Tool && part.state is ToolState.Running }
-        }
-        val hasStreamingText = msgs.any { msg ->
-            msg.parts.any { part -> part is Part.Text && part.isStreaming }
-        }
-
+        _hasUnreadResponse
+    ) { isBusy, hasUnread ->
         when {
-            isBusy || hasRunningTools || hasStreamingText -> TabConnectionState.BUSY
+            isBusy -> TabConnectionState.BUSY
             hasUnread -> TabConnectionState.AWAITING_INPUT
             else -> TabConnectionState.IDLE
         }
@@ -131,10 +135,17 @@ class ChatViewModel constructor(
     }
 
     init {
-        loadSessionAndMessages()
+        loadSession()
+        loadMessages()
         modelAgentManager.loadAgents()
         modelAgentManager.loadModels()
         observeEvents()
+        loadVcsInfo()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        dialogManager.cleanup()
     }
 
     // --- Public API (delegating) ---
@@ -147,6 +158,14 @@ class ChatViewModel constructor(
         _uiState.update { it.copy(inputText = text) }
     }
 
+    fun injectSkill(skillName: String) {
+        _uiState.update {
+            val current = it.inputText
+            val prefix = if (current.isBlank()) "" else "$current "
+            it.copy(inputText = "${prefix}@$skillName ")
+        }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(error = null) }
     }
@@ -156,51 +175,60 @@ class ChatViewModel constructor(
     private fun getDirectory(): String? =
         sessionDirectory ?: _uiState.value.session?.directory ?: directoryManager.getDirectory()
 
-    private fun loadSessionAndMessages() {
+    private fun loadSession() {
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: run {
+                _uiState.update { it.copy(error = "Not connected") }
+                return@launch
+            }
+            val result = safeApiCall { api.getSession(sessionId, sessionDirectory ?: directoryManager.getDirectory()) }
+            when (result) {
+                is ApiResult.Success -> {
+                    val session = SessionMapper.mapToDomain(result.data)
+                    _uiState.update { it.copy(session = session) }
+                    if (sessionDirectory == null && session.directory.isNotBlank()) {
+                        directoryManager.setDirectory(session.directory)
+                    }
+                    // Reload VCS now that we have the canonical session directory
+                    loadVcsInfo()
+                }
+                is ApiResult.Error -> {
+                    _uiState.update { it.copy(error = "Failed to load session") }
+                }
+            }
+        }
+    }
+
+    private fun loadMessages() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
+            AppLog.d(TAG, "loadMessages() called for session: $sessionId")
+
             val api = connectionManager.getApi() ?: run {
                 _uiState.update { it.copy(isLoading = false, error = "Not connected") }
                 return@launch
             }
-            val dir = sessionDirectory ?: directoryManager.getDirectory()
-            coroutineScope {
-                // Fire both requests in parallel
-                val sessionDeferred = async { safeApiCall { api.getSession(sessionId, dir) } }
-                val messagesDeferred = async { safeApiCall { api.getMessages(sessionId, limit = null, directory = dir) } }
 
-                val sessionResult = sessionDeferred.await()
-                val messagesResult = messagesDeferred.await()
+            val directory = getDirectory()
+            val result = safeApiCall { api.getMessages(sessionId, limit = null, directory = directory) }
 
-                when (sessionResult) {
-                    is ApiResult.Success -> {
-                        val session = SessionMapper.mapToDomain(sessionResult.data)
-                        _uiState.update { it.copy(session = session) }
-                        if (sessionDirectory == null && session.directory.isNotBlank()) {
-                            directoryManager.setDirectory(session.directory)
-                        }
+            when (result) {
+                is ApiResult.Success -> {
+                    AppLog.d(TAG, "Loaded ${result.data.size} messages")
+                    // Map DTOs to domain models off the main thread to avoid jank on first paint
+                    val mapped = withContext(Dispatchers.Default) {
+                        result.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
                     }
-                    is ApiResult.Error -> {
-                        _uiState.update { it.copy(error = "Failed to load session") }
+                    messageStore.loadInitial(mapped)
+                    _uiState.update { it.copy(isLoading = false) }
+                }
+                is ApiResult.Error -> {
+                    AppLog.e(TAG, "Failed to load messages: ${result.message}", result.throwable)
+                    _uiState.update {
+                        it.copy(isLoading = false, error = "Failed to load messages")
                     }
                 }
-
-                when (messagesResult) {
-                    is ApiResult.Success -> {
-                        AppLog.d(TAG, "Loaded ${messagesResult.data.size} messages")
-                        val mapped = messagesResult.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
-                        messageStore.loadInitial(mapped)
-                    }
-                    is ApiResult.Error -> {
-                        AppLog.e(TAG, "Failed to load messages: ${messagesResult.message}")
-                        _uiState.update { it.copy(error = "Failed to load messages") }
-                    }
-                }
-
-                _uiState.update { it.copy(isLoading = false) }
             }
-            // VCS after session dir is known
-            loadVcsInfo()
         }
     }
 
@@ -244,7 +272,9 @@ class ChatViewModel constructor(
             }
             is OpenCodeEvent.MessagePartUpdated -> {
                 if (event.part.sessionID == sessionId) {
-                    messageStore.upsertPart(event.part, event.delta)
+                    // Route through buffer — upsertPart was bypassing coalescing entirely,
+                    // causing one full recomposition per SSE token (30-50/sec during streaming).
+                    messageStore.upsertPartBuffered(event.part, event.delta)
                 }
             }
             is OpenCodeEvent.MessageRemoved -> {
@@ -395,16 +425,6 @@ class ChatViewModel constructor(
         }
         filePickerManager.clearAttachedFiles()
         AppLog.d(TAG, "queueMessage: Queued message with ${text.length} chars, ${attachedFiles.size} files")
-    }
-
-    fun cancelQueuedMessage() {
-        val queued = _uiState.value.queuedMessage ?: return
-        _uiState.update { it.copy(
-            queuedMessage = null,
-            inputText = queued.text
-        ) }
-        filePickerManager.restoreAttachedFiles(queued.attachedFiles)
-        AppLog.d(TAG, "cancelQueuedMessage: restored queued message to input")
     }
 
     private fun sendQueuedMessageIfAny() {
@@ -566,14 +586,6 @@ class ChatViewModel constructor(
         }
     }
 
-    private suspend fun refreshSession() {
-        val api = connectionManager.getApi() ?: return
-        val result = safeApiCall { api.getSession(sessionId, getDirectory()) }
-        if (result is ApiResult.Success) {
-            _uiState.update { it.copy(session = SessionMapper.mapToDomain(result.data)) }
-        }
-    }
-
     // --- Revert / Unrevert ---
 
     fun revertMessage(messageId: String) {
@@ -583,7 +595,7 @@ class ChatViewModel constructor(
             val result = safeApiCall { api.revertSession(sessionId, request, getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
-                    refreshSession()
+                    loadSession()  // Refresh to get updated revert state
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(error = "Failed to revert: ${result.message}") }
@@ -598,7 +610,7 @@ class ChatViewModel constructor(
             val result = safeApiCall { api.unrevertSession(sessionId, getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
-                    refreshSession()
+                    loadSession()  // Refresh to clear revert state
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(error = "Failed to unrevert: ${result.message}") }
@@ -607,7 +619,68 @@ class ChatViewModel constructor(
         }
     }
 
+    // --- Fork Session ---
+
+    fun forkSession(
+        messageId: String,
+        onForkCreated: (String) -> Unit,
+        onError: ((String) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            val api = connectionManager.getApi() ?: run {
+                val errorMsg = "Not connected"
+                _uiState.update { it.copy(isLoading = false, error = errorMsg) }
+                onError?.invoke(errorMsg)
+                return@launch
+            }
+            val request = ForkSessionRequest(messageID = messageId)
+            val result = safeApiCall { api.forkSession(sessionId, request, getDirectory()) }
+            when (result) {
+                is ApiResult.Success -> {
+                    val forkSessionId = result.data.id
+                    AppLog.d(TAG, "forkSession: Created fork with ID $forkSessionId from message $messageId")
+                    _uiState.update { it.copy(isLoading = false) }
+                    onForkCreated(forkSessionId)
+                }
+                is ApiResult.Error -> {
+                    val errorMsg = "Failed to fork session: ${result.message}"
+                    AppLog.e(TAG, "forkSession failed: ${result.message}", result.throwable)
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = errorMsg
+                        )
+                    }
+                    onError?.invoke(errorMsg)
+                }
+            }
+        }
+    }
+
     // --- Abort ---
+
+    /**
+     * Load next page of older messages for pagination.
+     * Returns true if more messages available.
+     */
+    fun loadOlderMessages(): Boolean {
+        return messageStore.loadMore(25)
+    }
+    
+    /**
+     * Check if there are more messages to load.
+     */
+    fun hasMoreMessages(): Boolean {
+        return messageStore.hasMoreMessages()
+    }
+    
+    /**
+     * Get total message count (including not yet visible).
+     */
+    fun getTotalMessageCount(): Int {
+        return messageStore.getTotalMessageCount()
+    }
 
     fun abortSession() {
         viewModelScope.launch {

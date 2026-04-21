@@ -149,6 +149,9 @@ fun AgentsConfigScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
+        val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
+        DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
+        val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
         if (state.isLoading) {
             TuiLoadingScreen(
                 modifier = Modifier.padding(padding)
@@ -186,7 +189,8 @@ fun AgentsConfigScreen(
                     .fillMaxSize()
                     .padding(padding),
                 contentPadding = PaddingValues(Spacing.md),
-                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                flingBehavior = smoothFling
             ) {
                 item {
                     val theme = LocalOpenCodeTheme.current
@@ -211,7 +215,7 @@ fun AgentsConfigScreen(
                         )
                     }
                     
-                    items(builtInAgents, key = { it.name }) { agent ->
+                    items(builtInAgents, key = { it.name }, contentType = { "agent" }) { agent ->
                         AgentCard(
                             agent = agent,
                             onToggle = { viewModel.toggleAgent(agent.name) },
@@ -231,7 +235,7 @@ fun AgentsConfigScreen(
                         )
                     }
                     
-                    items(customAgents, key = { it.name }) { agent ->
+                    items(customAgents, key = { it.name }, contentType = { "agent" }) { agent ->
                         AgentCard(
                             agent = agent,
                             onToggle = { viewModel.toggleAgent(agent.name) },

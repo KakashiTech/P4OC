@@ -16,6 +16,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -150,6 +151,12 @@ class MdnsDiscoveryManager(private val context: Context) {
         }
     }
 
+    // Native service cache (O(1) upsert/remove, no GC pressure)
+    private val nativeCache: Long by lazy {
+        NativeMdnsSupport.ensureLoaded()
+        NativeMdnsSupport.createCache()
+    }
+
     private val _discoveredServers = MutableStateFlow<List<DiscoveredServer>>(emptyList())
     val discoveredServers: StateFlow<List<DiscoveredServer>> = _discoveredServers.asStateFlow()
 
@@ -190,6 +197,7 @@ class MdnsDiscoveryManager(private val context: Context) {
         }
 
         // Clear previous results
+        NativeMdnsSupport.clearCache(nativeCache)
         _discoveredServers.value = emptyList()
         _discoveryState.value = DiscoveryState.SCANNING
 
@@ -210,6 +218,7 @@ class MdnsDiscoveryManager(private val context: Context) {
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
                 val name = serviceInfo.serviceName
                 AppLog.d(TAG, "Service lost: $name")
+                NativeMdnsSupport.remove(nativeCache, name)
                 _discoveredServers.update { servers ->
                     servers.filter { it.serviceName != name }
                 }
@@ -329,15 +338,12 @@ class MdnsDiscoveryManager(private val context: Context) {
 
                     AppLog.d(TAG, "Resolved: ${server.serviceName} → $url")
 
-                    _discoveredServers.update { servers ->
-                        // Replace if same service name already present, otherwise add
-                        val existing = servers.indexOfFirst { it.serviceName == server.serviceName }
-                        if (existing >= 0) {
-                            servers.toMutableList().apply { this[existing] = server }
-                        } else {
-                            servers + server
-                        }
-                    }
+                    // Upsert into native cache, then snapshot to StateFlow
+                    NativeMdnsSupport.upsert(nativeCache,
+                        server.serviceName, server.host, server.port, server.url)
+                    _discoveredServers.value =
+                        NativeMdnsSupport.getAll(nativeCache)
+                            .mapNotNull { NativeMdnsSupport.parseService(it) }
 
                     isResolving = false
                     processResolveQueue()
@@ -364,6 +370,7 @@ class MdnsDiscoveryManager(private val context: Context) {
         sweepActive = true
 
         sweepJob = scope.launch {
+            kotlinx.coroutines.delay(800)
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val targets = mutableSetOf<String>()
 
@@ -415,9 +422,9 @@ class MdnsDiscoveryManager(private val context: Context) {
                 return@launch
             }
 
-            // Cap total hosts to avoid heavy scans
-            val capped = targets.take(512)
-            val semaphore = Semaphore(32)
+            val cap = if (seeds.isNotEmpty()) 96 else 256
+            val capped = targets.take(cap)
+            val semaphore = Semaphore(if (seeds.isNotEmpty()) 16 else 24)
 
             AppLog.d(TAG, "Extended sweep: probing ${capped.size} hosts on ports=${PROBE_PORTS.joinToString()}")
 
@@ -461,20 +468,10 @@ class MdnsDiscoveryManager(private val context: Context) {
     }
 
     private fun addIpv4CidrTargets(addr: Inet4Address, prefix: Int, out: MutableSet<String>, maxHosts: Int = 512) {
-        val base = ipv4ToInt(addr) and subnetMask(prefix)
-        val low = base + 1
-        val high = (base or invMask(prefix)) - 1
-
-        val span = (high - low + 1).coerceAtLeast(1)
-        val step = (span / maxHosts).coerceAtLeast(1)
-
-        var added = 0
-        var ipInt = low
-        while (ipInt <= high && added < maxHosts) {
-            out.add(intToIpv4(ipInt))
-            ipInt += step
-            added += 1
-        }
+        // Delegate to native for fast, zero-allocation subnet generation
+        val targets = NativeMdnsSupport.generateCidrTargets(
+            addr.hostAddress ?: return, prefix, maxHosts)
+        out.addAll(targets)
     }
 
     private suspend fun probeIp(ip: String) {
@@ -499,54 +496,34 @@ class MdnsDiscoveryManager(private val context: Context) {
                 val code = resp.code
                 val body = resp.body?.string() ?: ""
                 val headers = resp.headers
-                
-                
-                // Enhanced detection: multiple strategies
+
                 val is200Healthy = code == 200 && body.contains("healthy", ignoreCase = true)
                 val is401Json = code == 401 && (body.startsWith("{") || body.startsWith("["))
-                // Accept 401 with 'Unauthorized' text (common OpenCode response)
                 val is401Unauthorized = code == 401 && body.trim().lowercase() == "unauthorized"
-                // Also accept 401/403 if headers suggest code-server or similar
                 val serverHeader = headers["Server"]?.lowercase() ?: ""
                 val poweredBy = headers["X-Powered-By"]?.lowercase() ?: ""
-                val hasCodeServerHeaders = serverHeader.contains("code-server") || 
+                val hasCodeServerHeaders = serverHeader.contains("code-server") ||
                                           serverHeader.contains("opencode") ||
                                           poweredBy.contains("code-server") ||
                                           poweredBy.contains("opencode")
                 val is401Auth = (code == 401 || code == 403) && hasCodeServerHeaders
-                // Also check 404 with relevant headers (some servers return 404 on /global/health)
                 val is404CodeServer = code == 404 && hasCodeServerHeaders
-                
+
                 if (is200Healthy || is401Json || is401Unauthorized || is401Auth || is404CodeServer) {
-                    // Reverse DNS lookup for hostname validation
                     val hostname = reverseResolveHostname(ip)
-                    val serviceName = if (hostname != null && hostname != ip) {
-                        "opencode-$hostname"
-                    } else {
-                        "opencode-$ip"
-                    }
+                    val serviceName = if (hostname != null && hostname != ip) "opencode-$hostname" else "opencode-$ip"
                     val finalUrl = "$scheme://$ip:$port"
-                    val server = DiscoveredServer(
-                        serviceName = serviceName,
-                        host = ip,
-                        port = port,
-                        url = finalUrl
-                    )
+                    val server = DiscoveredServer(serviceName, ip, port, finalUrl)
                     AppLog.d(TAG, "Sweep found: $finalUrl (HTTP $code) hostname=$hostname")
-                    _discoveredServers.update { servers ->
-                        val existing = servers.indexOfFirst { it.serviceName == serviceName }
-                        if (existing >= 0) {
-                            servers.toMutableList().apply { this[existing] = server }
-                        } else {
-                            servers + server
-                        }
-                    }
+                    // Upsert to native cache, push snapshot to StateFlow
+                    NativeMdnsSupport.upsert(nativeCache, serviceName, ip, port, finalUrl)
+                    _discoveredServers.value =
+                        NativeMdnsSupport.getAll(nativeCache)
+                            .mapNotNull { NativeMdnsSupport.parseService(it) }
                     return@withContext true
                 }
             }
-        }.onFailure {
-            // connection failed — normal, host not listening
-        }
+        }.onFailure { }
         false
     }
 
@@ -570,38 +547,22 @@ class MdnsDiscoveryManager(private val context: Context) {
         }.getOrDefault(false)
     }
 
-    // IPv4 helpers
-    private fun isPrivateIpv4(addr: Inet4Address): Boolean {
-        val bytes = addr.address
-        // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 (CGNAT)
-        return (bytes[0] == 10.toByte()) ||
-               (bytes[0] == 172.toByte() && (bytes[1].toInt() and 0xF0) == 16) ||
-               (bytes[0] == 192.toByte() && bytes[1] == 168.toByte()) ||
-               (bytes[0] == 100.toByte() && (bytes[1].toInt() and 0xC0) == 64)
-    }
+    // IPv4 helpers — delegate to native for performance
+    private fun isPrivateIpv4(addr: Inet4Address): Boolean =
+        NativeMdnsSupport.isPrivateIpv4(addr.hostAddress ?: return false)
 
-    private fun isCgnatIp(addr: Inet4Address): Boolean {
-        val bytes = addr.address
-        // 100.64.0.0/10 (CGNAT used by Tailscale)
-        return bytes[0] == 100.toByte() && (bytes[1].toInt() and 0xC0) == 64
-    }
+    private fun isCgnatIp(addr: Inet4Address): Boolean =
+        NativeMdnsSupport.isCgnatIp(addr.hostAddress ?: return false)
 
-    private fun ipv4ToInt(addr: Inet4Address): Int {
-        val b = addr.address
-        return ((b[0].toInt() and 0xFF) shl 24) or
-               ((b[1].toInt() and 0xFF) shl 16) or
-               ((b[2].toInt() and 0xFF) shl 8) or
-               (b[3].toInt() and 0xFF)
+    /**
+     * Release all resources: stops active discovery, cancels the sweep scope,
+     * and destroys the native service cache.
+     * Call from Application.onTerminate() (debug) or DI container teardown.
+     */
+    fun cleanup() {
+        stopDiscovery()
+        scope.cancel()
+        NativeMdnsSupport.destroyCache(nativeCache)
+        AppLog.d(TAG, "MdnsDiscoveryManager cleaned up")
     }
-
-    private fun intToIpv4(v: Int): String {
-        val b0 = (v ushr 24) and 0xFF
-        val b1 = (v ushr 16) and 0xFF
-        val b2 = (v ushr 8) and 0xFF
-        val b3 = v and 0xFF
-        return "$b0.$b1.$b2.$b3"
-    }
-
-    private fun subnetMask(prefix: Int): Int = if (prefix == 0) 0 else -1 shl (32 - prefix)
-    private fun invMask(prefix: Int): Int = subnetMask(prefix).inv()
 }

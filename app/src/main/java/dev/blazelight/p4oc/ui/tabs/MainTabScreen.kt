@@ -1,21 +1,46 @@
 @file:Suppress("DEPRECATION") // LocalLifecycleOwner – platform version until lifecycle-runtime-compose upgrade
 package dev.blazelight.p4oc.ui.tabs
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
+import dev.blazelight.p4oc.ui.theme.Spacing
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.blazelight.p4oc.core.log.AppLog
@@ -23,6 +48,7 @@ import dev.blazelight.p4oc.core.network.ApiResult
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.network.ConnectionState
 import dev.blazelight.p4oc.core.network.safeApiCall
+import dev.blazelight.p4oc.core.performance.rememberOptimizedPulse
 import dev.blazelight.p4oc.data.remote.dto.CreatePtyRequest
 import dev.blazelight.p4oc.domain.model.SessionConnectionState
 import dev.blazelight.p4oc.core.datastore.ConnectionSettings
@@ -33,6 +59,338 @@ import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 private const val TAG = "MainTabScreen"
+
+/**
+ * Unified top bar combining tabs, path indicator, and controls in a compact terminal-style header.
+ */
+@Composable
+private fun UnifiedTopBar(
+    tabs: List<TabInstance>,
+    activeTabId: String?,
+    tabTitles: Map<String, String>,
+    tabIcons: Map<String, ImageVector>,
+    tabConnectionStates: Map<String, SessionConnectionState>,
+    onTabClick: (String) -> Unit,
+    onTabClose: (String) -> Unit,
+    onAddClick: () -> Unit,
+    onSettings: () -> Unit,
+    onProjects: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    val connectionManager: ConnectionManager = koinInject()
+    val connection by connectionManager.connection.collectAsState()
+    val serverName = connection?.config?.name ?: connection?.config?.url ?: "No server"
+    val theme = LocalOpenCodeTheme.current
+    val listState = rememberLazyListState()
+    val infiniteTransition = rememberInfiniteTransition(label = "topbar_pulse")
+
+    // Ambient glow animation
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(3000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glow"
+    )
+
+    // Auto-scroll to active tab
+    LaunchedEffect(activeTabId) {
+        val activeIndex = tabs.indexOfFirst { it.id == activeTabId }
+        if (activeIndex >= 0) {
+            listState.animateScrollToItem(activeIndex)
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(theme.background)
+            .padding(horizontal = 12.dp, vertical = 0.dp) // Remove vertical padding for connector contact
+    ) {
+        // Top connector
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(12.dp)
+                    .height(1.dp)
+                    .background(theme.border.copy(alpha = 0.3f))
+            )
+            Text(
+                text = "┌",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.border.copy(alpha = 0.5f)
+            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(1.dp)
+                    .background(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(
+                                theme.border.copy(alpha = 0.3f),
+                                theme.accent.copy(alpha = glowAlpha),
+                                theme.border.copy(alpha = 0.3f)
+                            )
+                        )
+                    )
+            )
+            Text(
+                text = "┐",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.border.copy(alpha = 0.5f)
+            )
+            Box(
+                modifier = Modifier
+                    .width(12.dp)
+                    .height(1.dp)
+                    .background(theme.border.copy(alpha = 0.3f))
+            )
+        }
+
+        // Browser-style tabs container
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, theme.border.copy(alpha = 0.4f))
+                .background(theme.backgroundElement.copy(alpha = 0.08f))
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // OPTIMIZED Browser-style tabs row with smooth scrolling
+            LazyRow(
+                state = listState,
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                // Performance optimizations
+                contentPadding = PaddingValues(horizontal = 2.dp)
+            ) {
+                // Existing tabs
+                items(
+                    items = tabs, 
+                    key = { it.id },
+                    contentType = { "browser_tab" }
+                ) { tab ->
+                    val isActive = tab.id == activeTabId
+                    val title = tabTitles[tab.id] ?: "Tab"
+                    val connectionState = tabConnectionStates[tab.id]
+
+                    BrowserTabIndicator(
+                        title = title,
+                        connectionState = connectionState,
+                        isActive = isActive,
+                        onClick = { onTabClick(tab.id) },
+                        onClose = { onTabClose(tab.id) }
+                    )
+                }
+                
+                // +new tab integrated as a tab
+                item {
+                    BrowserNewTabIndicator(
+                        onClick = onAddClick
+                    )
+                }
+            }
+
+            // Right side: Settings only
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "│",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.border.copy(alpha = 0.3f)
+                )
+
+                // Settings
+                Text(
+                    text = "[⚙]",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.accent,
+                    modifier = Modifier.clickable(role = Role.Button, onClick = onSettings)
+                )
+            }
+        }
+
+        // Bottom connector with path indicator
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(12.dp)
+                    .height(1.dp)
+                    .background(theme.border.copy(alpha = 0.3f))
+            )
+            Text(
+                text = "├",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.border.copy(alpha = 0.5f)
+            )
+
+            // Path indicator with server name
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "~",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.accent.copy(alpha = 0.6f)
+                )
+                Text(
+                    text = "/",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.border.copy(alpha = 0.4f)
+                )
+                Text(
+                    text = serverName.take(20), // Limit length for compact display
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.textMuted.copy(alpha = 0.8f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "●",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (connection != null) theme.success.copy(alpha = glowAlpha) else theme.warning.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(start = 4.dp)
+                )
+            }
+
+            // Enhanced connector for logo integration
+            Text(
+                text = "┤",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.accent.copy(alpha = 0.7f) // Enhanced visibility
+            )
+            Box(
+                modifier = Modifier
+                    .width(12.dp)
+                    .height(1.dp)
+                    .background(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(
+                                theme.accent.copy(alpha = 0.4f),
+                                theme.border.copy(alpha = 0.3f)
+                            )
+                        )
+                    )
+            )
+        }
+    }
+}
+
+/**
+ * Compact tab indicator for the unified top bar.
+ */
+@Composable
+private fun CompactTabIndicator(
+    title: String,
+    connectionState: SessionConnectionState?,
+    isActive: Boolean,
+    onClick: () -> Unit,
+    onClose: () -> Unit
+) {
+    val theme = LocalOpenCodeTheme.current
+
+    val pulseAlpha by rememberOptimizedPulse(
+        key = "compact_tab_${connectionState?.name}",
+        fast = false
+    )
+
+    val shouldPulse = connectionState?.shouldPulse == true
+    val needsAttention = connectionState?.showsAttentionBadge == true
+
+    val textColor = when {
+        needsAttention -> theme.warning
+        isActive -> theme.text
+        else -> theme.textMuted
+    }
+    val borderColor = when {
+        isActive -> theme.accent.copy(alpha = 0.5f)
+        else -> theme.border.copy(alpha = 0.2f)
+    }
+    val bgColor = when {
+        isActive -> theme.backgroundElement.copy(alpha = 0.3f)
+        else -> theme.background.copy(alpha = 0f)
+    }
+
+    // Compact terminal-style tab
+    Row(
+        modifier = Modifier
+            .height(24.dp)
+            .background(bgColor)
+            .border(width = 1.dp, color = borderColor)
+            .clickable(onClick = onClick, role = Role.Tab)
+            .padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        // State indicator symbol
+        val stateSymbol = when (connectionState) {
+            SessionConnectionState.BUSY -> "▶"
+            SessionConnectionState.AWAITING_INPUT -> "?"
+            SessionConnectionState.ERROR -> "!"
+            else -> "○"
+        }
+        val stateColor = when {
+            shouldPulse -> theme.accent.copy(alpha = pulseAlpha)
+            connectionState == SessionConnectionState.ERROR -> theme.error
+            else -> theme.textMuted
+        }
+
+        Text(
+            text = stateSymbol,
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = stateColor
+        )
+
+        // Tab title
+        Text(
+            text = title.lowercase(),
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 80.dp)
+        )
+
+        // Close button
+        Text(
+            text = "×",
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = theme.border.copy(alpha = 0.5f),
+            modifier = Modifier.clickable(
+                onClick = onClose,
+                role = Role.Button
+            )
+        )
+    }
+}
 
 /**
  * Main container for the tab-based UI.
@@ -95,6 +453,8 @@ fun MainTabScreen(
     // Track current routes per tab (for PTY cleanup on tab close)
     val tabRoutes = remember { mutableStateMapOf<String, String>() }
     val tabPtyIds = remember { mutableStateMapOf<String, String>() }
+    // Track navControllers per tab (for external navigation like Settings from TopBar)
+    val tabNavControllers = remember { mutableStateMapOf<String, NavHostController>() }
     
     // Collect per-tab session connection states (busy/idle/awaiting)
     tabs.forEach { tab ->
@@ -168,20 +528,25 @@ fun MainTabScreen(
                 .statusBarsPadding()
                 .consumeWindowInsets(WindowInsets.statusBars)
         ) {
-            // Tab bar (no longer needs its own statusBarsPadding)
-            TabBar(
+            // Track whether the last tab change was from a click (not a swipe)
+            var isTabClick by remember { mutableStateOf(false) }
+
+            // Unified top bar: tabs + path + controls in one compact terminal-style header
+            UnifiedTopBar(
                 tabs = tabs,
                 activeTabId = activeTabId,
                 tabTitles = tabTitles,
                 tabIcons = tabIcons,
                 tabConnectionStates = tabConnectionStates,
-                onTabClick = { tabId ->
-                    tabManager.focusTab(tabId)
-                },
+                onTabClick = { tabId -> isTabClick = true; tabManager.focusTab(tabId) },
                 onTabClose = closeTab,
-                onAddClick = {
-                    tabManager.createTab(focus = true)
-                },
+                onAddClick = { tabManager.createTab(focus = true) },
+                onSettings = {
+                    // Navigate to settings using the active tab's navController
+                    activeTabId?.let { tabId ->
+                        tabNavControllers[tabId]?.navigate(Screen.Settings.route)
+                    }
+                }
             )
             
             // Pager state for swipe between tabs
@@ -190,11 +555,18 @@ fun MainTabScreen(
                 pageCount = { tabs.size }
             )
             
-            // Sync activeTabId -> pager (when tab clicked or closed)
+            // Sync activeTabId -> pager (when tab clicked or programmatically changed)
             LaunchedEffect(activeTabId, tabs.size) {
                 val index = tabs.indexOfFirst { it.id == activeTabId }
                 if (index >= 0 && pagerState.currentPage != index) {
-                    pagerState.animateScrollToPage(index)
+                    if (isTabClick) {
+                        // Instant jump — crossfade handles the visual transition
+                        pagerState.scrollToPage(index)
+                    } else {
+                        // Came from swipe settle — already there, no-op
+                        pagerState.scrollToPage(index)
+                    }
+                    isTabClick = false
                 }
             }
             
@@ -209,16 +581,25 @@ fun MainTabScreen(
             
             // Tab content area with HorizontalPager for swipe between tabs
             val saveableStateHolder = rememberSaveableStateHolder()
-            
+
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.weight(1f),
                 key = { tabs.getOrNull(it)?.id ?: it.toString() },
-                beyondViewportPageCount = 0
+                beyondViewportPageCount = 0,
+                userScrollEnabled = true
             ) { pageIndex ->
                 tabs.getOrNull(pageIndex)?.let { tab ->
                     saveableStateHolder.SaveableStateProvider(tab.id) {
                         val navController = rememberNavController()
+                        
+                        // Register navController for external navigation (e.g., Settings button in TopBar)
+                        DisposableEffect(navController) {
+                            tabNavControllers[tab.id] = navController
+                            onDispose {
+                                tabNavControllers.remove(tab.id)
+                            }
+                        }
                         
                         // Track route for title/icon
                         val backStackEntry by navController.currentBackStackEntryAsState()
@@ -282,6 +663,110 @@ fun MainTabScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Extra compact tab indicator - smaller terminal style.
+ */
+@Composable
+private fun BrowserTabIndicator(
+    title: String,
+    connectionState: SessionConnectionState?,
+    isActive: Boolean,
+    onClick: () -> Unit,
+    onClose: () -> Unit
+) {
+    val theme = LocalOpenCodeTheme.current
+    
+    Row(
+        modifier = Modifier
+            .border(
+                width = if (isActive) 1.dp else Spacing.hairline,
+                color = if (isActive) theme.accent.copy(alpha = 0.6f) else theme.border.copy(alpha = 0.4f)
+            )
+            .background(
+                color = if (isActive) theme.backgroundElement.copy(alpha = 0.15f) else theme.backgroundElement.copy(alpha = 0.05f)
+            )
+            .clickable(role = Role.Tab, onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        // Connection status indicator - always visible with fixed size
+        Box(
+            modifier = Modifier
+                .size(2.dp)
+                .background(
+                    when (connectionState) {
+                        SessionConnectionState.ACTIVE -> theme.success
+                        SessionConnectionState.BUSY -> theme.warning
+                        SessionConnectionState.AWAITING_INPUT -> theme.warning
+                        SessionConnectionState.IDLE -> theme.success
+                        SessionConnectionState.BACKGROUND -> theme.textMuted
+                        SessionConnectionState.ERROR -> theme.error
+                        null -> Color.Transparent // Always takes space but transparent
+                    }
+                )
+        )
+        
+        // Tab title
+        Text(
+            text = title,
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isActive) theme.text else theme.textMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        
+        // Close button
+        Text(
+            text = "×",
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = theme.textMuted.copy(alpha = 0.7f),
+            modifier = Modifier
+                .clickable(role = Role.Button, onClick = onClose)
+                .padding(1.dp)
+        )
+    }
+}
+
+/**
+ * New tab button with + sign appearing behind session backgrounds.
+ */
+@Composable
+private fun BrowserNewTabIndicator(
+    onClick: () -> Unit
+) {
+    val theme = LocalOpenCodeTheme.current
+    
+    Box(
+        modifier = Modifier
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+    ) {
+        // Background layer that appears behind
+        Box(
+            modifier = Modifier
+                .offset(x = (-2).dp, y = 0.dp) // Offset to appear behind
+                .border(
+                    width = Spacing.hairline,
+                    color = theme.border.copy(alpha = 0.2f)
+                )
+                .background(
+                    color = theme.backgroundElement.copy(alpha = 0.03f)
+                )
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        ) {
+            Text(
+                text = "+",
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.labelSmall,
+                color = theme.textMuted.copy(alpha = 0.6f)
+            )
         }
     }
 }

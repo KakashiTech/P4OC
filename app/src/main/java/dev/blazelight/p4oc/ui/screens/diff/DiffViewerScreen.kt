@@ -207,10 +207,15 @@ private fun UnifiedDiffView(
         hunks.flatMap { hunk -> hunk.lines }
     }
 
+    val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
+    DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
+    val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
+
     LazyColumn(
-        modifier = modifier.horizontalScroll(rememberScrollState())
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        flingBehavior = smoothFling
     ) {
-        itemsIndexed(allLines) { _, line ->
+        itemsIndexed(allLines, contentType = { _, line -> line.type }) { _, line ->
             when (line.type) {
                 DiffLine.LineType.HEADER -> {
                     Row(
@@ -375,10 +380,15 @@ private fun SideBySideDiffView(
         result
     }
 
+    val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
+    DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
+    val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
+
     LazyColumn(
-        modifier = modifier.horizontalScroll(rememberScrollState())
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        flingBehavior = smoothFling
     ) {
-        itemsIndexed(sideBySideLines) { _, line ->
+        itemsIndexed(sideBySideLines, contentType = { _, line -> if (line.isHeader) "header" else "line" }) { _, line ->
             if (line.isHeader) {
                 Row(
                     modifier = Modifier

@@ -4,6 +4,13 @@ import androidx.lifecycle.SavedStateHandle
 import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.domain.model.Permission
 import dev.blazelight.p4oc.domain.model.QuestionRequest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,6 +37,9 @@ class DialogQueueManager(
 
     private val _pendingPermissionsByCallId = MutableStateFlow<Map<String, Permission>>(emptyMap())
     val pendingPermissionsByCallId: StateFlow<Map<String, Permission>> = _pendingPermissionsByCallId.asStateFlow()
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val timeoutJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
     init {
         restorePendingDialogState()
@@ -97,6 +107,15 @@ class DialogQueueManager(
         permission.callID?.let { callId ->
             _pendingPermissionsByCallId.update { it + (callId to permission) }
         }
+
+        permission.callID?.let { callId ->
+            timeoutJobs.remove(callId)?.cancel()
+            timeoutJobs[callId] = scope.launch {
+                delay(PERMISSION_TIMEOUT_MS)
+                clearPermissionByCallId(callId)
+                AppLog.w(TAG, "Auto-cleared stuck permission for callId=$callId after timeout")
+            }
+        }
     }
 
     fun enqueueQuestion(request: QuestionRequest) {
@@ -108,9 +127,17 @@ class DialogQueueManager(
         // Clear from modal queue (legacy)
         _pendingPermission.value = null
         savedStateHandle.remove<String>(KEY_PENDING_PERMISSION)
+
+        // Clear from legacy queue to prevent reappearing
+        pendingPermissions.removeIf { it.id == permissionId }
+
         showNextPermission()
 
         // Clear from inline map
+        _pendingPermissionsByCallId.value
+            .filterValues { it.id == permissionId }
+            .keys
+            .forEach { key -> timeoutJobs.remove(key)?.cancel() }
         _pendingPermissionsByCallId.update { map ->
             map.filterValues { it.id != permissionId }
         }
@@ -118,6 +145,10 @@ class DialogQueueManager(
 
     fun clearPermissionByRequestId(requestId: String) {
         // Clear from inline map
+        _pendingPermissionsByCallId.value
+            .filterValues { it.id == requestId }
+            .keys
+            .forEach { key -> timeoutJobs.remove(key)?.cancel() }
         _pendingPermissionsByCallId.update { map ->
             map.filterValues { it.id != requestId }
         }
@@ -129,10 +160,24 @@ class DialogQueueManager(
         }
     }
 
+    fun clearPermissionByCallId(callId: String) {
+        // Clear from inline map by callId
+        timeoutJobs.remove(callId)?.cancel()
+        _pendingPermissionsByCallId.update { map ->
+            map.filterKeys { it != callId }
+        }
+    }
+
     fun clearQuestion() {
         _pendingQuestion.value = null
         savedStateHandle.remove<String>(KEY_PENDING_QUESTION)
         showNextQuestion()
+    }
+
+    fun cleanup() {
+        timeoutJobs.values.forEach { job -> job.cancel() }
+        timeoutJobs.clear()
+        scope.cancel()
     }
 
     private fun showNextPermission() {
@@ -183,5 +228,6 @@ class DialogQueueManager(
         const val KEY_PENDING_QUESTIONS_QUEUE = "pending_questions_queue"
         const val KEY_PENDING_PERMISSION = "pending_permission"
         const val KEY_PENDING_PERMISSIONS_QUEUE = "pending_permissions_queue"
+        const val PERMISSION_TIMEOUT_MS = 5 * 60 * 1000L // 5 minutes
     }
 }

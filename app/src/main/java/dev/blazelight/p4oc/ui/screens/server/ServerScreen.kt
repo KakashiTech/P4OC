@@ -1,10 +1,17 @@
 package dev.blazelight.p4oc.ui.screens.server
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -14,50 +21,64 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
-import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.core.datastore.RecentServer
 import dev.blazelight.p4oc.core.network.DiscoveredServer
 import dev.blazelight.p4oc.core.network.DiscoveryState
-import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
-import dev.blazelight.p4oc.ui.theme.Spacing
-import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
+import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
+import dev.blazelight.p4oc.ui.theme.Sizing
+import dev.blazelight.p4oc.ui.theme.Spacing
+import dev.blazelight.p4oc.ui.theme.opencode.OpenCodeTheme
 
-// Corner radius tokens - moderado, no exagerado
-private val CardRadius = 8.dp
-private val ButtonRadius = 6.dp
-private val InputRadius = 4.dp
-private val BadgeRadius = 4.dp
-private val DotRadius = 2.dp
+import androidx.compose.runtime.Stable
+import kotlinx.coroutines.delay
+import org.koin.androidx.compose.koinViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
+@Stable
+private class ServerArtworkCallbacks(
+    val onSettings: () -> Unit,
+    val onDiscoveredClick: (DiscoveredServer) -> Unit,
+    val onStopDiscovery: () -> Unit,
+    val onRecentClick: (RecentServer) -> Unit,
+    val onRemoveRecent: (RecentServer) -> Unit,
+    val onUrlChange: (String) -> Unit,
+    val onUsernameChange: (String) -> Unit,
+    val onPasswordChange: (String) -> Unit,
+    val onConnect: () -> Unit
+)
+
 @Composable
 fun ServerScreen(
     viewModel: ServerViewModel = koinViewModel(),
@@ -68,122 +89,598 @@ fun ServerScreen(
     val theme = LocalOpenCodeTheme.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    DisposableEffect(Unit) {
-        viewModel.startDiscovery()
-        onDispose { viewModel.stopDiscovery() }
-    }
+    // NO iniciar conexión automática inmediatamente
+    // La conexión se iniciará solo después de que el tema esté cargado
 
-    LaunchedEffect(uiState.navigationDestination) {
-        when (uiState.navigationDestination) {
-            is NavigationDestination.Sessions -> {
-                viewModel.clearNavigationDestination()
-                onNavigateToSessions()
-            }
-            is NavigationDestination.Projects -> {
-                viewModel.clearNavigationDestination()
-                onNavigateToProjects()
-            }
-            null -> {}
+    // Navigate immediately — the NavHost exit transition is the single source of truth.
+    // A manual exitAlpha/exitScale here would fight the NavHost animation causing a jump.
+    val pendingDestination = uiState.navigationDestination
+    LaunchedEffect(pendingDestination) {
+        if (pendingDestination == null) return@LaunchedEffect
+        viewModel.clearNavigationDestination()
+        when (pendingDestination) {
+            is NavigationDestination.Sessions -> onNavigateToSessions()
+            is NavigationDestination.Projects -> onNavigateToProjects()
         }
     }
 
-    LaunchedEffect(uiState.remoteUrl) {
-        val url = uiState.remoteUrl.trim()
-        if (url.isNotEmpty() && !uiState.isConnecting) {
-            viewModel.stopDiscovery()
-            delay(150)
-            viewModel.startDiscovery()
+    LaunchedEffect(uiState.isConnected, uiState.isConnecting) {
+        if (!uiState.isConnected) {
+            delay(1200)
+            if (!uiState.isConnected) {
+                viewModel.startDiscovery()
+            }
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(theme.accent)
-                        )
-                        Text(
-                            text = stringResource(R.string.server_connect_title),
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
-                            color = theme.text
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(
-                        onClick = onSettings,
-                        modifier = Modifier.testTag("server_settings_button")
-                    ) {
-                        Text(
-                            text = "⚙",
-                            color = theme.textMuted,
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = theme.background
-                )
-            )
-        },
-        containerColor = theme.background
-    ) { padding ->
+    val smoothSpringDp  = spring<Dp>(dampingRatio = 0.68f, stiffness = Spring.StiffnessMedium)
+    val smoothSpringFlt = spring<Float>(dampingRatio = 0.68f, stiffness = Spring.StiffnessMedium)
+
+    var started      by remember { mutableStateOf(false) }
+    var showHeader   by remember { mutableStateOf(false) }
+    var showDiscover by remember { mutableStateOf(false) }
+    var showRecent   by remember { mutableStateOf(false) }
+    var showRemote   by remember { mutableStateOf(false) }
+    var showHelp     by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        started    = true
+        delay(30);  showHeader   = true
+        delay(60);  showDiscover = true
+        delay(55);  showRecent   = true
+        delay(55);  showRemote   = true
+        delay(70);  showHelp     = true
+    }
+
+    val pageAlpha by animateFloatAsState(
+        targetValue = if (started) 1f else 0f,
+        animationSpec = tween(320, easing = FastOutSlowInEasing), label = "pA"
+    )
+    val pageTranslationY by animateFloatAsState(
+        targetValue = if (started) 0f else 60f,
+        animationSpec = smoothSpringFlt, label = "pO"
+    )
+    val pageScale by animateFloatAsState(
+        targetValue = if (started) 1f else 0.96f,
+        animationSpec = smoothSpringFlt, label = "pS"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(theme.background)
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .imePadding()
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .graphicsLayer {
+                    alpha = pageAlpha
+                    translationY = pageTranslationY
+                    scaleX = pageScale
+                    scaleY = pageScale
+                }
+                .padding(horizontal = Spacing.sm)
         ) {
-            // Discovered servers section
-            if (uiState.discoveredServers.isNotEmpty() || uiState.discoveryState == DiscoveryState.SCANNING) {
-                DiscoveredServersSection(
-                    servers = uiState.discoveredServers,
-                    discoveryState = uiState.discoveryState,
-                    isConnecting = uiState.isConnecting,
-                    onServerClick = viewModel::connectToDiscoveredServer,
-                    onStopClick = viewModel::stopDiscovery
+            // Hero + panel are ONE surface — no gap, no separate border
+            val callbacks = remember(viewModel) {
+                ServerArtworkCallbacks(
+                    onSettings        = onSettings,
+                    onDiscoveredClick = viewModel::connectToDiscoveredServer,
+                    onStopDiscovery   = viewModel::stopDiscovery,
+                    onRecentClick     = viewModel::connectToRecentServer,
+                    onRemoveRecent    = viewModel::removeRecentServer,
+                    onUrlChange       = viewModel::setRemoteUrl,
+                    onUsernameChange  = viewModel::setUsername,
+                    onPasswordChange  = viewModel::setPassword,
+                    onConnect         = viewModel::connectToRemote
                 )
             }
-
-            if (uiState.recentServers.isNotEmpty()) {
-                RecentServersSection(
-                    servers = uiState.recentServers,
-                    isConnecting = uiState.isConnecting,
-                    onServerClick = viewModel::connectToRecentServer,
-                    onRemoveServer = viewModel::removeRecentServer
-                )
-            }
-
-            RemoteServerSection(
-                url = uiState.remoteUrl,
-                username = uiState.username,
-                password = uiState.password,
-                isConnecting = uiState.isConnecting,
-                onUrlChange = viewModel::setRemoteUrl,
-                onUsernameChange = viewModel::setUsername,
-                onPasswordChange = viewModel::setPassword,
-                onConnect = viewModel::connectToRemote
+            ServerArtwork(
+                theme        = theme,
+                visible      = showHeader,
+                uiState      = uiState,
+                showDiscover = showDiscover,
+                showRecent   = showRecent,
+                showRemote   = showRemote,
+                showHelp     = showHelp,
+                springDp     = smoothSpringDp,
+                springFlt    = smoothSpringFlt,
+                callbacks    = callbacks
             )
+            Spacer(Modifier.height(Spacing.xl))
+        }
+    }
+}
 
-            uiState.error?.let { error ->
-                ErrorBanner(error = error)
+// ── SERVER ARTWORK — one surface, hero + panel fused ─────────────────────────
+
+/**
+ * The ENTIRE screen is one ASCII artwork.
+ * Hero identity block shares its left/right borders with the panel.
+ * Zero gap. The ⌜ top-line IS the hero's ceiling.
+ *
+ *  ⌜─────────────────────────── P4OC ────────────────────────────────⌝
+ *  │  ◈  P 4 O C                                               [ ⚙ ] │
+ *  │  └─ connect :: server ──────────────────────────────────────────│
+ *  ├─[ DISCOVERED SERVERS ]──────────────────────── ● scan · [stop] ─┤
+ *  │  ● server-name                                       [ LAN ] →  │
+ *  ├─[ RECENT SERVERS ]─────────────────────────────────────────────┤
+ *  │  ○ Remote Server                                              ×  │
+ *  │    http://192.168.81.17:30096                                    │
+ *  ├─[ REMOTE SERVER ]──────────────────────────────────────────────┤
+ *  │  # comment                                                       │
+ *  │  ┌─ url ──────────────────────────────────────────────────────┐ │
+ *  │  │ Server URL                                                  │ │
+ *  │  └────────────────────────────────────────────────────────────┘ │
+ *  ├─[ SERVER SETUP ]────────────────────────────────── man setup ──┤
+ *  ⌞─────────────────────────────────────────────────────────────────⌟
+ */
+@Composable
+private fun ServerArtwork(
+    theme: OpenCodeTheme,
+    visible: Boolean,
+    uiState: ServerUiState,
+    showDiscover: Boolean,
+    showRecent: Boolean,
+    showRemote: Boolean,
+    showHelp: Boolean,
+    springDp: androidx.compose.animation.core.SpringSpec<Dp>,
+    springFlt: androidx.compose.animation.core.SpringSpec<Float>,
+    callbacks: ServerArtworkCallbacks
+) {
+    val hA  by animateFloatAsState(if (visible) 1f else 0f,     tween(220, easing = FastOutSlowInEasing), label = "hA")
+    val hT  by animateFloatAsState(if (visible) 0f else -20f,   springFlt, label = "hT")
+    val dA  by animateFloatAsState(if (showDiscover) 1f else 0f, tween(260, easing = FastOutSlowInEasing), label = "dA")
+    val dT  by animateFloatAsState(if (showDiscover) 0f else 30f, springFlt, label = "dT")
+    val rA  by animateFloatAsState(if (showRecent) 1f else 0f,   tween(280, easing = FastOutSlowInEasing), label = "rA")
+    val rT  by animateFloatAsState(if (showRecent) 0f else 30f,  springFlt, label = "rT")
+    val fA  by animateFloatAsState(if (showRemote) 1f else 0f,   tween(300, easing = FastOutSlowInEasing), label = "fA")
+    val fT  by animateFloatAsState(if (showRemote) 0f else 30f,  springFlt, label = "fT")
+    val hpA by animateFloatAsState(if (showHelp) 1f else 0f,     tween(320, easing = FastOutSlowInEasing), label = "hpA")
+    val hpT by animateFloatAsState(if (showHelp) 0f else 30f,    springFlt, label = "hpT")
+
+    // Hero glow
+    val inf = rememberInfiniteTransition(label = "art")
+    val glow by inf.animateFloat(0.45f, 1f,
+        infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "glow")
+    val scanX by inf.animateFloat(0f, 1f,
+        infiniteRepeatable(tween(3000, easing = LinearEasing), RepeatMode.Restart),
+        label = "scan")
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer { alpha = hA; translationY = hT }
+    ) {
+        // ── TOP BORDER LINE with scan ─────────────────────────────────────
+        Row(modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text("⌜", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.accent.copy(alpha = glow))
+            Box(modifier = Modifier.weight(1f).height(Sizing.dividerThickness)
+                .clipToBounds()) {
+                Box(modifier = Modifier.fillMaxSize()
+                    .background(Brush.horizontalGradient(listOf(
+                        theme.accent.copy(alpha = 0.9f),
+                        theme.border.copy(alpha = 0.12f),
+                        theme.accent.copy(alpha = 0.9f)
+                    ))))
+                Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(0.14f)
+                    .offset(x = ((scanX - 0.14f) * 1800).dp)
+                    .background(Brush.horizontalGradient(listOf(
+                        theme.accent.copy(alpha = 0f),
+                        theme.accent,
+                        theme.accent.copy(alpha = 0f)
+                    ))))
+            }
+            Text("⌝", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.accent.copy(alpha = glow))
+        }
+
+        // ── UNIFIED SURFACE (left bar │ ... content ... │ right bar) ──────
+        Row(modifier = Modifier.fillMaxWidth()) {
+            // Left border — accent tinted
+            Box(modifier = Modifier.width(Sizing.strokeThin).fillMaxHeight()
+                .background(theme.accent.copy(alpha = 0.35f)))
+
+            Column(modifier = Modifier.weight(1f)
+                .background(theme.backgroundElement.copy(alpha = 0.38f))) {
+
+                // ── HERO IDENTITY BLOCK ───────────────────────────────────
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(
+                            theme.backgroundElement.copy(alpha = 0.6f),
+                            theme.backgroundElement.copy(alpha = 0f)
+                        )))
+                        .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                        Text("◈", fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = theme.accent.copy(alpha = glow),
+                            fontWeight = FontWeight.ExtraBold)
+                        Column {
+                            Text("P4OC", fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold, color = theme.text)
+                            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Text("└─", fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = theme.accent.copy(alpha = 0.45f))
+                                Text("connect", fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = theme.textMuted)
+                                Text(" :: ", fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = theme.textMuted.copy(alpha = 0.3f))
+                                Text("server", fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = theme.accent.copy(alpha = 0.8f))
+                            }
+                        }
+                    }
+                    // Settings button — boxed terminal style
+                    Box(
+                        modifier = Modifier
+                            .border(Sizing.strokeThin, theme.border.copy(alpha = 0.4f))
+                            .clickable(role = Role.Button) { callbacks.onSettings() }
+                            .testTag("server_settings_button")
+                            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("⚙", fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = theme.textMuted.copy(alpha = 0.7f))
+                    }
+                }
+
+                // ── SECTIONS ─────────────────────────────────────────────
+
+                if (uiState.discoveredServers.isNotEmpty() ||
+                    uiState.discoveryState == DiscoveryState.SCANNING) {
+                    ArtPanelDivider(theme)
+                    Column(modifier = Modifier.graphicsLayer { alpha = dA; translationY = dT }) {
+                        DiscoveredServersSection(
+                            servers = uiState.discoveredServers,
+                            discoveryState = uiState.discoveryState,
+                            isConnecting = uiState.isConnecting,
+                            onServerClick = callbacks.onDiscoveredClick,
+                            onStopClick = callbacks.onStopDiscovery
+                        )
+                    }
+                }
+
+                if (uiState.recentServers.isNotEmpty()) {
+                    ArtPanelDivider(theme)
+                    Column(modifier = Modifier.graphicsLayer { alpha = rA; translationY = rT }) {
+                        RecentServersSection(
+                            servers = uiState.recentServers,
+                            isConnecting = uiState.isConnecting,
+                            onServerClick = callbacks.onRecentClick,
+                            onRemoveServer = callbacks.onRemoveRecent
+                        )
+                    }
+                }
+
+                ArtPanelDivider(theme)
+                Column(modifier = Modifier.graphicsLayer { alpha = fA; translationY = fT }) {
+                    RemoteServerSection(
+                        url = uiState.remoteUrl,
+                        username = uiState.username,
+                        password = uiState.password,
+                        isConnecting = uiState.isConnecting,
+                        onUrlChange = callbacks.onUrlChange,
+                        onUsernameChange = callbacks.onUsernameChange,
+                        onPasswordChange = callbacks.onPasswordChange,
+                        onConnect = callbacks.onConnect
+                    )
+                }
+
+                uiState.error?.let { err ->
+                    ArtPanelDivider(theme)
+                    ErrorBanner(error = err)
+                }
+
+                ArtPanelDivider(theme)
+                Column(modifier = Modifier.graphicsLayer { alpha = hpA; translationY = hpT }) {
+                    ServerSetupHelpSection()
+                }
             }
 
-            ServerSetupHelpSection()
+            // Right border — fades slightly
+            Box(modifier = Modifier.width(Sizing.strokeThin).fillMaxHeight()
+                .background(theme.border.copy(alpha = 0.25f)))
         }
+
+        // ── BOTTOM BORDER ─────────────────────────────────────────────────
+        Row(modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text("⌞", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.border.copy(alpha = 0.4f))
+            Box(modifier = Modifier.weight(1f).height(Sizing.dividerThickness)
+                .background(Brush.horizontalGradient(listOf(
+                    theme.border.copy(alpha = 0.35f),
+                    theme.border.copy(alpha = 0.08f),
+                    theme.border.copy(alpha = 0.35f)
+                ))))
+            Text("⌟", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.border.copy(alpha = 0.4f))
+        }
+    }
+}
+
+/** ├─[ label ]────────── divider between sections inside the artwork */
+@Composable
+private fun ArtPanelDivider(theme: OpenCodeTheme, label: String = "") {
+    Row(modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text("├", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = theme.accent.copy(alpha = 0.5f))
+        Box(modifier = Modifier.weight(1f).height(Sizing.dividerThickness)
+            .background(Brush.horizontalGradient(listOf(
+                theme.accent.copy(alpha = 0.35f),
+                theme.border.copy(alpha = 0.1f),
+                theme.border.copy(alpha = 0.05f)
+            ))))
+        Text("┤", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = theme.border.copy(alpha = 0.3f))
+    }
+}
+
+// ── Unified Panel (legacy — kept as dead reference, not called) ──────────────
+@Suppress("unused")
+@Composable
+private fun UnifiedServerPanel(
+    uiState: ServerUiState,
+    showDiscover: Boolean,
+    showRecent: Boolean,
+    showRemote: Boolean,
+    showHelp: Boolean,
+    springDp: androidx.compose.animation.core.SpringSpec<Dp>,
+    springFlt: androidx.compose.animation.core.SpringSpec<Float>,
+    callbacks: ServerArtworkCallbacks
+) {
+    val theme = LocalOpenCodeTheme.current
+
+    // Stagger alphas for each section row inside the panel
+    val dA by animateFloatAsState(if (showDiscover) 1f else 0f,
+        tween(280, easing = FastOutSlowInEasing), label = "dA")
+    val dO by animateDpAsState(if (showDiscover) Spacing.none else 14.dp,
+        springDp, label = "dO")
+    val rA by animateFloatAsState(if (showRecent) 1f else 0f,
+        tween(300, easing = FastOutSlowInEasing), label = "rA")
+    val rO by animateDpAsState(if (showRecent) Spacing.none else 14.dp,
+        springDp, label = "rO")
+    val fA by animateFloatAsState(if (showRemote) 1f else 0f,
+        tween(320, easing = FastOutSlowInEasing), label = "fA")
+    val fO by animateDpAsState(if (showRemote) Spacing.none else 14.dp,
+        springDp, label = "fO")
+    val hA by animateFloatAsState(if (showHelp) 1f else 0f,
+        tween(340, easing = FastOutSlowInEasing), label = "hA")
+    val hO by animateDpAsState(if (showHelp) Spacing.none else 14.dp,
+        springDp, label = "hO")
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // ⌜ top border — animated scan
+        TuiTopFrame(animated = true)
+
+        // Panel body — left + right border drawn by single-pixel Box columns
+        Row(modifier = Modifier.fillMaxWidth()) {
+            // Left border bar
+            Box(modifier = Modifier.width(Sizing.strokeThin)
+                .fillMaxHeight()
+                .background(theme.border.copy(alpha = 0.35f)))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .background(theme.backgroundElement.copy(alpha = 0.4f))
+            ) {
+            // ── DISCOVERED SERVERS ──
+            if (uiState.discoveredServers.isNotEmpty() || uiState.discoveryState == DiscoveryState.SCANNING) {
+                Column(modifier = Modifier.alpha(dA).offset(y = dO)) {
+                    DiscoveredServersSection(
+                        servers = uiState.discoveredServers,
+                        discoveryState = uiState.discoveryState,
+                        isConnecting = uiState.isConnecting,
+                        onServerClick = callbacks.onDiscoveredClick,
+                        onStopClick = callbacks.onStopDiscovery
+                    )
+                }
+                PanelDivider()
+            }
+
+            // ── RECENT SERVERS ──
+            if (uiState.recentServers.isNotEmpty()) {
+                Column(modifier = Modifier.alpha(rA).offset(y = rO)) {
+                    RecentServersSection(
+                        servers = uiState.recentServers,
+                        isConnecting = uiState.isConnecting,
+                        onServerClick = callbacks.onRecentClick,
+                        onRemoveServer = callbacks.onRemoveRecent
+                    )
+                }
+                PanelDivider()
+            }
+
+            // ── REMOTE SERVER ──
+            Column(modifier = Modifier.alpha(fA).offset(y = fO)) {
+                RemoteServerSection(
+                    url = uiState.remoteUrl,
+                    username = uiState.username,
+                    password = uiState.password,
+                    isConnecting = uiState.isConnecting,
+                    onUrlChange = callbacks.onUrlChange,
+                    onUsernameChange = callbacks.onUsernameChange,
+                    onPasswordChange = callbacks.onPasswordChange,
+                    onConnect = callbacks.onConnect
+                )
+            }
+
+            // ── ERROR ──
+            uiState.error?.let { err ->
+                PanelDivider()
+                ErrorBanner(error = err)
+            }
+
+            // ── SETUP HELP ──
+            PanelDivider()
+            Column(modifier = Modifier.alpha(hA).offset(y = hO)) {
+                ServerSetupHelpSection()
+            }
+            }
+            // Right border bar
+            Box(modifier = Modifier.width(Sizing.strokeThin)
+                .fillMaxHeight()
+                .background(theme.border.copy(alpha = 0.35f)))
+        }
+
+        // ⌞ bottom border
+        TuiBottomFrame()
+    }
+}
+
+/** Internal horizontal divider between panel sections — ├──── */
+@Composable
+private fun PanelDivider() {
+    val theme = LocalOpenCodeTheme.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = "├", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall,
+            color = theme.border.copy(alpha = 0.5f))
+        Box(
+            modifier = Modifier.weight(1f).height(Sizing.dividerThickness)
+                .background(Brush.horizontalGradient(listOf(
+                    theme.border.copy(alpha = 0.5f),
+                    theme.border.copy(alpha = 0.1f),
+                    theme.border.copy(alpha = 0.05f)
+                )))
+        )
+        Text(text = "┤", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall,
+            color = theme.border.copy(alpha = 0.3f))
+    }
+}
+
+// ── ASCII Art helpers ─────────────────────────────────────────────────────────
+
+/** Gradient separator:  ───────────────────  */
+@Composable
+private fun TuiGradientLine() {
+    val theme = LocalOpenCodeTheme.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(Sizing.dividerThickness)
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(
+                        theme.border.copy(alpha = 0.05f),
+                        theme.border.copy(alpha = 0.4f),
+                        theme.border.copy(alpha = 0.05f)
+                    )
+                )
+            )
+    )
+}
+
+/** Top frame row:  ⌜─────────────────────────⌝  with optional scan pulse */
+@Composable
+private fun TuiTopFrame(accentAlpha: Float = 0.8f, animated: Boolean = false) {
+    val theme = LocalOpenCodeTheme.current
+    val scanX = if (animated) {
+        val tr = rememberInfiniteTransition(label = "topScan")
+        tr.animateFloat(0f, 1f, infiniteRepeatable(tween(2800, easing = LinearEasing),
+            RepeatMode.Restart), label = "sX").value
+    } else -1f
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(text = "⌜", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, color = theme.accent.copy(alpha = accentAlpha))
+        Box(modifier = Modifier.weight(1f).height(Sizing.dividerThickness).clipToBounds()) {
+            Box(modifier = Modifier.fillMaxSize()
+                .background(Brush.horizontalGradient(listOf(
+                    theme.accent.copy(alpha = accentAlpha * 0.9f),
+                    theme.border.copy(alpha = 0.15f),
+                    theme.accent.copy(alpha = accentAlpha * 0.9f)
+                ))))
+            if (animated && scanX >= 0f) {
+                Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(0.15f)
+                    .offset(x = ((scanX - 0.15f) * 2000).dp)
+                    .background(Brush.horizontalGradient(listOf(
+                        theme.accent.copy(alpha = 0f),
+                        theme.accent.copy(alpha = 0.9f),
+                        theme.accent.copy(alpha = 0f)
+                    ))))
+            }
+        }
+        Text(text = "⌝", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, color = theme.accent.copy(alpha = accentAlpha))
+    }
+}
+
+/** Bottom frame row:  ⌞─────────────────────────⌟  */
+@Composable
+private fun TuiBottomFrame(dimAlpha: Float = 0.3f) {
+    val theme = LocalOpenCodeTheme.current
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(text = "⌞", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, color = theme.border.copy(alpha = dimAlpha))
+        Box(
+            modifier = Modifier.weight(1f).height(Sizing.dividerThickness)
+                .background(Brush.horizontalGradient(listOf(
+                    theme.border.copy(alpha = dimAlpha),
+                    theme.border.copy(alpha = 0.05f),
+                    theme.border.copy(alpha = dimAlpha)
+                )))
+        )
+        Text(text = "⌟", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, color = theme.border.copy(alpha = dimAlpha))
+    }
+}
+
+/** Section label row:  ├─[ LABEL ]──────── (trailing slot optional)  */
+@Composable
+private fun TuiSectionLabel(label: String, trailing: @Composable (() -> Unit)? = null) {
+    val theme = LocalOpenCodeTheme.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)
+    ) {
+        Text(text = "├─", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, color = theme.accent)
+        Text(text = "[", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, color = theme.accent)
+        Text(text = " $label ", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+            color = theme.accent)
+        Text(text = "]", fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, color = theme.accent)
+        Box(
+            modifier = Modifier.weight(1f).height(Sizing.dividerThickness)
+                .background(Brush.horizontalGradient(listOf(
+                    theme.accent.copy(alpha = 0.6f),
+                    theme.border.copy(alpha = 0.08f)
+                )))
+        )
+        trailing?.invoke()
     }
 }
 
@@ -195,62 +692,15 @@ private fun ErrorBanner(error: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(CardRadius))
             .background(theme.error.copy(alpha = 0.08f))
-            .border(1.dp, theme.error.copy(alpha = 0.3f), RoundedCornerShape(CardRadius))
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = "✗",
-            color = theme.error,
-            fontFamily = FontFamily.Monospace,
-            style = MaterialTheme.typography.titleMedium
-        )
-        Text(
-            text = error,
-            color = theme.error,
-            fontFamily = FontFamily.Monospace,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-// ── Section Header ────────────────────────────────────────────────────────────
-
-@Composable
-private fun SectionHeader(
-    title: String,
-    trailing: @Composable (() -> Unit)? = null
-) {
-    val theme = LocalOpenCodeTheme.current
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            // Accent indicator dot
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(RoundedCornerShape(DotRadius))
-                    .background(theme.accent)
-            )
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.SemiBold,
-                color = theme.text
-            )
-        }
-        trailing?.invoke()
+        Text(text = "✗", color = theme.error, fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodyMedium)
+        Text(text = error, color = theme.error, fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
     }
 }
 
@@ -267,82 +717,61 @@ private fun DiscoveredServersSection(
     val theme = LocalOpenCodeTheme.current
     val scanning = discoveryState == DiscoveryState.SCANNING
 
-    Card(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(CardRadius),
-        colors = CardDefaults.cardColors(containerColor = theme.backgroundElement),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        verticalArrangement = Arrangement.spacedBy(Spacing.none)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            SectionHeader(
-                title = stringResource(R.string.discovery_section_title),
-                trailing = {
-                    if (scanning) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            ScanPulse()
-                            Text(
-                                text = "scanning",
-                                fontFamily = FontFamily.Monospace,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = theme.textMuted
-                            )
-                            Text(
-                                text = "·",
-                                color = theme.border,
-                                fontFamily = FontFamily.Monospace
-                            )
-                            Text(
-                                text = "stop",
-                                fontFamily = FontFamily.Monospace,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = theme.accent,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(BadgeRadius))
-                                    .clickable(role = Role.Button) { onStopClick() }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
+            TuiSectionLabel(
+                label = stringResource(R.string.discovery_section_title),
+                trailing = if (scanning) ({
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                    ) {
+                        ScanPulse()
+                        Text(text = "scan", fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall, color = theme.textMuted)
+                        Text(text = "·", color = theme.border, fontFamily = FontFamily.Monospace)
+                        Text(
+                            text = "[stop]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.accent,
+                            modifier = Modifier
+                                .clickable(role = Role.Button) { onStopClick() }
+                                .padding(horizontal = Spacing.xxs)
+                        )
                     }
-                }
+                }) else null
             )
 
             if (servers.isEmpty() && scanning) {
-                Text(
-                    text = stringResource(R.string.discovery_scanning_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = theme.textMuted,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            }
-
-            if (servers.isNotEmpty()) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(vertical = Spacing.xs)
                 ) {
-                    servers.forEachIndexed { index, server ->
-                        DiscoveredServerItem(
-                            server = server,
-                            isConnecting = isConnecting,
-                            onClick = { onServerClick(server) }
-                        )
-                        if (index < servers.size - 1) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                                    .height(1.dp)
-                                    .background(theme.borderSubtle.copy(alpha = 0.5f))
-                            )
-                        }
-                    }
+                    Text(text = "~\$", fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.textMuted.copy(alpha = 0.5f))
+                    Text(text = stringResource(R.string.discovery_scanning_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace, color = theme.textMuted)
                 }
+            }
+        }
+
+        if (servers.isNotEmpty()) {
+            servers.forEachIndexed { index, server ->
+                DiscoveredServerItem(server = server, isConnecting = isConnecting,
+                    onClick = { onServerClick(server) })
+                if (index < servers.size - 1) TuiGradientLine()
             }
         }
     }
@@ -359,72 +788,49 @@ private fun DiscoveredServerItem(
     val networkLabel = if (isTailscale) "VPN" else "LAN"
     val networkColor = if (isTailscale) theme.info else theme.success
 
+    // Left status bar + content — same pattern as SessionCard
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
+            .height(IntrinsicSize.Min)
             .clickable(enabled = !isConnecting, role = Role.Button) { onClick() }
-            .background(theme.background.copy(alpha = 0.5f))
             .testTag("discovered_server_${server.serviceName}")
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Status indicator with rounded corners
-        Box(
+        Box(modifier = Modifier.width(Sizing.strokeMd).fillMaxHeight().background(networkColor))
+        Row(
             modifier = Modifier
-                .size(10.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(networkColor)
-        )
-
-        // Server info
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = server.serviceName
-                    .removePrefix("opencode-")
-                    .ifEmpty { server.serviceName },
-                style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium,
-                color = theme.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = "${server.host}:${server.port}",
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = theme.textMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        // Network badge
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(BadgeRadius))
-                .background(networkColor.copy(alpha = 0.12f))
-                .border(1.dp, networkColor.copy(alpha = 0.3f), RoundedCornerShape(BadgeRadius))
-                .padding(horizontal = 8.dp, vertical = 3.dp)
+                .weight(1f)
+                .background(theme.background.copy(alpha = 0.35f))
+                .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            Text(
-                text = networkLabel,
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.labelSmall,
-                color = networkColor,
-                fontWeight = FontWeight.Medium
-            )
+            Text(text = "●", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.labelSmall, color = networkColor)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = server.serviceName.removePrefix("opencode-").ifEmpty { server.serviceName },
+                    style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium, color = theme.text,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Text(text = "${server.host}:${server.port}",
+                    style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace,
+                    color = theme.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Box(
+                modifier = Modifier
+                    .background(networkColor.copy(alpha = 0.12f))
+                    .border(Sizing.strokeMd, networkColor.copy(alpha = 0.3f))
+                    .padding(horizontal = Spacing.xs, vertical = Spacing.xxs)
+            ) {
+                Text(text = networkLabel, fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = networkColor, fontWeight = FontWeight.Medium)
+            }
+            Text(text = "→", color = theme.textMuted, fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall)
         }
-
-        // Arrow
-        Text(
-            text = "→",
-            color = theme.textMuted,
-            fontFamily = FontFamily.Monospace,
-            style = MaterialTheme.typography.bodyMedium
-        )
     }
 }
 
@@ -437,39 +843,22 @@ private fun RecentServersSection(
     onServerClick: (RecentServer) -> Unit,
     onRemoveServer: (RecentServer) -> Unit
 ) {
-    val theme = LocalOpenCodeTheme.current
-
-    Card(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(CardRadius),
-        colors = CardDefaults.cardColors(containerColor = theme.backgroundElement),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        verticalArrangement = Arrangement.spacedBy(Spacing.none)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            SectionHeader(title = stringResource(R.string.server_recent_servers))
-
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                servers.forEachIndexed { index, server ->
-                    RecentServerItem(
-                        server = server,
-                        isConnecting = isConnecting,
-                        onClick = { onServerClick(server) },
-                        onRemove = { onRemoveServer(server) }
-                    )
-                    if (index < servers.size - 1) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .height(1.dp)
-                                .background(theme.borderSubtle.copy(alpha = 0.5f))
-                        )
-                    }
-                }
-            }
+            TuiSectionLabel(label = stringResource(R.string.server_recent_servers))
+        }
+        servers.forEachIndexed { index, server ->
+            RecentServerItem(server = server, isConnecting = isConnecting,
+                onClick = { onServerClick(server) }, onRemove = { onRemoveServer(server) })
+            if (index < servers.size - 1) TuiGradientLine()
         }
     }
 }
@@ -486,50 +875,40 @@ private fun RecentServerItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
+            .height(IntrinsicSize.Min)
             .clickable(enabled = !isConnecting, role = Role.Button) { onClick() }
-            .background(theme.background.copy(alpha = 0.5f))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Box(
+        Box(modifier = Modifier.width(Sizing.strokeMd).fillMaxHeight()
+            .background(theme.textMuted.copy(alpha = 0.4f)))
+        Row(
             modifier = Modifier
-                .size(10.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(theme.textMuted.copy(alpha = 0.5f))
-        )
-
-        Column(modifier = Modifier.weight(1f)) {
+                .weight(1f)
+                .background(theme.background.copy(alpha = 0.35f))
+                .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            Text(text = "○", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.labelSmall,
+                color = theme.textMuted.copy(alpha = 0.6f))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = server.name, style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium,
+                    color = theme.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(text = server.url, style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace, color = theme.textMuted,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             Text(
-                text = server.name,
-                style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium,
-                color = theme.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = server.url,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
+                text = "×",
                 color = theme.textMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier
+                    .clickable(role = Role.Button) { onRemove() }
+                    .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
             )
         }
-
-        Text(
-            text = "×",
-            color = theme.textMuted,
-            fontFamily = FontFamily.Monospace,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .clickable(role = Role.Button) { onRemove() }
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-        )
     }
 }
 
@@ -548,122 +927,103 @@ private fun RemoteServerSection(
 ) {
     val theme = LocalOpenCodeTheme.current
     var passwordVisible by remember { mutableStateOf(false) }
+    val canConnect = url.isNotBlank() && !isConnecting
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(CardRadius),
-        colors = CardDefaults.cardColors(containerColor = theme.backgroundElement),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+    Column(modifier = Modifier.fillMaxWidth()) {
+
+        // Section header
+        Column(modifier = Modifier.fillMaxWidth()
+            .padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
+            TuiSectionLabel(label = stringResource(R.string.server_remote_title))
+            Spacer(Modifier.height(Spacing.xxs))
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(text = "#", fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.accent.copy(alpha = 0.3f))
+                Text(text = stringResource(R.string.server_remote_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = theme.textMuted.copy(alpha = 0.7f))
+            }
+        }
+
+        TuiGradientLine()
+
+        // ── Terminal input fields ──────────────────────────────────────────
+        Column(modifier = Modifier.fillMaxWidth()
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xxs)
         ) {
-            SectionHeader(title = stringResource(R.string.server_remote_title))
-
-            Text(
-                text = stringResource(R.string.server_remote_description),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = theme.textMuted
-            )
-
-            Spacer(Modifier.height(4.dp))
-
-            // URL field
-            ModernTextField(
+            TerminalInput(
+                label = stringResource(R.string.field_server_url),
                 value = url,
                 onValueChange = onUrlChange,
-                label = stringResource(R.string.field_server_url),
                 placeholder = stringResource(R.string.field_server_url_placeholder),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("server_url_input")
+                prefix = "url",
+                modifier = Modifier.testTag("server_url_input")
             )
-
-            // Username
-            ModernTextField(
+            TerminalInput(
+                label = stringResource(R.string.field_username),
                 value = username,
                 onValueChange = onUsernameChange,
-                label = stringResource(R.string.field_username),
-                modifier = Modifier.fillMaxWidth()
+                prefix = "usr"
             )
-
-            // Password
-            OutlinedTextField(
+            TerminalInput(
+                label = stringResource(R.string.field_password),
                 value = password,
                 onValueChange = onPasswordChange,
-                label = {
-                    Text(
-                        stringResource(R.string.field_password),
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                visualTransformation = if (passwordVisible)
-                    VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                shape = RoundedCornerShape(InputRadius),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                colors = modernTextFieldColors(theme),
-                trailingIcon = {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .clickable(role = Role.Button) { passwordVisible = !passwordVisible }
-                            .padding(8.dp)
-                    ) {
-                        Text(
-                            text = if (passwordVisible) "◉" else "○",
-                            color = theme.textMuted,
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                prefix = "pwd",
+                isPassword = true,
+                passwordVisible = passwordVisible,
+                onTogglePassword = { passwordVisible = !passwordVisible }
             )
+        }
 
-            Spacer(Modifier.height(4.dp))
+        TuiGradientLine()
 
-            // Modern connect button
-            Button(
-                onClick = onConnect,
-                enabled = url.isNotBlank() && !isConnecting,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp)
-                    .testTag("server_connect_button"),
-                shape = RoundedCornerShape(ButtonRadius),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = theme.accent,
-                    contentColor = theme.background,
-                    disabledContainerColor = theme.accent.copy(alpha = 0.2f),
-                    disabledContentColor = theme.textMuted.copy(alpha = 0.5f)
-                ),
-                elevation = ButtonDefaults.buttonElevation(
-                    defaultElevation = 2.dp,
-                    pressedElevation = 0.dp,
-                    disabledElevation = 0.dp
+        // ── Connect button — full width terminal-style ─────────────────────
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(Sizing.buttonHeightLg)
+                .background(
+                    if (canConnect)
+                        Brush.horizontalGradient(listOf(
+                            theme.accent.copy(alpha = 0.85f),
+                            theme.accent,
+                            theme.accent.copy(alpha = 0.85f)
+                        ))
+                    else
+                        Brush.horizontalGradient(listOf(
+                            theme.accent.copy(alpha = 0.1f),
+                            theme.accent.copy(alpha = 0.15f)
+                        ))
                 )
-            ) {
-                if (isConnecting) {
+                .then(if (canConnect) Modifier.clickable(role = Role.Button) { onConnect() } else Modifier)
+                .testTag("server_connect_button"),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isConnecting) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically) {
                     TuiLoadingIndicator()
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        stringResource(R.string.button_connecting),
+                    Text(stringResource(R.string.button_connecting),
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Medium
-                    )
-                } else {
-                    Text(
-                        "▶  ${stringResource(R.string.button_connect)}",
+                        fontWeight = FontWeight.Medium, color = theme.background)
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "▶", fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (canConnect) theme.background else theme.textMuted.copy(alpha = 0.35f))
+                    Text(text = stringResource(R.string.button_connect),
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                        fontWeight = FontWeight.Bold,
+                        color = if (canConnect) theme.background else theme.textMuted.copy(alpha = 0.35f))
                 }
             }
         }
@@ -677,48 +1037,38 @@ private fun ServerSetupHelpSection() {
     val theme = LocalOpenCodeTheme.current
     var expanded by remember { mutableStateOf(false) }
 
-    Card(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(CardRadius),
-        colors = CardDefaults.cardColors(containerColor = theme.backgroundElement.copy(alpha = 0.7f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        verticalArrangement = Arrangement.spacedBy(Spacing.none)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
+            // Collapsible header row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
                     .clickable(role = Role.Button) { expanded = !expanded }
-                    .padding(vertical = 4.dp),
+                    .padding(vertical = Spacing.xxs),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(RoundedCornerShape(DotRadius))
-                            .background(theme.textMuted)
-                    )
-                    Text(
-                        text = stringResource(R.string.server_setup_title),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = theme.textMuted
-                    )
+                    Text(text = if (expanded) "▾" else "▸", fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall, color = theme.textMuted)
+                    Text(text = stringResource(R.string.server_setup_title),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = FontFamily.Monospace, color = theme.textMuted)
                 }
-                Text(
-                    text = if (expanded) "▾" else "▸",
-                    fontFamily = FontFamily.Monospace,
-                    color = theme.textMuted,
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Text(text = "man setup", fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.textMuted.copy(alpha = 0.35f))
             }
 
             AnimatedVisibility(
@@ -726,59 +1076,44 @@ private fun ServerSetupHelpSection() {
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = stringResource(R.string.server_setup_subtitle),
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    TuiGradientLine()
+                    Text(text = stringResource(R.string.server_setup_subtitle),
                         style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = theme.textMuted
-                    )
+                        fontFamily = FontFamily.Monospace, color = theme.textMuted)
 
                     SetupStep("1", stringResource(R.string.server_setup_step1_title), stringResource(R.string.server_setup_step1_cmd))
                     SetupStep("2", stringResource(R.string.server_setup_step2_title), stringResource(R.string.server_setup_step2_cmd))
                     SetupStep("3", stringResource(R.string.server_setup_step3_title), stringResource(R.string.server_setup_step3_cmd))
 
-                    // Tip box
+                    TuiGradientLine()
+
+                    // Tip block — accent ASCII bordered
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(theme.accent.copy(alpha = 0.08f))
-                            .border(1.dp, theme.accent.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                            .background(theme.accent.copy(alpha = 0.05f))
+                            .border(Sizing.strokeMd, theme.accent.copy(alpha = 0.25f))
+                            .padding(Spacing.sm),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.xs)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(theme.accent)
-                            )
-                            Text(
-                                text = stringResource(R.string.server_setup_tip_label),
-                                fontFamily = FontFamily.Monospace,
-                                color = theme.accent,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Medium
-                            )
+                            Text(text = "▸", fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.labelSmall, color = theme.accent)
+                            Text(text = stringResource(R.string.server_setup_tip_label),
+                                fontFamily = FontFamily.Monospace, color = theme.accent,
+                                style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
                         }
-                        Text(
-                            text = stringResource(R.string.server_setup_tip_text),
-                            fontFamily = FontFamily.Monospace,
-                            color = theme.textMuted,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        ModernCodeBlock(stringResource(R.string.server_setup_find_ip))
-                        Text(
-                            text = stringResource(R.string.server_setup_test_hint),
-                            fontFamily = FontFamily.Monospace,
-                            color = theme.textMuted,
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                        Text(text = stringResource(R.string.server_setup_tip_text),
+                            fontFamily = FontFamily.Monospace, color = theme.textMuted,
+                            style = MaterialTheme.typography.bodySmall)
+                        TerminalCodeBlock(stringResource(R.string.server_setup_find_ip))
+                        Text(text = stringResource(R.string.server_setup_test_hint),
+                            fontFamily = FontFamily.Monospace, color = theme.textMuted,
+                            style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -789,156 +1124,256 @@ private fun ServerSetupHelpSection() {
 @Composable
 private fun SetupStep(number: String, title: String, command: String) {
     val theme = LocalOpenCodeTheme.current
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
             verticalAlignment = Alignment.Top
         ) {
-            Box(
-                modifier = Modifier
-                    .size(18.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(theme.accent.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = number,
-                    fontFamily = FontFamily.Monospace,
-                    color = theme.accent,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-            Text(
-                text = title,
-                fontFamily = FontFamily.Monospace,
-                color = theme.text,
-                style = MaterialTheme.typography.bodySmall
-            )
+            Text(text = "[$number]", fontFamily = FontFamily.Monospace,
+                color = theme.accent, style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold)
+            Text(text = title, fontFamily = FontFamily.Monospace,
+                color = theme.text, style = MaterialTheme.typography.bodySmall)
         }
-        ModernCodeBlock(command = command)
+        TerminalCodeBlock(command = command)
     }
 }
 
 @Composable
-private fun ModernCodeBlock(command: String) {
+private fun TerminalCodeBlock(command: String) {
     val theme = LocalOpenCodeTheme.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
             .background(theme.background)
-            .border(1.dp, theme.border.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .border(Sizing.strokeThin, theme.border.copy(alpha = 0.5f))
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = "$",
-            fontFamily = FontFamily.Monospace,
-            color = theme.textMuted,
-            style = MaterialTheme.typography.bodySmall
-        )
-        Text(
-            text = command,
-            modifier = Modifier.weight(1f),
-            fontFamily = FontFamily.Monospace,
-            color = theme.accent,
-            style = MaterialTheme.typography.bodySmall
-        )
+        Text(text = "$", fontFamily = FontFamily.Monospace,
+            color = theme.textMuted, style = MaterialTheme.typography.bodySmall)
+        Text(text = command, modifier = Modifier.weight(1f),
+            fontFamily = FontFamily.Monospace, color = theme.accent,
+            style = MaterialTheme.typography.bodySmall)
     }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── ASCII Terminal Input ───────────────────────────────────────────────────────
 
+/**
+ * Fully custom ASCII-art input field. No Material OutlinedTextField.
+ *
+ *  ┌─ pwd ───────────────────────────────────────────┐
+ *  │ Password (optional)                        ○ │
+ *  │ _                                            │
+ *  └─────────────────────────────────────────────┘
+ */
 @Composable
-private fun ModernTextField(
+private fun TerminalInput(
+    label: String,
     value: String,
     onValueChange: (String) -> Unit,
-    label: String,
+    modifier: Modifier = Modifier,
     placeholder: String = "",
-    modifier: Modifier = Modifier
+    prefix: String = "",
+    isPassword: Boolean = false,
+    passwordVisible: Boolean = false,
+    onTogglePassword: (() -> Unit)? = null
 ) {
     val theme = LocalOpenCodeTheme.current
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = {
-            Text(
-                label,
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.labelSmall
-            )
-        },
-        placeholder = if (placeholder.isNotEmpty()) ({
-            Text(
-                placeholder,
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodySmall,
-                color = theme.textMuted.copy(alpha = 0.6f)
-            )
-        }) else null,
-        singleLine = true,
-        modifier = modifier,
-        shape = RoundedCornerShape(InputRadius),
-        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-        colors = modernTextFieldColors(theme)
-    )
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val borderColor = if (isFocused) theme.accent else theme.border.copy(alpha = 0.45f)
+    val cornerColor = if (isFocused) theme.accent else theme.border.copy(alpha = 0.6f)
+    val labelColor  = if (isFocused) theme.accent else theme.textMuted.copy(alpha = 0.7f)
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        // Top border: ┌─ prefix ───────────────┐
+        Row(modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(text = "┌─", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.labelSmall, color = cornerColor)
+            if (prefix.isNotEmpty()) {
+                Text(text = prefix, fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = theme.accent.copy(alpha = 0.6f),
+                    fontWeight = FontWeight.Bold)
+                Text(text = " ─", fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall, color = cornerColor)
+            }
+            Box(modifier = Modifier.weight(1f).height(Sizing.strokeThin)
+                .background(Brush.horizontalGradient(listOf(
+                    borderColor.copy(alpha = 0.8f), borderColor.copy(alpha = 0.2f)
+                ))))
+            Text(text = "┐", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.labelSmall, color = cornerColor)
+        }
+
+        // Body row: │ label ··· [toggle] │
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .background(theme.backgroundElement.copy(alpha = if (isFocused) 0.7f else 0.45f))
+                .padding(horizontal = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = "│", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.labelSmall, color = borderColor)
+            Spacer(Modifier.width(Spacing.xs))
+            Column(modifier = Modifier.weight(1f)
+                .padding(vertical = Spacing.xs)) {
+                // Label line
+                Text(text = label, fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall, color = labelColor)
+                // Input line
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.Monospace, color = theme.text
+                    ),
+                    cursorBrush = SolidColor(theme.accent),
+                    visualTransformation = if (isPassword && !passwordVisible)
+                        PasswordVisualTransformation() else VisualTransformation.None,
+                    keyboardOptions = if (isPassword)
+                        KeyboardOptions(keyboardType = KeyboardType.Password)
+                    else KeyboardOptions.Default,
+                    interactionSource = interactionSource,
+                    decorationBox = { inner ->
+                        Box {
+                            if (value.isEmpty() && placeholder.isNotEmpty()) {
+                                Text(placeholder, fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = theme.textMuted.copy(alpha = 0.35f))
+                            }
+                            inner()
+                        }
+                    }
+                )
+            }
+            if (isPassword && onTogglePassword != null) {
+                Text(
+                    text = if (passwordVisible) "◉" else "○",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.textMuted.copy(alpha = 0.6f),
+                    modifier = Modifier.clickable(role = Role.Button) { onTogglePassword() }
+                        .padding(horizontal = Spacing.xs)
+                )
+            }
+            Text(text = "│", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.labelSmall, color = borderColor)
+        }
+
+        // Bottom border: └───────────────┘
+        Row(modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(text = "└", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.labelSmall, color = cornerColor)
+            Box(modifier = Modifier.weight(1f).height(Sizing.strokeThin)
+                .background(Brush.horizontalGradient(listOf(
+                    borderColor.copy(alpha = 0.8f), borderColor.copy(alpha = 0.1f)
+                ))))
+            Text(text = "┘", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.labelSmall, color = cornerColor)
+        }
+    }
 }
 
-@Composable
-private fun modernTextFieldColors(theme: dev.blazelight.p4oc.ui.theme.opencode.OpenCodeTheme) =
-    OutlinedTextFieldDefaults.colors(
-        focusedBorderColor = theme.accent,
-        unfocusedBorderColor = theme.border,
-        focusedLabelColor = theme.accent,
-        unfocusedLabelColor = theme.textMuted,
-        cursorColor = theme.accent,
-        focusedTextColor = theme.text,
-        unfocusedTextColor = theme.text,
-        focusedContainerColor = theme.background.copy(alpha = 0.5f),
-        unfocusedContainerColor = theme.background.copy(alpha = 0.3f)
-    )
-
+/** Pulsing ● dot — pure text, matches SessionCard / SessionListScreen style */
 @Composable
 private fun ScanPulse() {
     val theme = LocalOpenCodeTheme.current
-    val infiniteTransition = rememberInfiniteTransition(label = "scanPulse")
-    val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(600),
-            repeatMode = RepeatMode.Reverse
-        ),
+    val transition = rememberInfiniteTransition(label = "scanPulse")
+    val alpha by transition.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(600, easing = LinearEasing), RepeatMode.Reverse),
         label = "pulseAlpha"
     )
-    Box(
-        modifier = Modifier
-            .size(8.dp)
-            .clip(RoundedCornerShape(2.dp))
-            .alpha(alpha)
-            .background(theme.accent)
-    )
+    Text(text = "●", fontFamily = FontFamily.Monospace,
+        style = MaterialTheme.typography.labelSmall, color = theme.accent.copy(alpha = alpha))
 }
 
+// ── Unified Hero Header ───────────────────────────────────────────────────
+
+/**
+ * Compact hero: top line shared with panel, no dead space.
+ *
+ *   ◈ P4OC ───────────────────────────── ⚙
+ *   └─ connect :: server
+ *   (panel starts immediately, ⌜ is the panel's own top frame)
+ */
 @Composable
-private fun ScanningIndicator() {
-    val theme = LocalOpenCodeTheme.current
-    val infiniteTransition = rememberInfiniteTransition(label = "scanning")
-    val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 800),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "scanPulse"
+private fun ServerHeroHeader(
+    theme: OpenCodeTheme,
+    visible: Boolean,
+    springDp: androidx.compose.animation.core.SpringSpec<Dp>,
+    onSettings: () -> Unit
+) {
+    val hA by animateFloatAsState(if (visible) 1f else 0f,
+        tween(260, easing = FastOutSlowInEasing), label = "hdrA")
+    val hO by animateDpAsState(if (visible) Spacing.none else (-10).dp,
+        springDp, label = "hdrO")
+
+    val infiniteTransition = rememberInfiniteTransition(label = "heroGlow")
+    val glow by infiniteTransition.animateFloat(
+        initialValue = 0.5f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1600, easing = FastOutSlowInEasing),
+            RepeatMode.Reverse), label = "glow"
     )
-    Text(
-        text = "● ${stringResource(R.string.discovery_scanning)}",
-        style = MaterialTheme.typography.bodySmall,
-        fontFamily = FontFamily.Monospace,
-        color = theme.accent.copy(alpha = alpha)
-    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(hA)
+            .offset(y = hO)
+            .background(Brush.verticalGradient(listOf(
+                theme.backgroundElement.copy(alpha = 0.9f),
+                theme.backgroundElement.copy(alpha = 0.5f)
+            )))
+            .padding(horizontal = Spacing.xs)
+            .padding(top = Spacing.sm, bottom = Spacing.xs),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xxs)
+    ) {
+        // Title row: ◈ P4OC ──────────── ⚙
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                Text(text = "◈", fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = theme.accent.copy(alpha = glow), fontWeight = FontWeight.Bold)
+                Text(text = "P4OC", fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.ExtraBold, color = theme.text)
+            }
+            Text(text = "⚙", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.titleMedium,
+                color = theme.textMuted.copy(alpha = 0.65f),
+                modifier = Modifier
+                    .clickable(role = Role.Button) { onSettings() }
+                    .padding(Spacing.xs)
+                    .testTag("server_settings_button"))
+        }
+        // Breadcrumb row: └─ connect :: server
+        Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+            Text(text = "└─", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.accent.copy(alpha = 0.5f))
+            Text(text = "connect", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall, color = theme.textMuted)
+            Text(text = " :: ", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = theme.textMuted.copy(alpha = 0.35f))
+            Text(text = "server", fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold,
+                color = theme.accent.copy(alpha = 0.85f))
+        }
+        Spacer(Modifier.height(Spacing.xs))
+    }
 }

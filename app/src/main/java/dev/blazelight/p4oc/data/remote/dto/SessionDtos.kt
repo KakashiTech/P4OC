@@ -16,13 +16,13 @@ data class TimeDto(
 
 @Serializable
 data class SessionDto(
-    val id: String,
-    @SerialName("projectID") val projectID: String,
-    val directory: String,
+    val id: String = "",
+    @SerialName("projectID") val projectID: String = "",
+    val directory: String = "",
     @SerialName("parentID") val parentID: String? = null,
-    val title: String,
-    val version: String,
-    val time: TimeDto,
+    val title: String = "",
+    val version: String = "",
+    val time: TimeDto? = null,
     val summary: SessionSummaryDto? = null,
     val share: SessionShareDto? = null,
     val revert: SessionRevertDto? = null

@@ -17,9 +17,12 @@ import dev.snipme.highlights.model.SyntaxThemes
 
 /**
  * Compose wrapper for mikepenz's multiplatform-markdown-renderer.
- * 
- * The library (v0.39.2+) handles streaming natively with conflate support,
- * preventing parse thrashing during rapid SSE updates.
+ *
+ * Performance notes:
+ * - highlightsBuilder: keyed on isDarkTheme only — syntax theme never changes mid-session.
+ * - components: keyed on highlightsBuilder — same instance reused across all recompositions.
+ * - markdownState: retainState=true lets the library skip re-parsing unchanged regions.
+ *   The library diffs internally; we don't need to add extra keying here.
  */
 @Composable
 fun StreamingMarkdown(
@@ -30,21 +33,14 @@ fun StreamingMarkdown(
 ) {
     val isDarkTheme = isSystemInDarkTheme()
 
-    
-    // Syntax highlighting configuration
     val highlightsBuilder = remember(isDarkTheme) {
         Highlights.Builder().theme(SyntaxThemes.atom(darkMode = isDarkTheme))
     }
-    
-    // Theme mapping
-    val colors = if (useTertiaryColors) {
-        rememberTertiaryMarkdownColors()
-    } else {
-        rememberOpenCodeMarkdownColors()
-    }
+
+    val colors = if (useTertiaryColors) rememberTertiaryMarkdownColors()
+                 else rememberOpenCodeMarkdownColors()
     val typography = rememberOpenCodeMarkdownTypography()
-    
-    // Custom components with syntax highlighting
+
     val components = remember(highlightsBuilder) {
         markdownComponents(
             codeBlock = {
@@ -52,7 +48,7 @@ fun StreamingMarkdown(
                     content = it.content,
                     node = it.node,
                     highlightsBuilder = highlightsBuilder,
-                    showHeader = false,  // TUI density - no header
+                    showHeader = false,
                 )
             },
             codeFence = {
@@ -60,16 +56,13 @@ fun StreamingMarkdown(
                     content = it.content,
                     node = it.node,
                     highlightsBuilder = highlightsBuilder,
-                    showHeader = true,  // Show language label for fenced blocks
+                    showHeader = true,
                 )
             },
         )
     }
-    
-    val markdownState = rememberMarkdownState(
-        content = text,
-        retainState = true
-    )
+
+    val markdownState = rememberMarkdownState(content = text, retainState = true)
 
     Markdown(
         markdownState = markdownState,

@@ -2,7 +2,12 @@ package dev.blazelight.p4oc.ui.navigation
 
 import android.net.Uri
 import androidx.compose.animation.*
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -16,7 +21,50 @@ import dev.blazelight.p4oc.ui.screens.settings.VisualSettingsScreen
 import dev.blazelight.p4oc.ui.screens.setup.SetupScreen
 import dev.blazelight.p4oc.ui.tabs.MainTabScreen
 
-private const val ANIMATION_DURATION = 300
+// ── True iOS UINavigationController illusion ──────────────────────────────
+// Push easing : cubic-bezier(0.25, 0.46, 0.45, 0.94) — exact UIKit ease-out
+// Exit easing : cubic-bezier(0.42, 0.0,  0.58, 1.0)  — ease-in-out for departures
+private val iosEaseOut   = CubicBezierEasing(0.25f, 0.46f, 0.45f, 0.94f)
+private val iosEaseInOut = CubicBezierEasing(0.42f, 0.00f, 0.58f, 1.00f)
+
+private val iosEnterSpring = spring<IntOffset>(dampingRatio = 0.90f, stiffness = 460f)
+private val iosPopSpring   = spring<IntOffset>(dampingRatio = 0.86f, stiffness = 600f)
+private val iosBgSlide     = tween<IntOffset>(280, easing = iosEaseOut)
+private val iosFadeIn      = tween<Float>(200, easing = iosEaseOut)
+private val iosFadeOut     = tween<Float>(160, easing = iosEaseInOut)
+
+// PUSH ENTER: new screen springs in from full right + fade
+private val iosPushEnter: AnimatedContentTransitionScope<*>.() -> EnterTransition = {
+    slideInHorizontally(iosEnterSpring) { it } + fadeIn(iosFadeIn)
+}
+// PUSH EXIT: old screen recedes 1/3 to left + depth scale + fade
+private val iosPushExit: AnimatedContentTransitionScope<*>.() -> ExitTransition = {
+    slideOutHorizontally(iosBgSlide) { -(it / 3) } +
+    scaleOut(tween(280, easing = iosEaseOut), targetScale = 0.94f) +
+    fadeOut(iosFadeOut)
+}
+// POP ENTER: background screen slides back from 1/3 left — NO scale
+// iOS: the background screen was never scaled, it only slid away
+private val iosPopEnter: AnimatedContentTransitionScope<*>.() -> EnterTransition = {
+    slideInHorizontally(iosBgSlide) { -(it / 3) } + fadeIn(iosFadeIn)
+}
+// POP EXIT: top screen springs back to right + subtle scale + fade
+private val iosPopExit: AnimatedContentTransitionScope<*>.() -> ExitTransition = {
+    slideOutHorizontally(iosPopSpring) { it } +
+    scaleOut(tween(200, easing = iosEaseInOut), targetScale = 0.98f) +
+    fadeOut(iosFadeOut)
+}
+
+// CROSSFADE: used for stack-replace transitions (autoconnect Server→Sessions, disconnect
+// Sessions→Server). These have no inherent directionality so a slide would feel wrong.
+// A clean fade communicates "level change" without implying forward or back.
+// OPTIMIZED: Removed scale to prevent jank, faster timing for fluid feel
+private val crossFadeEnter: AnimatedContentTransitionScope<*>.() -> EnterTransition = {
+    fadeIn(tween(120, easing = iosEaseOut))
+}
+private val crossFadeExit: AnimatedContentTransitionScope<*>.() -> ExitTransition = {
+    fadeOut(tween(100, easing = iosEaseInOut))
+}
 
 /**
  * Root navigation graph.
@@ -31,32 +79,18 @@ fun NavGraph(
     NavHost(
         navController = navController,
         startDestination = startDestination,
-        enterTransition = {
-            slideInHorizontally(
-                initialOffsetX = { it },
-                animationSpec = tween(ANIMATION_DURATION)
-            ) + fadeIn(animationSpec = tween(ANIMATION_DURATION))
-        },
-        exitTransition = {
-            slideOutHorizontally(
-                targetOffsetX = { -it / 3 },
-                animationSpec = tween(ANIMATION_DURATION)
-            ) + fadeOut(animationSpec = tween(ANIMATION_DURATION))
-        },
-        popEnterTransition = {
-            slideInHorizontally(
-                initialOffsetX = { -it / 3 },
-                animationSpec = tween(ANIMATION_DURATION)
-            ) + fadeIn(animationSpec = tween(ANIMATION_DURATION))
-        },
-        popExitTransition = {
-            slideOutHorizontally(
-                targetOffsetX = { it },
-                animationSpec = tween(ANIMATION_DURATION)
-            ) + fadeOut(animationSpec = tween(ANIMATION_DURATION))
-        }
+        enterTransition = iosPushEnter,
+        exitTransition = iosPushExit,
+        popEnterTransition = iosPopEnter,
+        popExitTransition = iosPopExit
     ) {
-        composable(Screen.Setup.route) {
+        composable(
+            route = Screen.Setup.route,
+            enterTransition    = { crossFadeEnter(this) },
+            exitTransition     = { crossFadeExit(this) },
+            popEnterTransition = { crossFadeEnter(this) },
+            popExitTransition  = { crossFadeExit(this) }
+        ) {
             SetupScreen(
                 onSetupComplete = {
                     navController.navigate(Screen.Server.route) {
@@ -66,7 +100,13 @@ fun NavGraph(
             )
         }
 
-        composable(Screen.Server.route) {
+        composable(
+            route = Screen.Server.route,
+            enterTransition    = { crossFadeEnter(this) },
+            exitTransition     = { crossFadeExit(this) },
+            popEnterTransition = { crossFadeEnter(this) },
+            popExitTransition  = { crossFadeExit(this) }
+        ) {
             ServerScreen(
                 onNavigateToSessions = {
                     navController.navigate(Screen.Sessions.route) {
@@ -85,7 +125,13 @@ fun NavGraph(
         }
 
         // Main tab container - this is where the tab-based UI lives
-        composable(Screen.Sessions.route) {
+        composable(
+            route = Screen.Sessions.route,
+            enterTransition    = { crossFadeEnter(this) },
+            exitTransition     = { crossFadeExit(this) },
+            popEnterTransition = { crossFadeEnter(this) },
+            popExitTransition  = { crossFadeExit(this) }
+        ) {
             MainTabScreen(
                 onDisconnect = {
                     navController.navigate(Screen.Server.route) {

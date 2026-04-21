@@ -1,17 +1,21 @@
 package dev.blazelight.p4oc.ui.components.chat
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.Permission
+import dev.blazelight.p4oc.ui.components.toolwidgets.PendingApprovalButtons
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
@@ -19,7 +23,7 @@ import dev.blazelight.p4oc.ui.theme.TuiCodeFontSize
 
 /**
  * Compact inline permission prompt that appears below a tool widget.
- * Shows: permission title + Allow/Always/Reject buttons
+ * TUI terminal style: left color bar, monospace label, flat TuiKey buttons.
  */
 @Composable
 fun InlinePermissionPrompt(
@@ -30,88 +34,78 @@ fun InlinePermissionPrompt(
     modifier: Modifier = Modifier
 ) {
     val theme = LocalOpenCodeTheme.current
-    
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(theme.warning.copy(alpha = 0.1f))
-            .padding(Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+    val accentColor = theme.warning
+
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { visible = true }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.97f)
     ) {
-        // Permission title with icon
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .background(theme.backgroundPanel.copy(alpha = 0.7f))
         ) {
-            Text(
-                text = "◉",
-                style = MaterialTheme.typography.labelMedium,
-                color = theme.warning
+            // Left accent bar
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .width(Sizing.strokeMd * 2)
+                    .matchParentSize()
+                    .background(accentColor.copy(alpha = 0.8f))
             )
-            Text(
-                text = permission.title,
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = TuiCodeFontSize.lg
-                ),
-                color = theme.text,
-                modifier = Modifier.weight(1f)
-            )
-        }
-        
-        // Action buttons row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-        ) {
-            OutlinedButton(
-                onClick = onReject,
+            Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .height(Sizing.buttonHeightSm),
-                shape = RectangleShape,
-                contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = Spacing.none),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = theme.error
-                )
+                    .fillMaxWidth()
+                    .padding(start = Spacing.md, end = Spacing.sm, top = Spacing.xs, bottom = Spacing.xs),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs)
             ) {
-                Text(
-                    stringResource(R.string.deny),
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-            
-            OutlinedButton(
-                onClick = onAlways,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(Sizing.buttonHeightSm),
-                shape = RectangleShape,
-                contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = Spacing.none)
-            ) {
-                Text(
-                    stringResource(R.string.always_allow),
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-            
-            Button(
-                onClick = onAllow,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(Sizing.buttonHeightSm),
-                shape = RectangleShape,
-                contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = Spacing.none),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = theme.success,
-                    contentColor = theme.background
-                )
-            ) {
-                Text(
-                    stringResource(R.string.allow),
-                    style = MaterialTheme.typography.labelSmall
+                // Header row: glyph + permission type tag + title
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                ) {
+                    Text(
+                        text = getPermissionGlyph(permission.type),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = TuiCodeFontSize.lg,
+                        color = accentColor,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "[${permission.type.uppercase()}]",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = TuiCodeFontSize.sm,
+                        color = accentColor.copy(alpha = 0.65f),
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = permission.title,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = TuiCodeFontSize.lg,
+                        color = theme.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                // TUI flat keys row
+                PendingApprovalButtons(
+                    onApprove = onAllow,
+                    onDeny = onReject,
+                    onAlways = onAlways
                 )
             }
         }
     }
+}
+
+private fun getPermissionGlyph(type: String) = when (type.lowercase()) {
+    "file.write", "file.edit"  -> "✎"
+    "file.read"                -> "◎"
+    "bash", "shell", "command" -> "❯"
+    "file.delete"              -> "✗"
+    else                       -> "◈"
 }

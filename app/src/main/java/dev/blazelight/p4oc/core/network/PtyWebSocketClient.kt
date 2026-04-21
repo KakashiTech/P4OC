@@ -19,7 +19,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.random.Random
 
 /**
  * WebSocket client for PTY terminal I/O.
@@ -46,6 +45,10 @@ class PtyWebSocketClient constructor(
 
     private val _output = MutableSharedFlow<String>(extraBufferCapacity = 1000)
     val output: SharedFlow<String> = _output.asSharedFlow()
+
+    // Native output buffer and reconnection manager
+    private val nativeOutputBuf: Long = NativePtySupport.createBuffer(2048)
+    private val nativeReconnect: Long = NativePtySupport.createReconnect()
 
     private var currentWebSocket: WebSocket? = null
     private var currentPtyId: String? = null
@@ -132,15 +135,24 @@ class PtyWebSocketClient constructor(
                         }
                         AppLog.d(TAG, "WebSocket connected to $ptyId")
                         reconnectAttempts.set(0)
+                        NativePtySupport.onConnected(nativeReconnect)
                         _connectionState.value = ConnectionState.Connected(ptyId)
                     }
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     if (generation != gen) return
-                    AppLog.v(TAG, "Received: ${text.take(100)}${if (text.length > 100) "..." else ""}")
+                    // Push to native lock-free buffer (hot path, no coroutine overhead)
+                    val pushed = NativePtySupport.pushFrame(nativeOutputBuf, text)
+                    if (!pushed) {
+                        AppLog.v(TAG, "Native output buffer full, draining first")
+                    }
+                    // Drain and emit to SharedFlow
                     scope.launch {
-                        _output.emit(text)
+                        val frames = NativePtySupport.drainFrames(nativeOutputBuf)
+                        for (frame in frames) {
+                            _output.emit(frame)
+                        }
                     }
                 }
 
@@ -201,30 +213,28 @@ class PtyWebSocketClient constructor(
     }
 
     private fun scheduleReconnect(ptyId: String) {
-        val attempts = reconnectAttempts.get()
-        if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+        // Native reconnection manager handles attempt count and jitter
+        if (!NativePtySupport.shouldRetry(nativeReconnect)) {
             AppLog.w(TAG, "Max reconnect attempts reached for $ptyId, giving up")
+            NativePtySupport.resetReconnect(nativeReconnect)
             reconnectAttempts.set(0)
             return
         }
-        val base = RECONNECT_DELAYS_MS[attempts.coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)]
-        val delayMs = jitter(base)
-        reconnectAttempts.incrementAndGet()
-        AppLog.d(TAG, "Scheduling reconnect attempt ${attempts + 1} for $ptyId in ${delayMs}ms")
+        val delayMs = NativePtySupport.nextDelayMs(nativeReconnect)
+        if (delayMs < 0) {
+            AppLog.w(TAG, "Native reconnect returned -1 for $ptyId, giving up")
+            return
+        }
+        val attempt = NativePtySupport.attempts(nativeReconnect)
+        reconnectAttempts.set(attempt)
+        AppLog.d(TAG, "Scheduling reconnect attempt $attempt for $ptyId in ${delayMs}ms")
         scope.launch {
             delay(delayMs)
             if (!userDisconnected && currentWebSocket == null) {
-                AppLog.d(TAG, "Attempting reconnect to $ptyId (attempt ${reconnectAttempts.get()})")
+                AppLog.d(TAG, "Attempting reconnect to $ptyId (attempt $attempt)")
                 connect(ptyId)
             }
         }
-    }
-
-    private fun jitter(baseMs: Long, ratio: Double = 0.2): Long {
-        if (baseMs <= 0) return 0
-        val min = (baseMs * (1.0 - ratio)).toLong().coerceAtLeast(0)
-        val max = (baseMs * (1.0 + ratio)).toLong().coerceAtLeast(min + 1)
-        return Random.nextLong(min, max)
     }
 
     /**
@@ -271,5 +281,7 @@ class PtyWebSocketClient constructor(
     override fun close() {
         disconnect()
         supervisorJob.cancel()
+        NativePtySupport.destroyBuffer(nativeOutputBuf)
+        NativePtySupport.destroyReconnect(nativeReconnect)
     }
 }

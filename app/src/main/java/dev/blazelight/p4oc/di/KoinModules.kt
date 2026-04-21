@@ -6,6 +6,7 @@ import dev.blazelight.p4oc.core.security.CredentialStore
 import dev.blazelight.p4oc.core.network.DirectoryManager
 import dev.blazelight.p4oc.core.network.MdnsDiscoveryManager
 import dev.blazelight.p4oc.core.network.PtyWebSocketClient
+import dev.blazelight.p4oc.core.network.SessionDataCache
 import dev.blazelight.p4oc.core.notification.NotificationEventObserver
 import dev.blazelight.p4oc.core.notification.NotificationHelper
 
@@ -26,6 +27,9 @@ import dev.blazelight.p4oc.ui.screens.projects.ProjectsViewModel
 import dev.blazelight.p4oc.ui.screens.terminal.TerminalViewModel
 import dev.blazelight.p4oc.ui.tabs.TabManager
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.module.dsl.viewModelOf
@@ -67,6 +71,8 @@ val networkModule = module {
     single { MdnsDiscoveryManager(androidContext()) }
     factory { PtyWebSocketClient(get()) }
     single { ConnectionManager(androidContext(), get(), get(), get()) }
+    single { SessionDataCache(get()) }
+
 }
 
 val viewModelModule = module {

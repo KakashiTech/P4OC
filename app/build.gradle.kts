@@ -76,6 +76,8 @@ android {
         buildConfig = true
     }
 
+    // Compose Compiler handled by Kotlin Compose plugin (alias in plugins block)
+
     packaging {
         jniLibs {
             useLegacyPackaging = false
@@ -92,11 +94,29 @@ android {
             isUniversalApk = false
         }
     }
+
+    // C++ Native build for AnimationOptimizer
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    // NDK version (optional but recommended)
+    ndkVersion = "26.1.10909125"
 }
 
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // Recomposition tracing enabled unconditionally - reports go to build/compose_compiler
+        // These are only generated during compilation, no runtime impact
+        freeCompilerArgs.addAll(
+            "-P",
+            "plugin:androidx.compose.compiler.plugins.kotlin:reportsDestination=" +
+                layout.buildDirectory.dir("compose_compiler").get().asFile.absolutePath
+        )
     }
 }
 

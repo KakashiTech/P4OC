@@ -1,41 +1,43 @@
 package dev.blazelight.p4oc.ui.components.chat
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.scaleIn
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import dev.blazelight.p4oc.R
 import androidx.compose.ui.window.DialogProperties
+import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.Permission
-import androidx.compose.ui.graphics.Color
-import dev.blazelight.p4oc.ui.theme.SemanticColors
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
-import dev.blazelight.p4oc.ui.theme.TuiCodeFontSize
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import dev.blazelight.p4oc.ui.theme.Spacing
+import dev.blazelight.p4oc.ui.theme.SemanticColors
 import dev.blazelight.p4oc.ui.theme.Sizing
+import dev.blazelight.p4oc.ui.theme.Spacing
+import dev.blazelight.p4oc.ui.theme.TuiCodeFontSize
+import kotlinx.serialization.json.jsonPrimitive
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,120 +49,118 @@ fun PermissionDialogEnhanced(
 ) {
     val theme = LocalOpenCodeTheme.current
     var showFullPreview by remember { mutableStateOf(false) }
-    
+
     val codePreview = remember(permission) { extractCodePreview(permission) }
     val filePath = remember(permission) { extractFilePath(permission) }
     val command = remember(permission) { extractCommand(permission) }
-    
+    val typeColor = getPermissionColor(permission.type)
+    val glyph = getPermissionSymbol(permission.type)
+
     Dialog(
         onDismissRequest = onDeny,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.65f)
-                .border(Sizing.strokeMd, theme.border, RectangleShape),
-            shape = RectangleShape,
-            color = theme.background
+        AnimatedVisibility(
+            visible = true,
+            enter = fadeIn(tween(160)) + scaleIn(tween(160), initialScale = 0.96f)
         ) {
-            Column(
-                modifier = Modifier.fillMaxSize()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.95f)
+                    .fillMaxHeight(0.65f)
+                    .border(Sizing.strokeMd, typeColor.copy(alpha = 0.55f), RectangleShape)
+                    .background(theme.background)
             ) {
-                // TUI Header
-                Surface(
-                    color = theme.backgroundElement,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // ── TUI header bar ──────────────────────────────────────────
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .background(typeColor.copy(alpha = 0.10f))
                             .padding(horizontal = Spacing.md, vertical = Spacing.sm),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
                     ) {
                         Text(
-                            text = getPermissionSymbol(permission.type),
-                            color = getPermissionColor(permission.type),
-                            fontFamily = FontFamily.Monospace
+                            text = glyph,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = TuiCodeFontSize.xxl,
+                            color = typeColor,
+                            fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "[ ${stringResource(R.string.permission_required)} ]",
-                            style = MaterialTheme.typography.titleMedium,
+                            text = "[ ${formatPermissionType(permission.type).uppercase()} ]",
                             fontFamily = FontFamily.Monospace,
-                            color = theme.text
+                            fontSize = TuiCodeFontSize.lg,
+                            color = typeColor,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            text = getPermissionDescription(permission.type),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = TuiCodeFontSize.sm,
+                            color = theme.textMuted.copy(alpha = 0.7f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
-                }
-                
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(Spacing.xl),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.xl)
-                ) {
-                    Text(
-                        text = permission.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontFamily = FontFamily.Monospace,
-                        color = theme.text
+                    // thin color rule under header
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(Sizing.strokeMd)
+                            .background(typeColor.copy(alpha = 0.4f))
                     )
-                    
-                    PermissionTypeCard(permission.type)
-                    
-                    filePath?.let { path ->
-                        FilePathCard(path)
-                    }
-                    
-                    command?.let { cmd ->
-                        CommandCard(cmd)
-                    }
-                    
-                    codePreview?.let { code ->
-                        CodePreviewCard(
-                            code = code,
-                            isExpanded = showFullPreview,
-                            onToggleExpand = { showFullPreview = !showFullPreview }
-                        )
-                    }
-                }
-                
-                HorizontalDivider(color = theme.border)
-                
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(Spacing.xl),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.md, Alignment.End)
-                ) {
-                    OutlinedButton(
-                        onClick = onDeny,
-                        shape = RectangleShape,
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = theme.error
-                        )
+
+                    // ── Scrollable content ──────────────────────────────────────
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                     ) {
-                        Text("✗ ${stringResource(R.string.deny)}", fontFamily = FontFamily.Monospace)
-                    }
-                    
-                    TextButton(onClick = onAlways, shape = RectangleShape) {
+                        // Permission title
                         Text(
-                            "◎ ${stringResource(R.string.always_allow)}",
+                            text = permission.title,
                             fontFamily = FontFamily.Monospace,
-                            color = theme.textMuted
+                            fontSize = TuiCodeFontSize.xl,
+                            color = theme.text,
+                            fontWeight = FontWeight.Medium
                         )
+
+                        filePath?.let { path -> FilePathCard(path) }
+                        command?.let { cmd -> CommandCard(cmd) }
+                        codePreview?.let { code ->
+                            CodePreviewCard(
+                                code = code,
+                                isExpanded = showFullPreview,
+                                onToggleExpand = { showFullPreview = !showFullPreview }
+                            )
+                        }
                     }
-                    
-                    Button(
-                        onClick = onAllow,
-                        shape = RectangleShape,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = theme.success,
-                            contentColor = theme.background
-                        )
+
+                    // ── Divider ─────────────────────────────────────────────────
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(Sizing.strokeMd)
+                            .background(theme.border.copy(alpha = 0.4f))
+                    )
+
+                    // ── TUI action keys row ─────────────────────────────────────
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(theme.backgroundPanel.copy(alpha = 0.5f))
+                            .padding(horizontal = Spacing.md, vertical = Spacing.sm)
                     ) {
-                        Text("✓ ${stringResource(R.string.allow)}", fontFamily = FontFamily.Monospace)
+                        dev.blazelight.p4oc.ui.components.toolwidgets.PendingApprovalButtons(
+                            onApprove = onAllow,
+                            onDeny = onDeny,
+                            onAlways = onAlways
+                        )
                     }
                 }
             }
@@ -431,13 +431,6 @@ private fun getPermissionSymbol(type: String) = when (type.lowercase()) {
     else -> "◈"
 }
 
-private fun getPermissionIcon(type: String) = when (type.lowercase()) {
-    "file.write", "file.edit" -> Icons.Default.Edit
-    "file.read" -> Icons.Default.Visibility
-    "bash", "shell", "command" -> Icons.Default.Terminal
-    "file.delete" -> Icons.Default.Delete
-    else -> Icons.Default.Security
-}
 
 @Composable
 private fun getPermissionColor(type: String): Color = SemanticColors.Permission.forType(type)

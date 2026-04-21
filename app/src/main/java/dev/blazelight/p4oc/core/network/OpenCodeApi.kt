@@ -239,6 +239,9 @@ interface OpenCodeApi {
     @GET("mcp")
     suspend fun getMcpStatus(): Map<String, McpStatusDto>
 
+    @GET("skill")
+    suspend fun getSkills(): List<SkillDto>
+
     // ============================================================================
     // OAuth & Auth Endpoints (aligned with SDK)
     // ============================================================================
