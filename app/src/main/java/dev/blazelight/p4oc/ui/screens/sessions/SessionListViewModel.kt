@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
 
 
 class SessionListViewModel constructor(
@@ -74,46 +75,62 @@ class SessionListViewModel constructor(
     private fun loadSessionStatuses() {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: return@launch
-            
-            // Fetch statuses from global scope + each known project directory
             val projects = _uiState.value.projects
-            val directories = listOf<String?>(null) + projects.map { it.worktree }
-            
+
+            val netSemaphore = Semaphore(3)
             val allStatuses = mutableMapOf<String, SessionStatus>()
-            
-            // Limit concurrency to avoid request storms on first load
-            val semaphore = java.util.concurrent.Semaphore(3)
-            val results = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
-            directories.forEach { directory ->
-                results += viewModelScope.async {
-                    semaphore.acquire()
+
+            coroutineScope {
+                val globalDeferred = async {
+                    netSemaphore.acquire()
                     try {
-                        val result = safeApiCall { api.getSessionStatuses(directory) }
-                        when (result) {
-                            is ApiResult.Success -> {
-                                result.data.forEach { (sessionId, dto) ->
-                                    allStatuses[sessionId] = when (dto.type) {
-                                        "busy" -> SessionStatus.Busy
-                                        "idle" -> SessionStatus.Idle
-                                        "retry" -> SessionStatus.Retry(
-                                            attempt = dto.attempt ?: 0,
-                                            message = dto.message ?: "",
-                                            next = dto.next ?: 0L
-                                        )
-                                        else -> SessionStatus.Idle
-                                    }
-                                }
-                            }
-                            is ApiResult.Error -> {}
-                        }
+                        safeApiCall { api.getSessionStatuses(directory = null) }
                     } finally {
-                        semaphore.release()
+                        netSemaphore.release()
+                    }
+                }
+
+                val projectDeferreds = projects.map { project ->
+                    async {
+                        netSemaphore.acquire()
+                        try {
+                            safeApiCall { api.getSessionStatuses(directory = project.worktree) }
+                        } finally {
+                            netSemaphore.release()
+                        }
+                    }
+                }
+
+                val globalResult = globalDeferred.await()
+                if (globalResult is ApiResult.Success) {
+                    globalResult.data.forEach { (sessionId, dto) ->
+                        allStatuses[sessionId] = mapStatusDto(dto)
+                    }
+                }
+
+                projectDeferreds.awaitAll().forEach { result ->
+                    if (result is ApiResult.Success) {
+                        result.data.forEach { (sessionId, dto) ->
+                            allStatuses[sessionId] = mapStatusDto(dto)
+                        }
                     }
                 }
             }
-            results.awaitAll()
-            
+
             _uiState.update { it.copy(sessionStatuses = allStatuses) }
+        }
+    }
+
+    private fun mapStatusDto(dto: dev.blazelight.p4oc.data.remote.dto.SessionStatusDto): SessionStatus {
+        return when (dto.type) {
+            "busy" -> SessionStatus.Busy
+            "idle" -> SessionStatus.Idle
+            "retry" -> SessionStatus.Retry(
+                attempt = dto.attempt ?: 0,
+                message = dto.message ?: "",
+                next = dto.next ?: 0L
+            )
+            else -> SessionStatus.Idle
         }
     }
 
@@ -143,41 +160,54 @@ class SessionListViewModel constructor(
                 _uiState.update { it.copy(projects = projects.sortedByDescending { p -> p.worktree }) }
 
                 // Fetch all sessions in parallel: global + each project
+                // Use semaphore to limit concurrent requests — prevents network stack
+                // contention on low-end devices with many projects
+                val netSemaphore = Semaphore(3)
                 val allSessionsWithProjects = coroutineScope {
                     // Global sessions (no directory filter)
                     val globalDeferred = async {
-                        val result = safeApiCall { api.listSessions(directory = null, roots = true, limit = 100) }
-                        when (result) {
-                            is ApiResult.Success -> result.data.map { dto ->
-                                SessionWithProject(
-                                    session = SessionMapper.mapToDomain(dto),
-                                    projectId = null,
-                                    projectName = null
-                                )
+                        netSemaphore.acquire()
+                        try {
+                            val result = safeApiCall { api.listSessions(directory = null, roots = true, limit = 100) }
+                            when (result) {
+                                is ApiResult.Success -> result.data.map { dto ->
+                                    SessionWithProject(
+                                        session = SessionMapper.mapToDomain(dto),
+                                        projectId = null,
+                                        projectName = null
+                                    )
+                                }
+                                is ApiResult.Error -> {
+                                    AppLog.e("SessionListVM", "Failed to load global sessions: ${result.message}")
+                                    emptyList()
+                                }
                             }
-                            is ApiResult.Error -> {
-                                AppLog.e("SessionListVM", "Failed to load global sessions: ${result.message}")
-                                emptyList()
-                            }
+                        } finally {
+                            netSemaphore.release()
                         }
                     }
 
                     // Sessions for each project
                     val projectDeferreds = projects.map { project ->
                         async {
-                            val result = safeApiCall { api.listSessions(directory = project.worktree, roots = true, limit = 100) }
-                            when (result) {
-                                is ApiResult.Success -> result.data.map { dto ->
-                                    SessionWithProject(
-                                        session = SessionMapper.mapToDomain(dto),
-                                        projectId = project.id,
-                                        projectName = project.name
-                                    )
+                            netSemaphore.acquire()
+                            try {
+                                val result = safeApiCall { api.listSessions(directory = project.worktree, roots = true, limit = 100) }
+                                when (result) {
+                                    is ApiResult.Success -> result.data.map { dto ->
+                                        SessionWithProject(
+                                            session = SessionMapper.mapToDomain(dto),
+                                            projectId = project.id,
+                                            projectName = project.name
+                                        )
+                                    }
+                                    is ApiResult.Error -> {
+                                        AppLog.e("SessionListVM", "Failed to load sessions for ${project.name}: ${result.message}")
+                                        emptyList()
+                                    }
                                 }
-                                is ApiResult.Error -> {
-                                    AppLog.e("SessionListVM", "Failed to load sessions for ${project.name}: ${result.message}")
-                                    emptyList()
-                                }
+                            } finally {
+                                netSemaphore.release()
                             }
                         }
                     }
@@ -217,14 +247,15 @@ class SessionListViewModel constructor(
             AppLog.d("SessionListVM", "createSession called with title=$title, directory=$directory")
 
             val api = connectionManager.getApi() ?: run {
-                _uiState.update { it.copy(isLoading = false, error = "Not connected") }
+                _uiState.update { it.copy(isLoading = false) }
                 return@launch
             }
-            AppLog.d("SessionListVM", "Calling API createSession with directory=$directory")
+            val request = CreateSessionRequest(title = title)
+            AppLog.d("SessionListVM", "Calling API createSession: title=${request.title}, parentID=${request.parentID}, directory=$directory")
             val result = safeApiCall { 
                 api.createSession(
                     directory = directory,
-                    request = CreateSessionRequest(title = title)
+                    request = request
                 )
             }
 

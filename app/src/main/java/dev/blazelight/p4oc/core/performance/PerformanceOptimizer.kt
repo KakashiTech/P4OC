@@ -77,25 +77,6 @@ object PerformanceOptimizer {
         // and every 1000ms with no-op predictive preloading. Real metrics still recorded
         // via recordPerformanceEvent() and queryable via getAllMetrics().
 
-        // Drain performance events at a low cadence to keep metrics fresh with minimal overhead.
-        optimizationScope?.launch {
-            while (isActive) {
-                try {
-                    processPerformanceEvents()
-                } catch (e: Exception) {
-                    AppLog.w("PerformanceOptimizer", "Error processing perf events: ${e.message}", e)
-                }
-                delay(250)
-            }
-        }
-    }
-    
-    private suspend fun processPerformanceEvents() {
-        while (performanceChannel.tryReceive().getOrNull()?.let { event ->
-            processEvent(event)
-        } != null) {
-            // Process all available events
-        }
     }
     
     private fun processEvent(event: PerformanceEvent) {
@@ -147,50 +128,6 @@ object PerformanceOptimizer {
                 val toRemove = sortedByAccess.take(sortedByAccess.size / 2)
                 toRemove.forEach { componentCache.remove(it.key) }
             }
-        }
-    }
-    
-    private suspend fun performPredictivePreloading(context: Context) {
-        // Predictive preloading based on usage patterns
-        val mostUsedComponents = performanceMetrics.entries
-            .sortedByDescending { it.value.cacheHitRate }
-            .take(5)
-            .map { it.key }
-        
-        mostUsedComponents.forEach { component ->
-            if (!preloadQueue.contains(component)) {
-                preloadQueue.add(component)
-                preloadComponent(context, component)
-            }
-        }
-    }
-    
-    private suspend fun preloadComponent(context: Context, component: String) {
-        try {
-            val startTime = System.currentTimeMillis()
-            // Simulate preloading - in real implementation, this would preload actual resources
-            delay(10)
-            val duration = System.currentTimeMillis() - startTime
-            
-            performanceChannel.send(
-                PerformanceEvent(
-                    EventType.PRELOAD_SUCCESS,
-                    component,
-                    duration,
-                    0
-                )
-            )
-        } catch (e: Exception) {
-            performanceChannel.send(
-                PerformanceEvent(
-                    EventType.PRELOAD_FAILED,
-                    component,
-                    0,
-                    0
-                )
-            )
-        } finally {
-            preloadQueue.remove(component)
         }
     }
     

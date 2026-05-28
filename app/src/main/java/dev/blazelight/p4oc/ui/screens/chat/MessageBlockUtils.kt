@@ -40,20 +40,48 @@ import androidx.compose.ui.text.font.FontFamily
 // blocks, tool calls) independently — critical when a session has many thoughts.
 @Stable
 sealed class FlatChatItem {
-    // Separator / accent bar start for an assistant turn
-    @Stable data class AssistantBarStart(val messageId: String) : FlatChatItem()
-    // Separator / accent bar end for an assistant turn (revert row or spacing)
+    abstract val key: String
+    abstract val contentType: String
+
+    @Stable data class AssistantBarStart(val messageId: String) : FlatChatItem() {
+        override val key get() = "abs_$messageId"
+        override val contentType get() = "bar_start"
+    }
     @Stable data class AssistantBarEnd(
         val messageId: String,
         val showRevert: Boolean
-    ) : FlatChatItem()
-    @Stable data class UserPart(val messageWithParts: MessageWithParts) : FlatChatItem()
-    @Stable data class TextPart(val part: Part.Text, val msgId: String) : FlatChatItem()
-    @Stable data class ReasoningPart(val part: Part.Reasoning, val msgId: String) : FlatChatItem()
-    @Stable data class ReasoningGroup(val items: List<Part.Reasoning>, val msgId: String, val groupIndex: Int) : FlatChatItem()
-    @Stable data class ToolBatch(val tools: List<Part.Tool>, val msgId: String, val batchIndex: Int) : FlatChatItem()
-    @Stable data class FilePart(val part: Part.File, val msgId: String) : FlatChatItem()
-    @Stable data class PatchPart(val part: Part.Patch, val msgId: String) : FlatChatItem()
+    ) : FlatChatItem() {
+        override val key get() = "abe_$messageId"
+        override val contentType get() = "bar_end"
+    }
+    @Stable data class UserPart(val messageWithParts: MessageWithParts) : FlatChatItem() {
+        override val key get() = "u_${messageWithParts.message.id}"
+        override val contentType get() = "user"
+    }
+    @Stable data class TextPart(val part: Part.Text, val msgId: String) : FlatChatItem() {
+        override val key get() = "txt_${msgId}_${part.id}"
+        override val contentType get() = "text"
+    }
+    @Stable data class ReasoningPart(val part: Part.Reasoning, val msgId: String) : FlatChatItem() {
+        override val key get() = "rea_${msgId}_${part.id}"
+        override val contentType get() = "reasoning"
+    }
+    @Stable data class ReasoningGroup(val items: List<Part.Reasoning>, val msgId: String, val groupIndex: Int) : FlatChatItem() {
+        override val key get() = "rg_${msgId}_$groupIndex"
+        override val contentType get() = "reasoning_group"
+    }
+    @Stable data class ToolBatch(val tools: List<Part.Tool>, val msgId: String, val batchIndex: Int) : FlatChatItem() {
+        override val key get() = "tb_${msgId}_$batchIndex"
+        override val contentType get() = "tools"
+    }
+    @Stable data class FilePart(val part: Part.File, val msgId: String) : FlatChatItem() {
+        override val key get() = "fp_${msgId}_${part.id}"
+        override val contentType get() = "file"
+    }
+    @Stable data class PatchPart(val part: Part.Patch, val msgId: String) : FlatChatItem() {
+        override val key get() = "pp_${msgId}_${part.id}"
+        override val contentType get() = "patch"
+    }
 }
 
 /**
@@ -62,40 +90,35 @@ sealed class FlatChatItem {
  * while ensuring the newest content is retained.
  */
 fun buildFlatItems(blocks: List<MessageBlock>): List<FlatChatItem> {
-    // First pass: calculate items per block to ensure block-level atomicity
-    val blockItems = mutableListOf<Pair<MessageBlock, List<FlatChatItem>>>()
+    val blockItems = ArrayList<List<FlatChatItem>>(blocks.size)
     var totalItems = 0
-
     for (block in blocks) {
         val items = buildBlockItems(block)
-        blockItems.add(block to items)
+        blockItems.add(items)
         totalItems += items.size
     }
 
-    // If we exceed limit, drop oldest blocks (at the start of the list) atomically
-    val result = mutableListOf<FlatChatItem>()
-    var itemsToSkip = (totalItems - MAX_FLAT_ITEMS).coerceAtLeast(0)
+    val itemsToSkip = (totalItems - MAX_FLAT_ITEMS).coerceAtLeast(0)
+    val result = ArrayList<FlatChatItem>(totalItems - itemsToSkip)
+    var remainingSkip = itemsToSkip
 
-    for ((block, items) in blockItems) {
-        if (itemsToSkip >= items.size) {
-            // Skip this entire block
-            itemsToSkip -= items.size
-            continue
-        } else if (itemsToSkip > 0) {
-            // Partial skip within block - only valid for user blocks (single item)
-            // For assistant blocks, we must skip entirely or keep entirely to maintain integrity
-            if (block is MessageBlock.UserBlock && items.size == 1) {
-                itemsToSkip--
+    for (i in blocks.indices) {
+        val items = blockItems[i]
+        if (remainingSkip > 0) {
+            if (remainingSkip >= items.size) {
+                remainingSkip -= items.size
                 continue
             }
-            // For assistant blocks, if we need to skip partially, skip the whole block
-            itemsToSkip = (itemsToSkip - items.size).coerceAtLeast(0)
+            if (blocks[i] is MessageBlock.UserBlock && items.size == 1) {
+                remainingSkip = 0
+                continue
+            }
+            remainingSkip = 0
             continue
         }
         result.addAll(items)
     }
 
-    // Reverse to bottom-first order
     result.reverse()
     return result
 }

@@ -56,8 +56,8 @@ class OpenCodeEventSource(
 
     private val _events = MutableSharedFlow<OpenCodeEvent>(
         replay = 0,
-        extraBufferCapacity = 128,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST // tryEmit never suspends; excess events are dropped oldest-first
+        extraBufferCapacity = 256,
+        onBufferOverflow = BufferOverflow.SUSPEND
     )
     val events: SharedFlow<OpenCodeEvent> = _events.asSharedFlow()
 

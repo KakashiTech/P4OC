@@ -113,6 +113,13 @@ class ChatViewModel constructor(
     val visualSettings = settingsDataStore.visualSettings
         .stateIn(viewModelScope, SharingStarted.Eagerly, dev.blazelight.p4oc.core.datastore.VisualSettings())
 
+    val reasoningEffort = settingsDataStore.reasoningEffort
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "auto")
+
+    fun updateReasoningEffort(effort: String) {
+        viewModelScope.launch { settingsDataStore.updateReasoningEffort(effort) }
+    }
+
     private companion object {
         const val TAG = "ChatViewModel"
 
@@ -210,17 +217,30 @@ class ChatViewModel constructor(
             }
 
             val directory = getDirectory()
-            val result = safeApiCall { api.getMessages(sessionId, limit = null, directory = directory) }
+            val result = safeApiCall { api.getMessages(sessionId, limit = 25, directory = directory) }
 
             when (result) {
                 is ApiResult.Success -> {
-                    AppLog.d(TAG, "Loaded ${result.data.size} messages")
-                    // Map DTOs to domain models off the main thread to avoid jank on first paint
+                    AppLog.d(TAG, "Loaded ${result.data.size} messages (initial batch)")
                     val mapped = withContext(Dispatchers.Default) {
                         result.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
                     }
                     messageStore.loadInitial(mapped)
                     _uiState.update { it.copy(isLoading = false) }
+
+                    // Background: fetch remaining messages for pagination
+                    if (result.data.size == 25) {
+                        launch {
+                            val fullResult = safeApiCall { api.getMessages(sessionId, limit = null, directory = directory) }
+                            if (fullResult is ApiResult.Success && fullResult.data.size > 25) {
+                                val fullMapped = withContext(Dispatchers.Default) {
+                                    fullResult.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
+                                }
+                                messageStore.loadRemaining(fullMapped)
+                                AppLog.d(TAG, "Background: loaded ${fullResult.data.size} total messages for pagination")
+                            }
+                        }
+                    }
                 }
                 is ApiResult.Error -> {
                     AppLog.e(TAG, "Failed to load messages: ${result.message}", result.throwable)
@@ -379,10 +399,13 @@ class ChatViewModel constructor(
             }
 
             val parts = buildPartInputs(text, attachedFiles)
+            val reasoningEffort = settingsDataStore.reasoningEffort.first()
+            val reasoning = dev.blazelight.p4oc.data.remote.dto.ReasoningConfigDto(effort = reasoningEffort)
             val request = SendMessageRequest(
                 parts = parts,
                 agent = selectedAgent,
-                model = selectedModel
+                model = selectedModel,
+                reasoning = reasoning
             )
 
             val result = safeApiCall { api.sendMessageAsync(sessionId, request, getDirectory()) }
@@ -447,10 +470,13 @@ class ChatViewModel constructor(
             }
 
             val parts = buildPartInputs(queued.text, queued.attachedFiles)
+            val reasoningEffort = settingsDataStore.reasoningEffort.first()
+            val reasoning = dev.blazelight.p4oc.data.remote.dto.ReasoningConfigDto(effort = reasoningEffort)
             val request = SendMessageRequest(
                 parts = parts,
                 agent = queued.agent,
-                model = queued.model
+                model = queued.model,
+                reasoning = reasoning
             )
 
             val result = safeApiCall { api.sendMessageAsync(sessionId, request, getDirectory()) }

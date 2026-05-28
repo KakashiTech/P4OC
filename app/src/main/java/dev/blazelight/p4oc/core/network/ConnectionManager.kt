@@ -168,20 +168,21 @@ class ConnectionManager constructor(
         return true
     }
 
-    fun disconnect() {
+    suspend fun disconnect() {
         AppLog.d(TAG, "Disconnecting")
         sseForwardingJob?.cancel()
         sseForwardingJob = null
-        _connection.value?.disconnect()
+        withContext(Dispatchers.IO) {
+            _connection.value?.disconnect()
+        }
         _connection.value = null
         _authOkHttpClient.value = null
         _connectionState.value = ConnectionState.Disconnected
     }
 
-    // Shared connection pool for all clients - aggressive settings for low latency
     private val sharedConnectionPool = ConnectionPool(
-        maxIdleConnections = 10,        // More idle connections ready
-        keepAliveDuration = 5,          // 5 minutes keep-alive
+        maxIdleConnections = 3,
+        keepAliveDuration = 2,
         timeUnit = TimeUnit.MINUTES
     )
 
@@ -194,15 +195,11 @@ class ConnectionManager constructor(
         val cache = Cache(cacheDir, 20L * 1024L * 1024L)
 
         val builder = OkHttpClient.Builder()
-            // Extended timeouts for long-running AI operations (5 minutes)
-            // Prevents cancellation during complex tasks (code analysis, refactoring, etc.)
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(60, TimeUnit.SECONDS)
-            .readTimeout(300, TimeUnit.SECONDS) // 5 min for long AI operations
-            // Aggressive connection pooling
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
             .connectionPool(sharedConnectionPool)
-            // HTTP/2 for multiplexing and header compression
-            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+            .protocols(listOf(Protocol.HTTP_1_1))
             .cache(cache)
             // Retry on connection failure
             .retryOnConnectionFailure(true)
@@ -229,9 +226,9 @@ class ConnectionManager constructor(
     private fun buildOkHttpClient(base: OkHttpClient): OkHttpClient =
         base.newBuilder()
             .readTimeout(60, TimeUnit.SECONDS)
-            // Minimal logging - only in debug and only headers (no body)
+            // Debug logging - full body to debug session creation 500
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.HEADERS else HttpLoggingInterceptor.Level.NONE
+                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE
                 redactHeader("Authorization")
             })
             .build()
@@ -240,7 +237,7 @@ class ConnectionManager constructor(
         base.newBuilder()
             .readTimeout(0, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.HEADERS else HttpLoggingInterceptor.Level.NONE
+                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE
                 redactHeader("Authorization")
             })
             .build()

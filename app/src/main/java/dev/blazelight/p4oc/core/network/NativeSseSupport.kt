@@ -1,50 +1,117 @@
 package dev.blazelight.p4oc.core.network
 
-/**
- * Native C++ support for OpenCodeEventSource (SSE).
- *
- * Provides:
- *  1. EventBuffer  — lock-free SPSC ring buffer for raw SSE event JSON strings
- *  2. SseBackoff   — exponential backoff + jitter calculator matching Kotlin logic exactly
- *
- * Benefits:
- *  - EventBuffer push: ~50ns vs coroutine emit overhead
- *  - SseBackoff: xorshift64 jitter, zero allocation, no Random overhead
- */
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.random.Random
+
 object NativeSseSupport {
 
-    init {
-        System.loadLibrary("p4oc_sse")
+    @Volatile private var loadAttempted = false
+    @Volatile private var nativeAvailable = false
+    private val nextHandle = AtomicLong(1)
+    private val buffers = ConcurrentHashMap<Long, SseEventBuffer>()
+    private val backoffs = ConcurrentHashMap<Long, SseBackoffState>()
+
+    @Synchronized fun ensureLoaded(): Boolean {
+        if (loadAttempted) return nativeAvailable
+        loadAttempted = true
+        return try {
+            System.loadLibrary("p4oc_sse")
+            nativeAvailable = true
+            true
+        } catch (_: Throwable) {
+            nativeAvailable = false
+            false
+        }
     }
 
     // ── EventBuffer ───────────────────────────────────────────────────────────
 
-    fun createBuffer(capacity: Int = 256): Long = nativeBufferCreate(capacity)
-    fun destroyBuffer(handle: Long) = nativeBufferDestroy(handle)
+    fun createBuffer(capacity: Int = 256): Long {
+        if (ensureLoaded()) return nativeBufferCreate(capacity)
+        val h = nextHandle.getAndIncrement()
+        buffers[h] = SseEventBuffer(capacity)
+        return h
+    }
 
-    /** Push raw SSE event JSON. Returns false if buffer full. */
-    fun pushEvent(handle: Long, data: String): Boolean = nativeBufferPush(handle, data)
+    fun destroyBuffer(handle: Long) {
+        if (ensureLoaded()) { nativeBufferDestroy(handle); return }
+        buffers.remove(handle)
+        backoffs.remove(handle)
+    }
 
-    /** Drain up to [max] events. Call from consumer/emit coroutine. */
-    fun drainEvents(handle: Long, max: Int = 32): Array<String> = nativeBufferDrain(handle, max)
+    fun pushEvent(handle: Long, data: String): Boolean {
+        if (ensureLoaded()) return nativeBufferPush(handle, data)
+        return buffers[handle]?.push(data) ?: false
+    }
 
-    /** [size, totalPushed, totalDropped] */
-    fun bufferStats(handle: Long): LongArray = nativeBufferStats(handle)
+    fun drainEvents(handle: Long, max: Int = 32): Array<String> {
+        if (ensureLoaded()) return nativeBufferDrain(handle, max)
+        return buffers[handle]?.drain(max) ?: emptyArray()
+    }
 
-    fun clearBuffer(handle: Long) = nativeBufferClear(handle)
+    fun bufferStats(handle: Long): LongArray {
+        if (ensureLoaded()) return nativeBufferStats(handle)
+        return buffers[handle]?.stats() ?: longArrayOf(0, 0, 0)
+    }
+
+    fun clearBuffer(handle: Long) {
+        if (ensureLoaded()) { nativeBufferClear(handle); return }
+        buffers[handle]?.clear()
+    }
 
     // ── SseBackoff ────────────────────────────────────────────────────────────
 
-    fun createBackoff(): Long = nativeBackoffCreate()
-    fun destroyBackoff(handle: Long) = nativeBackoffDestroy(handle)
+    fun createBackoff(): Long {
+        if (ensureLoaded()) return nativeBackoffCreate()
+        val h = nextHandle.getAndIncrement()
+        backoffs[h] = SseBackoffState()
+        return h
+    }
 
-    /**
-     * Compute retry delay in ms for [consecutiveErrors].
-     * Mirrors OpenCodeEventSource.computeRetryDelayMs() exactly:
-     *   tier = min(errors/2, 5), base = min(2000 << tier, 60000), ±20% jitter
-     */
-    fun computeDelayMs(handle: Long, consecutiveErrors: Int): Long =
-        nativeBackoffComputeDelay(handle, consecutiveErrors)
+    fun destroyBackoff(handle: Long) {
+        if (ensureLoaded()) { nativeBackoffDestroy(handle); return }
+        backoffs.remove(handle)
+    }
+
+    fun computeDelayMs(handle: Long, consecutiveErrors: Int): Long {
+        if (ensureLoaded()) return nativeBackoffComputeDelay(handle, consecutiveErrors)
+        return backoffs[handle]?.computeDelayMs(consecutiveErrors) ?: 0L
+    }
+
+    // ── Fallback types ────────────────────────────────────────────────────────
+
+    private class SseEventBuffer(val capacity: Int) {
+        private val events = ArrayDeque<String>(capacity)
+        var totalPushed = 0L
+        var totalDropped = 0L
+
+        fun push(data: String): Boolean = synchronized(events) {
+            if (events.size >= capacity) { totalDropped++; false }
+            else { events.addLast(data); totalPushed++; true }
+        }
+
+        fun drain(max: Int): Array<String> = synchronized(events) {
+            val count = minOf(max, events.size)
+            Array(count) { events.removeFirst() }
+        }
+
+        fun clear() = synchronized(events) { events.clear() }
+
+        fun stats(): LongArray = synchronized(events) {
+            longArrayOf(events.size.toLong(), totalPushed, totalDropped)
+        }
+    }
+
+    private class SseBackoffState {
+        fun computeDelayMs(consecutiveErrors: Int): Long {
+            val tier = minOf(consecutiveErrors / 2, 5)
+            val base = minOf(2000L shl tier, 60000L)
+            val jitterRange = (base * 0.2f).toLong()
+            val jitter = Random.nextLong(-jitterRange, jitterRange + 1)
+            return (base + jitter).coerceAtLeast(0L)
+        }
+    }
 
     // ── JNI ───────────────────────────────────────────────────────────────────
 

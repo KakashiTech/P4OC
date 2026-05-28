@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
@@ -200,17 +202,13 @@ private fun UserMessage(messageWithParts: MessageWithParts, modifier: Modifier =
         if (shouldVirtualizeUser) {
             Box(modifier = Modifier.weight(1f)) {
                 val lines = remember(text) { text.split('\n') }
-                LazyColumn(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 360.dp),
-                    contentPadding = PaddingValues(0.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState())
                 ) {
-                    items(
-                        items = lines,
-                        key = { it.hashCode() }
-                    ) { line ->
+                    lines.forEach { line ->
                         Text(
                             text = line,
                             fontFamily = FontFamily.Monospace,
@@ -492,17 +490,13 @@ private fun TextPart(part: Part.Text, enableVirtualization: Boolean = true) {
                             .clickable(role = Role.Button) { renderAsMarkdown = true }
                     )
                     val lines = remember(part.id, part.text) { part.text.split('\n') }
-                    LazyColumn(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 360.dp),
-                        contentPadding = PaddingValues(0.dp),
-                        verticalArrangement = Arrangement.spacedBy(0.dp)
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(rememberScrollState())
                     ) {
-                        items(
-                            items = lines,
-                            key = { it.hashCode() }
-                        ) { line ->
+                        lines.forEach { line ->
                             Text(
                                 text = line,
                                 fontFamily = FontFamily.Monospace,
@@ -515,14 +509,13 @@ private fun TextPart(part: Part.Text, enableVirtualization: Boolean = true) {
                 }
             } else if (enableVirtualization && shouldVirtualizeMarkdown) {
                 val chunks = remember(part.id, part.text) { chunkMarkdown(part.text, 1400) }
-                LazyColumn(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 360.dp),
-                    contentPadding = PaddingValues(0.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState())
                 ) {
-                    items(items = chunks, key = { chunk -> chunk.hashCode() }) { chunk ->
+                    chunks.forEach { chunk ->
                         StreamingMarkdown(
                             text = chunk,
                             isStreaming = false,
@@ -642,18 +635,14 @@ private fun ReasoningPart(part: Part.Reasoning) {
                 }
                 prevText = new
             }
-            LazyColumn(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 220.dp)
-                    .padding(start = Spacing.sm, top = 2.dp, bottom = 2.dp),
-                contentPadding = PaddingValues(0.dp),
-                verticalArrangement = Arrangement.spacedBy(0.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = Spacing.sm, top = 2.dp, bottom = 2.dp)
             ) {
-                items(
-                    items = parasState,
-                    key = { it.hashCode() }
-                ) { para ->
+                parasState.forEach { para ->
                     Text(
                         text = para,
                         fontFamily = FontFamily.Monospace,

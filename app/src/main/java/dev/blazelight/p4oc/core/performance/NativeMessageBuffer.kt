@@ -1,29 +1,23 @@
 package dev.blazelight.p4oc.core.performance
 
 import dev.blazelight.p4oc.domain.model.Message
+import dev.blazelight.p4oc.domain.model.ModelRef
 import dev.blazelight.p4oc.domain.model.TokenUsage
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentLinkedDeque
 
-/**
- * Native C++ Message Buffer
- * Replaces MessageBuffer.kt with high-performance lock-free implementation.
- *
- * Benefits:
- *  - Lock-free push/pop via Michael-Scott MPMC queue
- *  - Zero GC pressure on the hot path
- *  - O(1) eviction of oldest messages
- *  - 3-5x throughput vs Kotlin ConcurrentLinkedQueue + Mutex
- */
-class NativeMessageBuffer(maxSize: Int = 1000) {
+class NativeMessageBuffer(private val maxSize: Int = 1000) {
 
-    private val handle: Long = nativeCreate(maxSize)
+    private var handle: Long = -1
+    private val messages = ConcurrentLinkedDeque<Message>()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val initMutex = Mutex()
     private var initialized = false
+    private var totalProcessed = 0L
+    private var evictionCount = 0L
 
-    // Mirrors MessageBuffer.BufferStats for API compatibility
     data class BufferStats(
         val currentSize: Int,
         val maxSize: Int,
@@ -32,12 +26,18 @@ class NativeMessageBuffer(maxSize: Int = 1000) {
         val evictionCount: Long
     )
 
+    init {
+        if (ensureLoaded()) {
+            handle = nativeCreate(maxSize)
+        }
+    }
+
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
     suspend fun initialize() = initMutex.withLock {
         if (initialized) return@withLock
         initialized = true
-        // Background optimize loop (30s cadence, cold path)
+        if (!nativeAvailable) return@withLock
         scope.launch {
             while (isActive) {
                 delay(30_000)
@@ -48,36 +48,47 @@ class NativeMessageBuffer(maxSize: Int = 1000) {
 
     fun cleanup() {
         scope.cancel()
-        nativeDestroy(handle)
+        if (nativeAvailable && handle >= 0) nativeDestroy(handle)
     }
 
-    // ── Write (lock-free hot path) ────────────────────────────────────────
+    // ── Write ─────────────────────────────────────────────────────────────────
 
     fun addMessageSync(message: Message): Boolean {
-        return nativeAdd(
-            handle,
-            message.id,
-            message.sessionID,
-            message.createdAt,
-            completedAt = when (message) {
-                is Message.Assistant -> message.completedAt ?: 0L
-                else -> 0L
-            },
-            messageType = when (message) { is Message.User -> 0; else -> 1 },
-            hasTools = message is Message.User && message.tools?.isNotEmpty() == true,
-            hasSummary = when (message) {
-                is Message.User -> message.summary != null
-                is Message.Assistant -> message.summary == true
-            },
-            tokenInput = when (message) {
-                is Message.Assistant -> message.tokens.input
-                else -> 0
-            },
-            tokenOutput = when (message) {
-                is Message.Assistant -> message.tokens.output
-                else -> 0
+        if (nativeAvailable && handle >= 0) {
+            return nativeAdd(
+                handle,
+                message.id,
+                message.sessionID,
+                message.createdAt,
+                completedAt = when (message) {
+                    is Message.Assistant -> message.completedAt ?: 0L
+                    else -> 0L
+                },
+                messageType = when (message) { is Message.User -> 0; else -> 1 },
+                hasTools = message is Message.User && message.tools?.isNotEmpty() == true,
+                hasSummary = when (message) {
+                    is Message.User -> message.summary != null
+                    is Message.Assistant -> message.summary == true
+                },
+                tokenInput = when (message) {
+                    is Message.Assistant -> message.tokens.input
+                    else -> 0
+                },
+                tokenOutput = when (message) {
+                    is Message.Assistant -> message.tokens.output
+                    else -> 0
+                }
+            )
+        }
+        return synchronized(messages) {
+            if (messages.size >= maxSize) {
+                messages.pollLast()
+                evictionCount++
             }
-        )
+            messages.addFirst(message)
+            totalProcessed++
+            true
+        }
     }
 
     suspend fun addMessage(message: Message): Boolean = withContext(Dispatchers.Default) {
@@ -85,51 +96,77 @@ class NativeMessageBuffer(maxSize: Int = 1000) {
     }
 
     suspend fun removeMessage(messageId: String): Boolean = withContext(Dispatchers.Default) {
-        nativeRemove(handle, messageId)
+        if (nativeAvailable && handle >= 0) return@withContext nativeRemove(handle, messageId)
+        synchronized(messages) {
+            val it = messages.iterator()
+            while (it.hasNext()) {
+                if (it.next().id == messageId) { it.remove(); return@synchronized true }
+            }
+            false
+        }
     }
 
     // ── Read ─────────────────────────────────────────────────────────────────
 
     suspend fun getMessages(limit: Int = 50): List<Message> = withContext(Dispatchers.Default) {
-        val raw = nativeGetLast(handle, limit)
-        raw.mapNotNull { parseRaw(it) }
+        if (nativeAvailable && handle >= 0) {
+            val raw = nativeGetLast(handle, limit)
+            return@withContext raw.mapNotNull { parseRaw(it) }
+        }
+        synchronized(messages) {
+            messages.take(minOf(limit, messages.size)).toList()
+        }
     }
 
     // ── Eviction ─────────────────────────────────────────────────────────────
 
     suspend fun evictOldest(count: Int): Int = withContext(Dispatchers.Default) {
-        nativeEvictOldest(handle, count)
+        if (nativeAvailable && handle >= 0) return@withContext nativeEvictOldest(handle, count)
+        synchronized(messages) {
+            val actual = minOf(count, messages.size)
+            repeat(actual) { messages.pollLast() }
+            evictionCount += actual
+            actual
+        }
     }
 
     private suspend fun optimizeNative() = withContext(Dispatchers.Default) {
-        val cutoff = System.currentTimeMillis() - (24L * 60 * 60 * 1000)
-        nativeEvictByAge(handle, cutoff)
+        if (nativeAvailable && handle >= 0) {
+            val cutoff = System.currentTimeMillis() - (24L * 60 * 60 * 1000)
+            nativeEvictByAge(handle, cutoff)
+        }
     }
 
     suspend fun clearBuffer() = withContext(Dispatchers.Default) {
-        nativeClear(handle)
+        if (nativeAvailable && handle >= 0) { nativeClear(handle); return@withContext }
+        synchronized(messages) { messages.clear() }
     }
 
     // ── Stats ─────────────────────────────────────────────────────────────────
 
     fun getStats(): BufferStats {
-        val raw = nativeGetStats(handle) // [currentSize, maxSize, totalProcessed, evictionCount]
+        if (nativeAvailable && handle >= 0) {
+            val raw = nativeGetStats(handle)
+            return BufferStats(
+                currentSize    = raw[0].toInt(),
+                maxSize        = raw[1].toInt(),
+                utilization    = if (raw[1] > 0) raw[0].toFloat() / raw[1] else 0f,
+                totalProcessed = raw[2],
+                evictionCount  = raw[3]
+            )
+        }
+        val size = messages.size
         return BufferStats(
-            currentSize    = raw[0].toInt(),
-            maxSize        = raw[1].toInt(),
-            utilization    = if (raw[1] > 0) raw[0].toFloat() / raw[1] else 0f,
-            totalProcessed = raw[2],
-            evictionCount  = raw[3]
+            currentSize    = size,
+            maxSize        = maxSize,
+            utilization    = if (maxSize > 0) size.toFloat() / maxSize else 0f,
+            totalProcessed = totalProcessed,
+            evictionCount  = evictionCount
         )
     }
 
     // ── Parsing ──────────────────────────────────────────────────────────────
 
-    /**
-     * Parse the compact string representation returned by nativeGetLast.
-     * Format: "id|sessionId|createdAt|messageType|tokenInput|tokenOutput"
-     * Returns a lightweight proxy message (User or stub Assistant).
-     */
     private fun parseRaw(raw: String): Message? {
         return try {
             val parts = raw.split("|")
@@ -146,7 +183,7 @@ class NativeMessageBuffer(maxSize: Int = 1000) {
                     sessionID = sessionId,
                     createdAt = createdAt,
                     agent = "",
-                    model = dev.blazelight.p4oc.domain.model.ModelRef("", "")
+                    model = ModelRef("", "")
                 )
             } else {
                 Message.Assistant(
@@ -168,7 +205,21 @@ class NativeMessageBuffer(maxSize: Int = 1000) {
     // ── JNI declarations ─────────────────────────────────────────────────────
 
     private companion object {
-        init { System.loadLibrary("p4oc_buffer") }
+        @Volatile private var loadAttempted = false
+        @Volatile private var nativeAvailable = false
+
+        @Synchronized fun ensureLoaded(): Boolean {
+            if (loadAttempted) return nativeAvailable
+            loadAttempted = true
+            return try {
+                System.loadLibrary("p4oc_buffer")
+                nativeAvailable = true
+                true
+            } catch (_: Throwable) {
+                nativeAvailable = false
+                false
+            }
+        }
 
         @JvmStatic external fun nativeCreate(maxSize: Int): Long
         @JvmStatic external fun nativeDestroy(handle: Long)
@@ -191,12 +242,9 @@ class NativeMessageBuffer(maxSize: Int = 1000) {
     }
 }
 
-/**
- * Drop-in replacement for MessageBufferManager using NativeMessageBuffer.
- */
 class NativeMessageBufferManager {
     private val buffers = mutableMapOf<String, NativeMessageBuffer>()
-    private val mutex = kotlinx.coroutines.sync.Mutex()
+    private val mutex = Mutex()
 
     suspend fun getBuffer(sessionId: String): NativeMessageBuffer =
         mutex.withLock {

@@ -1,8 +1,7 @@
 package dev.blazelight.p4oc.ui.screens.sessions
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -28,8 +27,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.runtime.*
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -48,7 +47,6 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.koin.androidx.compose.koinViewModel
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import dev.blazelight.p4oc.R
@@ -66,6 +64,7 @@ import dev.blazelight.p4oc.domain.model.Session
 import dev.blazelight.p4oc.domain.model.SessionStatus
 import dev.blazelight.p4oc.ui.theme.ProjectColors
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
+import dev.blazelight.p4oc.ui.theme.opencode.OpenCodeTheme
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -165,10 +164,6 @@ fun SessionListScreen(
         derivedStateOf { buildSessionTree(displayedSessions) }
     }
 
-    val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
-    DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
-    val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
-
     Scaffold(
         containerColor = theme.background,
         topBar = {
@@ -211,7 +206,6 @@ fun SessionListScreen(
                     modifier = Modifier.fillMaxSize().testTag("sessions_list"),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
-                    flingBehavior = smoothFling
                 ) {
                     // Animated PocketCode Logo Header — isolated on its own GPU layer
                     // so its 45ms typewriter recompositions don't invalidate the parent list
@@ -219,7 +213,7 @@ fun SessionListScreen(
                         key = "logo_header",
                         contentType = "header"
                     ) {
-                        Box(modifier = Modifier.graphicsLayer { alpha = 0.99f }) {
+                        Box(modifier = Modifier) {
                             PocketCodeLogoHeader()
                         }
                     }
@@ -234,7 +228,7 @@ fun SessionListScreen(
                                 QuickActionCard(
                                     icon = Icons.Default.PlayArrow,
                                     label = stringResource(R.string.sessions_quick_global),
-                                    onClick = { viewModel.createSession(title = null, directory = null) },
+                                    onClick = { viewModel.createSession(title = "global", directory = null) },
                                     modifier = Modifier.weight(1f).testTag("quick_action_global")
                                 )
                                 QuickActionCard(
@@ -495,26 +489,27 @@ private fun SessionCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(IntrinsicSize.Min)
+                .defaultMinSize(minHeight = 56.dp)
                 .combinedClickable(
                     onClick = onClick,
                     onLongClick = { showContextMenu = true },
                     role = Role.Button
                 )
+                .drawBehind {
+                    val barWidth = 4.dp.toPx()
+                    drawRect(
+                        color = indicatorColor,
+                        size = Size(barWidth, size.height)
+                    )
+                    drawRect(
+                        color = cardColor,
+                        topLeft = Offset(barWidth, 0f),
+                        size = Size(size.width - barWidth, size.height)
+                    )
+                }
         ) {
-            // Left accent bar - color indicates status
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .fillMaxHeight()
-                    .background(indicatorColor)
-            )
-
-            // Main content area
             Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .background(cardColor)
+                modifier = Modifier.fillMaxWidth().padding(start = 6.dp)
             ) {
             Row(
                 modifier = Modifier
@@ -844,7 +839,6 @@ private fun PocketCodeLogoHeader(
     modifier: Modifier = Modifier
 ) {
     val theme = LocalOpenCodeTheme.current
-    val infiniteTransition = rememberInfiniteTransition(label = "logo_pulse")
 
     // Funny rotating terminal commands
     val funnyCommands = remember {
@@ -862,7 +856,7 @@ private fun PocketCodeLogoHeader(
             "while(alive) { code() }",
             "import antigravity",
             "System.exit(0)",
-            ":(){ :|:& };:",
+            ":(){ :|&: };:",
             "tree /dev/brain",
             "cat /etc/motd",
             "man happiness",
@@ -872,9 +866,25 @@ private fun PocketCodeLogoHeader(
         )
     }
 
+    // Glow derived from wall-clock time — zero Compose animation overhead
+    val glowPosition by remember {
+        derivedStateOf {
+            val period = 4000L
+            val phase = (System.currentTimeMillis() % period).toFloat() / period
+            if (phase < 0.5f) 2f * phase else 2f * (1f - phase)
+        }
+    }
+    val accentGlow by remember {
+        derivedStateOf {
+            val period = 2000L
+            val phase = (System.currentTimeMillis() % period).toFloat() / period
+            0.3f + 0.6f * (if (phase < 0.5f) 2f * phase else 2f * (1f - phase))
+        }
+    }
+
     // Animation states
     var typedLogo by remember { mutableStateOf("") }
-    var displayedCommand by remember { mutableStateOf("") }
+    var displayedCommand by remember { mutableStateOf(" ") }
     var currentCommandIndex by remember { mutableIntStateOf(0) }
     var cursorVisible by remember { mutableStateOf(true) }
     var animationPhase by remember { mutableIntStateOf(0) } // 0=typing logo, 1=blink logo, 2=typing cmd, 3=show cmd, 4=clearing
@@ -931,27 +941,6 @@ private fun PocketCodeLogoHeader(
             delay(150)
         }
     }
-
-    // Animated values for ambient glow moving around
-    val glowPosition by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(4000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "glow_pos"
-    )
-
-    val accentGlow by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 0.9f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "accent"
-    )
 
     Box(
         modifier = modifier
@@ -1429,18 +1418,14 @@ private fun SessionsTopBar(
     onSettings: () -> Unit
 ) {
     val theme = LocalOpenCodeTheme.current
-    val infiniteTransition = rememberInfiniteTransition(label = "topbar_pulse")
 
-    // Ambient glow animation
-    val glowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 0.7f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(3000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "glow"
-    )
+    val glowAlpha by remember {
+        derivedStateOf {
+            val period = 3000L
+            val phase = (System.currentTimeMillis() % period).toFloat() / period
+            0.3f + 0.7f * (if (phase < 0.5f) 2f * phase else 2f * (1f - phase))
+        }
+    }
 
     Column(
         modifier = Modifier

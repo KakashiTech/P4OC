@@ -78,12 +78,6 @@ fun ChatInputBar(
     val theme = LocalOpenCodeTheme.current
     val focusRequester = remember { FocusRequester() }
 
-    LaunchedEffect(requestFocus) {
-        if (requestFocus) {
-            try { focusRequester.requestFocus() } catch (_: Exception) {}
-        }
-    }
-
     val hasContent = value.isNotBlank() || attachedFiles.isNotEmpty()
     val canSend    = hasContent && enabled && !isLoading && !isBusy
     val canQueue   = hasContent && isBusy && !hasQueuedMessage
@@ -149,8 +143,7 @@ fun ChatInputBar(
         if (!isBusy) { this.value = -1f; return@produceState }
         while (true) {
             val elapsed = System.currentTimeMillis() - shimmerStartTime
-            // nativeCalculateWithRepeat returns [0,1] linear repeat over durationMs
-            val t = NativeAnimationOptimizer.nativeCalculateWithRepeat(
+            val t = NativeAnimationOptimizer.calculateWithRepeat(
                 elapsed, 9000, 0, false
             )
             this.value = t * PERIMETER

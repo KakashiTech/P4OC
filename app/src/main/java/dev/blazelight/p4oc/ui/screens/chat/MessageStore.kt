@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -81,54 +83,54 @@ class MessageStore(
      * No data loss: _messagesMap always holds the full state; conflate only skips
      * redundant UI recompositions for intermediate states nobody will ever see.
      */
-    // messages flow: reads ONLY snapshot state — SnapshotStateList (messageOrder) and
-    // SnapshotStateMap (_messagesMap) both trigger snapshotFlow automatically on mutation.
-    // Do NOT also read _messagesVersion here — that causes double-emission on every mutation
-    // (once for list/map change, once for version++), and conflate() then drops valid states.
-    val messages: StateFlow<List<MessageWithParts>> = snapshotFlow {
-        messageOrder.mapNotNull { id -> _messagesMap[id] }
-    }
-        .conflate()
-        .stateIn(
-            scope = scope,
-            started = SharingStarted.Lazily,
-            initialValue = emptyList()
-        )
+    private val _messages = MutableStateFlow<List<MessageWithParts>>(emptyList())
+    val messages: StateFlow<List<MessageWithParts>> = _messages.asStateFlow()
 
     /**
      * Load initial messages from API response.
      * PAGINATED: Load only last 25 messages initially for instant paint.
      * Remaining messages loaded on demand via loadMore().
      */
-    fun loadInitial(messages: List<MessageWithParts>) {
+    suspend fun loadInitial(messages: List<MessageWithParts>) {
         val sorted = messages.sortedBy { it.message.createdAt }
         if (DEBUG_STREAM) AppLog.d(TAG, "loadInitial: Total ${sorted.size} messages, loading last $INITIAL_MESSAGE_COUNT initially")
 
-        scope.launch {
-            messagesMutex.withLock {
-                // Store ALL messages in background map
-                allMessagesMap.clear()
-                sorted.forEach { msg -> allMessagesMap[msg.message.id] = msg }
+        messagesMutex.withLock {
+            // Store ALL messages in background map
+            allMessagesMap.clear()
+            sorted.forEach { msg -> allMessagesMap[msg.message.id] = msg }
 
-                // Take last N messages (most recent) before touching snapshot state
-                val initialMessages = sorted.takeLast(INITIAL_MESSAGE_COUNT)
-                visibleMessageCount = initialMessages.size
+            // Take last N messages (most recent) before touching snapshot state
+            val initialMessages = sorted.takeLast(INITIAL_MESSAGE_COUNT)
+            visibleMessageCount = initialMessages.size
 
-                // Batch all snapshot-state mutations together so snapshotFlow emits
-                // exactly once with the complete new state — not once for clear() (empty)
-                // and again for each add() call.
-                val newIds = initialMessages.map { it.message.id }
-                // Batch all snapshot-state mutations in one atomic commit:
-                // snapshotFlow fires ONCE for the entire block instead of once per call.
-                Snapshot.withMutableSnapshot {
-                    _messagesMap.clear()
-                    initialMessages.forEach { msg -> _messagesMap[msg.message.id] = msg }
-                    messageOrder.clear()
-                    messageOrder.addAll(newIds)
-                    _messagesVersion.value++
-                }
-                if (DEBUG_STREAM) AppLog.d(TAG, "loadInitial: Loaded $visibleMessageCount messages (${sorted.size - visibleMessageCount} more available)")
+            // Batch all snapshot-state mutations together so snapshotFlow emits
+            // exactly once with the complete new state — not once for clear() (empty)
+            // and again for each add() call.
+            val newIds = initialMessages.map { it.message.id }
+            // Batch all snapshot-state mutations in one atomic commit:
+            // snapshotFlow fires ONCE for the entire block instead of once per call.
+            Snapshot.withMutableSnapshot {
+                _messagesMap.clear()
+                initialMessages.forEach { msg -> _messagesMap[msg.message.id] = msg }
+                messageOrder.clear()
+                messageOrder.addAll(newIds)
+                _messagesVersion.value++
+                _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
             }
+            if (DEBUG_STREAM) AppLog.d(TAG, "loadInitial: Loaded $visibleMessageCount messages (${sorted.size - visibleMessageCount} more available)")
+        }
+    }
+
+    /**
+     * Background: load remaining messages into allMessagesMap for pagination.
+     * Does NOT update visible messages — only populates the full history cache.
+     */
+    suspend fun loadRemaining(allMessages: List<MessageWithParts>) {
+        messagesMutex.withLock {
+            allMessagesMap.clear()
+            allMessages.forEach { msg -> allMessagesMap[msg.message.id] = msg }
+            if (DEBUG_STREAM) AppLog.d(TAG, "loadRemaining: Stored ${allMessages.size} total messages in background map")
         }
     }
     
@@ -160,6 +162,7 @@ class MessageStore(
             }
             visibleMessageCount += toInsert.size
             _messagesVersion.value++
+            _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
         }
 
         val hasMore = startIndex > 0
@@ -198,6 +201,7 @@ class MessageStore(
                     }
                     _messagesMap[message.id] = newEntry
                     _messagesVersion.value++
+                    _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                 }
                 if (DEBUG_STREAM) AppLog.d(TAG, "upsertMessage: msgId=${message.id}, isNew=$isNew, reposition=$needsReposition")
             }
@@ -229,6 +233,7 @@ class MessageStore(
                         _messagesMap[e.id] = e.msg
                     }
                     _messagesVersion.value++
+                    _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                 }
                 if (DEBUG_STREAM) AppLog.d(TAG, "upsertMessages: batch of ${messages.size}")
             }
@@ -297,20 +302,13 @@ class MessageStore(
                 AppLog.v(TAG, "flushPendingParts: no pending updates")
                 return
             }
-            val snapshot = pendingUpdates.mapValues { entry ->
-                entry.value.mapValues { pd ->
-                    val sb = pd.value.sb
-                    if (sb != null && sb.length > 4000) {
-                        PendingDelta(pd.value.part, StringBuilder(sb.substring(0, 4000)))
-                    } else pd.value
-                }.toMutableMap()
-            }.toMap()
-            val msgCount = snapshot.size
-            val partCount = snapshot.values.sumOf { it.size }
+            val old = pendingUpdates.toMap()
+            val msgCount = old.size
+            val partCount = old.values.sumOf { it.size }
             if (DEBUG_STREAM) AppLog.d(TAG, "flushPendingParts: flushing $msgCount messages, $partCount parts")
-            hadTruncated = pendingUpdates.any { it.value.values.any { pd -> (pd.sb?.length ?: 0) > 4000 } }
+            hadTruncated = old.any { it.value.values.any { pd -> (pd.sb?.length ?: 0) > 4000 } }
             pendingUpdates.clear()
-            snapshot
+            old
         }
 
         var changed = false
@@ -326,17 +324,23 @@ class MessageStore(
                 }
 
                 var updated = existing
-                partsMap.values.forEach { pd ->
-                    val partIndex = updated.parts.indexOfFirst { it.id == pd.part.id }
-                    val newPart = applyDeltaIfNeeded(updated, pd)
-                    val newParts = if (partIndex >= 0) {
-                        updated.parts.toMutableList().apply { this[partIndex] = newPart }
-                    } else {
-                        updated.parts + newPart
-                    }
-                    updated = updated.copy(parts = newParts)
-                    changed = true
+                val existingParts = updated.parts
+                val newParts = ArrayList<Part>(existingParts.size + partsMap.size)
+                val existingIds = HashSet<String>(existingParts.size)
+                for (p in existingParts) {
+                    existingIds.add(p.id)
+                    newParts.add(p)
                 }
+                for ((_, pd) in partsMap) {
+                    val existingIdx = existingParts.indexOfFirst { it.id == pd.part.id }
+                    if (existingIdx >= 0) {
+                        newParts[existingIdx] = applyDeltaIfNeeded(updated, pd)
+                    } else {
+                        newParts.add(applyDeltaIfNeeded(updated, pd))
+                    }
+                }
+                updated = updated.copy(parts = newParts)
+                changed = true
                 updates[messageId] = updated
             }
             if (changed) {
@@ -345,6 +349,7 @@ class MessageStore(
                     updates.forEach { (id, msg) -> _messagesMap[id] = msg }
                     _lastChangedIds.value = updates.keys.toSet()
                     _messagesVersion.value++
+                    _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                 }
             }
         }
@@ -401,6 +406,7 @@ class MessageStore(
                 // Single put — SnapshotStateMap.put() is atomic, no need for remove+put
                 _messagesMap[messageId] = existing.copy(parts = updatedParts)
                 _messagesVersion.value++
+                _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                 if (DEBUG_STREAM) AppLog.d(TAG, "upsertPart: DONE - partId=${part.id}, messageId=$messageId, delta=${delta?.length ?: 0} chars, oldCount=${existing.parts.size}, newCount=${updatedParts.size}")
             }
         }
@@ -418,6 +424,7 @@ class MessageStore(
                         _messagesMap.remove(messageId)
                         messageOrder.remove(messageId)
                         _messagesVersion.value++
+                        _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                     }
                     if (DEBUG_STREAM) AppLog.d(TAG, "removeMessage: $messageId")
                 }
@@ -438,6 +445,7 @@ class MessageStore(
                     Snapshot.withMutableSnapshot {
                         _messagesMap[messageId] = existing.copy(parts = updatedParts)
                         _messagesVersion.value++
+                        _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                     }
                     if (DEBUG_STREAM) AppLog.d(TAG, "removePart: partId=$partId from messageId=$messageId")
                 }
@@ -471,6 +479,7 @@ class MessageStore(
                 Snapshot.withMutableSnapshot {
                     updates.forEach { (id, msg) -> _messagesMap[id] = msg }
                     _messagesVersion.value++
+                    _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                 }
             }
         }

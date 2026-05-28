@@ -126,6 +126,7 @@ fun ChatScreen(
     val messagesVersion by viewModel.messagesVersion.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val branchName by viewModel.branchName.collectAsStateWithLifecycle()
+    val reasoningEffort by viewModel.reasoningEffort.collectAsStateWithLifecycle()
     val sessionConnectionState by viewModel.sessionConnectionState.collectAsStateWithLifecycle()
     val visualSettings by viewModel.visualSettings.collectAsStateWithLifecycle()
 
@@ -181,11 +182,8 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
-    val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
-    DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
-    // NativeFlingBehavior drives every fling frame through the C++ SplineFling engine.
-    // Friction tuned to 52% of Android default — iOS-length glide, no JVM alloc per frame.
-    val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
+    // iOS-model exponential decay fling — pure Kotlin, zero JNI, zero alloc per frame.
+    val smoothFling = dev.blazelight.p4oc.core.performance.rememberSmoothFlingBehavior()
 
     val isAtBottom by remember {
         derivedStateOf {
@@ -339,6 +337,14 @@ fun ChatScreen(
                         value = localInput,
                         isThinking = isThinking,
                         modelSelector = {
+                            val t = LocalOpenCodeTheme.current
+                            val next = when (reasoningEffort) {
+                                "auto" -> "low"
+                                "low" -> "medium"
+                                "medium" -> "high"
+                                "high" -> "max"
+                                else -> "auto"
+                            }
                             ModelAgentSelectorBar(
                                 availableAgents = availableAgents,
                                 selectedAgent = selectedAgent,
@@ -348,7 +354,24 @@ fun ChatScreen(
                                 onModelSelected = viewModel.modelAgentManager::selectModel,
                                 favoriteModels = favoriteModels,
                                 recentModels = recentModels,
-                                onToggleFavorite = viewModel.modelAgentManager::toggleFavoriteModel
+                                onToggleFavorite = viewModel.modelAgentManager::toggleFavoriteModel,
+                                trailingContent = {
+                                    Text(
+                                        text = reasoningEffort,
+                                        modifier = Modifier
+                                            .clickable(role = Role.Button) { viewModel.updateReasoningEffort(next) }
+                                            .padding(horizontal = 4.dp),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = when (reasoningEffort) {
+                                            "low" -> t.success
+                                            "medium" -> t.warning
+                                            "high" -> t.warning.copy(alpha = 0.8f, red = 1f, green = 0.5f, blue = 0f)
+                                            "max" -> t.error
+                                            else -> t.textMuted
+                                        }
+                                    )
+                                }
                             )
                         },
                         agentSelector = { },
@@ -1049,6 +1072,8 @@ private fun ChatMessageList(
         }
         return
     }
+    val itemKey: (Int, FlatChatItem) -> Any = remember { { _, item -> item.key } }
+    val itemContentType: (Int, FlatChatItem) -> Any = remember { { _, item -> item.contentType } }
     LazyColumn(
         state = listState,
         modifier = modifier.testTag("message_list"),
@@ -1076,32 +1101,8 @@ private fun ChatMessageList(
         }
         itemsIndexed(
             items = flatItems,
-            key = { _, item ->
-                when (item) {
-                    is FlatChatItem.UserPart          -> "u_${item.messageWithParts.message.id}"
-                    is FlatChatItem.AssistantBarStart -> "abs_${item.messageId}"
-                    is FlatChatItem.AssistantBarEnd   -> "abe_${item.messageId}"
-                    is FlatChatItem.TextPart          -> "txt_${item.msgId}_${item.part.id}"
-                    is FlatChatItem.ReasoningPart     -> "rea_${item.msgId}_${item.part.id}"
-                    is FlatChatItem.ReasoningGroup    -> "rg_${item.msgId}_${item.groupIndex}"
-                    is FlatChatItem.ToolBatch         -> "tb_${item.msgId}_${item.batchIndex}"
-                    is FlatChatItem.FilePart          -> "fp_${item.msgId}_${item.part.id}"
-                    is FlatChatItem.PatchPart         -> "pp_${item.msgId}_${item.part.id}"
-                }
-            },
-            contentType = { _, item ->
-                when (item) {
-                    is FlatChatItem.UserPart          -> "user"
-                    is FlatChatItem.AssistantBarStart -> "bar_start"
-                    is FlatChatItem.AssistantBarEnd   -> "bar_end"
-                    is FlatChatItem.TextPart          -> "text"
-                    is FlatChatItem.ReasoningPart     -> "reasoning"
-                    is FlatChatItem.ReasoningGroup    -> "reasoning_group"
-                    is FlatChatItem.ToolBatch         -> "tools"
-                    is FlatChatItem.FilePart          -> "file"
-                    is FlatChatItem.PatchPart         -> "patch"
-                }
-            }
+            key = itemKey,
+            contentType = itemContentType
         ) { _, item ->
             FlatChatItemView(
                 item = item,

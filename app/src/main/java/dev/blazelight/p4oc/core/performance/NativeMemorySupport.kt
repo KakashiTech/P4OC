@@ -1,73 +1,102 @@
 package dev.blazelight.p4oc.core.performance
 
 import java.nio.ByteBuffer
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Native C++ memory support for MemoryManager.
- *
- * Provides:
- *  1. PressureClassifier — integer-only threshold check, no boxing, no Float overhead
- *  2. SlabPool           — lock-free Treiber-stack object pool for 4KB slabs,
- *                          backed by a single native allocation
- *
- * Benefits vs Kotlin:
- *  - classify(): ~2ns (integer multiply/compare) vs ~80ns (Kotlin when + Double math)
- *  - SlabPool.acquire(): ~15ns Treiber CAS vs ~500ns new ByteArray + GC pressure
- *  - Zero GC pressure on the monitoring hot path
- */
 object NativeMemorySupport {
 
-    init {
-        System.loadLibrary("p4oc_memory")
+    @Volatile private var loadAttempted = false
+    @Volatile private var nativeAvailable = false
+    private val nextHandle = AtomicLong(1)
+    private val classifiers = ConcurrentHashMap<Long, HysteresisClassifier>()
+    private val slabPools = ConcurrentHashMap<Long, KotlinSlabPool>()
+
+    @Synchronized fun ensureLoaded(): Boolean {
+        if (loadAttempted) return nativeAvailable
+        loadAttempted = true
+        return try {
+            System.loadLibrary("p4oc_memory")
+            nativeAvailable = true
+            true
+        } catch (_: Throwable) {
+            nativeAvailable = false
+            false
+        }
     }
 
     // ── PressureClassifier ────────────────────────────────────────────────────
 
-    /** Stateless classifier — no handle needed. Pure arithmetic. */
-    fun classify(totalBytes: Long, availableBytes: Long): PressureLevel =
-        PressureLevel.fromOrdinal(nativeClassify(totalBytes, availableBytes))
+    fun classify(totalBytes: Long, availableBytes: Long): PressureLevel {
+        if (ensureLoaded()) return PressureLevel.fromOrdinal(nativeClassify(totalBytes, availableBytes))
+        val ratio = if (totalBytes > 0) (totalBytes - availableBytes).toDouble() / totalBytes else 0.0
+        return when {
+            ratio > 0.95 -> PressureLevel.CRITICAL
+            ratio > 0.85 -> PressureLevel.HIGH
+            ratio > 0.70 -> PressureLevel.MEDIUM
+            else -> PressureLevel.LOW
+        }
+    }
 
-    fun createClassifier(): Long = nativeClassifierCreate()
-    fun destroyClassifier(handle: Long) = nativeClassifierDestroy(handle)
+    fun createClassifier(): Long {
+        if (ensureLoaded()) return nativeClassifierCreate()
+        val h = nextHandle.getAndIncrement()
+        classifiers[h] = HysteresisClassifier()
+        return h
+    }
 
-    /**
-     * Classify with hysteresis: only escalates after [minCycles] consecutive
-     * threshold breaches, avoiding flapping on transient spikes.
-     */
+    fun destroyClassifier(handle: Long) {
+        if (ensureLoaded()) { nativeClassifierDestroy(handle); return }
+        classifiers.remove(handle)
+    }
+
     fun classifyWithHysteresis(
         handle: Long,
         totalBytes: Long,
         availableBytes: Long,
         minCycles: Int = 2
-    ): PressureLevel =
-        PressureLevel.fromOrdinal(
-            nativeClassifyHysteresis(handle, totalBytes, availableBytes, minCycles))
+    ): PressureLevel {
+        if (ensureLoaded()) {
+            return PressureLevel.fromOrdinal(
+                nativeClassifyHysteresis(handle, totalBytes, availableBytes, minCycles))
+        }
+        val c = classifiers[handle] ?: return PressureLevel.LOW
+        return c.classify(totalBytes, availableBytes, minCycles)
+    }
 
-    fun resetClassifier(handle: Long) = nativeClassifierReset(handle)
+    fun resetClassifier(handle: Long) {
+        if (ensureLoaded()) { nativeClassifierReset(handle); return }
+        classifiers[handle]?.reset()
+    }
 
     // ── SlabPool ──────────────────────────────────────────────────────────────
 
-    /**
-     * Create a slab pool.
-     * [slabSize] bytes per slab (default 4096), [poolSize] total slabs (default 64).
-     */
-    fun createSlabPool(slabSize: Int = 4096, poolSize: Int = 64): Long =
-        nativeSlabCreate(slabSize, poolSize)
+    fun createSlabPool(slabSize: Int = 4096, poolSize: Int = 64): Long {
+        if (ensureLoaded()) return nativeSlabCreate(slabSize, poolSize)
+        val h = nextHandle.getAndIncrement()
+        slabPools[h] = KotlinSlabPool(slabSize, poolSize)
+        return h
+    }
 
-    fun destroySlabPool(handle: Long) = nativeSlabDestroy(handle)
+    fun destroySlabPool(handle: Long) {
+        if (ensureLoaded()) { nativeSlabDestroy(handle); return }
+        slabPools.remove(handle)
+    }
 
-    /**
-     * Acquire a slab as a direct ByteBuffer.
-     * Returns null if pool is exhausted (caller falls back to heap).
-     * The ByteBuffer is backed by native memory — zero-copy for native consumers.
-     */
-    fun acquireSlab(handle: Long): ByteBuffer? = nativeSlabAcquire(handle)
+    fun acquireSlab(handle: Long): ByteBuffer? {
+        if (ensureLoaded()) return nativeSlabAcquire(handle)
+        return slabPools[handle]?.acquire()
+    }
 
-    /** Return a slab to the pool. Must pass the exact ByteBuffer from [acquireSlab]. */
-    fun releaseSlab(handle: Long, slab: ByteBuffer) = nativeSlabRelease(handle, slab)
+    fun releaseSlab(handle: Long, slab: ByteBuffer) {
+        if (ensureLoaded()) { nativeSlabRelease(handle, slab); return }
+        slabPools[handle]?.release(slab)
+    }
 
-    /** Returns [available, poolSize, totalAcquired, totalReleased]. */
-    fun slabStats(handle: Long): LongArray = nativeSlabStats(handle)
+    fun slabStats(handle: Long): LongArray {
+        if (ensureLoaded()) return nativeSlabStats(handle)
+        return slabPools[handle]?.stats() ?: longArrayOf(0, 0, 0, 0)
+    }
 
     // ── Pressure level enum ───────────────────────────────────────────────────
 
@@ -81,6 +110,60 @@ object NativeMemorySupport {
                 3    -> CRITICAL
                 else -> LOW
             }
+        }
+    }
+
+    // ── Fallback types ────────────────────────────────────────────────────────
+
+    private class HysteresisClassifier {
+        private var currentLevel = PressureLevel.LOW
+        private var breachCount = 0
+
+        fun classify(totalBytes: Long, availableBytes: Long, minCycles: Int): PressureLevel {
+            val immediate = NativeMemorySupport.classify(totalBytes, availableBytes)
+            if (immediate.ordinal > currentLevel.ordinal) {
+                breachCount++
+                if (breachCount >= minCycles) currentLevel = immediate
+            } else if (immediate.ordinal < currentLevel.ordinal) {
+                breachCount = 0
+                currentLevel = immediate
+            }
+            return currentLevel
+        }
+
+        fun reset() {
+            currentLevel = PressureLevel.LOW
+            breachCount = 0
+        }
+    }
+
+    private class KotlinSlabPool(val slabSize: Int, val poolSize: Int) {
+        private val available = ArrayDeque<ByteBuffer>()
+        private var totalAcquired = 0L
+        private var totalReleased = 0L
+
+        init {
+            repeat(poolSize) {
+                available.addLast(ByteBuffer.allocateDirect(slabSize))
+            }
+        }
+
+        fun acquire(): ByteBuffer? = synchronized(available) {
+            val slab = available.removeFirstOrNull() ?: return null
+            totalAcquired++
+            slab
+        }
+
+        fun release(slab: ByteBuffer) = synchronized(available) {
+            if (available.size < poolSize) {
+                slab.clear()
+                available.addLast(slab)
+                totalReleased++
+            }
+        }
+
+        fun stats(): LongArray = synchronized(available) {
+            longArrayOf(available.size.toLong(), poolSize.toLong(), totalAcquired, totalReleased)
         }
     }
 
