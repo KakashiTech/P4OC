@@ -292,9 +292,28 @@ class ChatViewModel constructor(
             }
             is OpenCodeEvent.MessagePartUpdated -> {
                 if (event.part.sessionID == sessionId) {
-                    // Route through buffer — upsertPart was bypassing coalescing entirely,
-                    // causing one full recomposition per SSE token (30-50/sec during streaming).
+                    // Full part update (from text-end / tool-end lifecycle) — replaces part state
                     messageStore.upsertPartBuffered(event.part, event.delta)
+                }
+            }
+            is OpenCodeEvent.MessagePartDelta -> {
+                if (event.sessionID == sessionId) {
+                    when (event.field) {
+                        "text" -> {
+                            val part = Part.Text(
+                                id = event.partID, sessionID = event.sessionID,
+                                messageID = event.messageID, text = "", isStreaming = true
+                            )
+                            messageStore.upsertPartBuffered(part, event.delta)
+                        }
+                        "reasoning" -> {
+                            val part = Part.Reasoning(
+                                id = event.partID, sessionID = event.sessionID,
+                                messageID = event.messageID, text = ""
+                            )
+                            messageStore.upsertPartBuffered(part, event.delta)
+                        }
+                    }
                 }
             }
             is OpenCodeEvent.MessageRemoved -> {
@@ -371,9 +390,93 @@ class ChatViewModel constructor(
                 }
             }
             is OpenCodeEvent.PermissionReplied -> {
-                if (isOwnedSession(event.sessionID)) {
+                if (isOwnedSession(event.requestID)) {
                     dialogManager.clearPermissionByRequestId(event.requestID)
                 }
+            }
+            is OpenCodeEvent.Connected -> {
+                viewModelScope.launch {
+                    val api = connectionManager.getApi() ?: return@launch
+                    try {
+                        val statuses = api.getSessionStatuses()
+                        val myStatus = statuses[sessionId]
+                        val statusLabel = myStatus?.type ?: "unknown"
+                        AppLog.d(TAG, "SSE reconnected, session status: $statusLabel")
+                        val busy = myStatus?.type == "busy" || myStatus?.type == "retry"
+                        _uiState.update { it.copy(isBusy = busy) }
+                        if (!busy) sendQueuedMessageIfAny()
+
+                        // Re-discover pending questions that may have been missed during disconnect
+                        val pendingQuestions = api.getPendingQuestions()
+                        for (q in pendingQuestions) {
+                            if (q.sessionID == sessionId) {
+                                dialogManager.enqueueQuestion(
+                                    QuestionRequest(
+                                        id = q.id, sessionID = q.sessionID,
+                                        questions = q.questions.map { qq ->
+                                            Question(
+                                                header = qq.header, question = qq.question,
+                                                options = qq.options.map { o -> QuestionOption(label = o.label, description = o.description) },
+                                                multiple = qq.multiple, custom = qq.custom
+                                            )
+                                        },
+                                        tool = q.tool?.let { QuestionToolRef(messageID = it.messageID, callID = it.callID) }
+                                    )
+                                )
+                            }
+                        }
+
+                        // Re-discover pending permissions that may have been missed
+                        val pendingPermissions = api.getPendingPermissions()
+                        for (p in pendingPermissions) {
+                            if (p.sessionID == sessionId) {
+                                dialogManager.enqueuePermission(
+                                    Permission(
+                                        id = p.id, type = p.permission,
+                                        patterns = p.patterns, sessionID = p.sessionID,
+                                        messageID = p.tool?.messageID ?: "",
+                                        callID = p.tool?.callID, title = "",
+                                        metadata = p.metadata, always = p.always
+                                    )
+                                )
+                            }
+                        }
+                    } catch (_: Exception) {
+                        AppLog.w(TAG, "Failed to reload session after SSE reconnect")
+                    }
+                }
+            }
+            is OpenCodeEvent.Disconnected -> {
+                _uiState.update { it.copy(isBusy = false, isSending = false) }
+            }
+            is OpenCodeEvent.SessionDeleted -> {
+                if (event.session.id == sessionId) {
+                    _uiState.update { it.copy(isBusy = false, isSending = false, error = "Session deleted") }
+                }
+            }
+            is OpenCodeEvent.SessionDiff -> {
+                if (event.sessionID == sessionId && event.diffs.isNotEmpty()) {
+                    AppLog.d(TAG, "Session diff: ${event.diffs.size} files changed")
+                }
+            }
+            is OpenCodeEvent.SessionCompacted -> {
+                if (event.sessionID == sessionId) {
+                    AppLog.d(TAG, "Session compacted")
+                }
+            }
+            is OpenCodeEvent.CommandExecuted -> {
+                if (event.sessionID == sessionId) {
+                    AppLog.d(TAG, "Command executed: ${event.name}")
+                }
+            }
+            is OpenCodeEvent.FileEdited -> {
+                AppLog.d(TAG, "File edited: ${event.file}")
+            }
+            is OpenCodeEvent.InstallationUpdateAvailable -> {
+                _uiState.update { it.copy(updateVersion = event.version) }
+            }
+            is OpenCodeEvent.Error -> {
+                AppLog.e(TAG, "SSE error: ${event.throwable.message}")
             }
             else -> {}
         }
@@ -769,7 +872,8 @@ data class ChatUiState(
     val todos: List<Todo> = emptyList(),
     val isLoadingTodos: Boolean = false,
     val queuedMessage: QueuedMessage? = null,
-    val abortSummary: AbortSummary? = null
+    val abortSummary: AbortSummary? = null,
+    val updateVersion: String? = null
 )
 
 data class QueuedMessage(

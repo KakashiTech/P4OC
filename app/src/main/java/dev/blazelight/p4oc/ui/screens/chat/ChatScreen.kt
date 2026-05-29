@@ -81,12 +81,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.components.LocalAnimationsPaused
+
+private val ASSISTANT_TYPES = setOf("text", "reasoning", "tools", "file", "patch", "reasoning_group")
 
 // Data classes for optimized state management (currently not used but kept for future optimization)
 data class CombinedChatState(
@@ -118,25 +123,17 @@ fun ChatScreen(
     onConnectionStateChanged: ((SessionConnectionState?) -> Unit)? = null,
     isActiveTab: Boolean = true
 ) {
-    // Optimized state collection - reduce recompositions by grouping related states
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val messages by viewModel.messages.collectAsStateWithLifecycle()
-    // Stable Long version key — increments on every mutation, never loses equality
-    // on list copy(). Use this as remember() key instead of the messages list reference.
-    val messagesVersion by viewModel.messagesVersion.collectAsStateWithLifecycle()
+    val messages = viewModel.messages.collectAsStateWithLifecycle()
+    val messagesVersion = viewModel.messagesVersion.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val branchName by viewModel.branchName.collectAsStateWithLifecycle()
     val reasoningEffort by viewModel.reasoningEffort.collectAsStateWithLifecycle()
     val sessionConnectionState by viewModel.sessionConnectionState.collectAsStateWithLifecycle()
     val visualSettings by viewModel.visualSettings.collectAsStateWithLifecycle()
 
-    // isLoading se obtiene de uiState
-
-    // Dialog states - collected separately to avoid unnecessary recompositions
     val pendingQuestion by viewModel.dialogManager.pendingQuestion.collectAsStateWithLifecycle()
     val pendingPermissionsByCallId by viewModel.dialogManager.pendingPermissionsByCallId.collectAsStateWithLifecycle()
-    
-    // Model/Agent states - collect only what's needed
     val availableAgents by viewModel.modelAgentManager.availableAgents.collectAsStateWithLifecycle()
     val selectedAgent by viewModel.modelAgentManager.selectedAgent.collectAsStateWithLifecycle()
     val availableModels by viewModel.modelAgentManager.availableModels.collectAsStateWithLifecycle()
@@ -147,123 +144,69 @@ fun ChatScreen(
     val pickerFiles by viewModel.filePickerManager.pickerFiles.collectAsStateWithLifecycle()
     val pickerCurrentPath by viewModel.filePickerManager.pickerCurrentPath.collectAsStateWithLifecycle()
     val isPickerLoading by viewModel.filePickerManager.isPickerLoading.collectAsStateWithLifecycle()
-    
-    // Notify parent when session is loaded
+
     LaunchedEffect(uiState.session) {
-        uiState.session?.let { session ->
-            onSessionLoaded?.invoke(session.id, session.title)
-        }
+        uiState.session?.let { onSessionLoaded?.invoke(it.id, it.title) }
     }
-    
-    // Propagate connection state changes to parent (for tab indicator)
     LaunchedEffect(sessionConnectionState) {
         onConnectionStateChanged?.invoke(sessionConnectionState)
     }
-    
-    // Mark as read when tab becomes active
     LaunchedEffect(isActiveTab) {
-        if (isActiveTab) {
-            viewModel.markAsRead()
-        }
+        if (isActiveTab) viewModel.markAsRead()
     }
-    
-    // Convert setting string to ToolWidgetState
+
     val defaultToolWidgetState = remember(visualSettings.toolWidgetDefaultState) {
         ToolWidgetState.fromString(visualSettings.toolWidgetDefaultState)
     }
-
-    // isThinking: pure derivedStateOf — no messages reference key, tracks internally.
-    val isThinking by remember {
-        derivedStateOf {
-            messages.lastOrNull()?.parts?.any { it is Part.Reasoning && it.time?.end == null } == true
-        }
-    }
-
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
-
-    // iOS-model exponential decay fling — pure Kotlin, zero JNI, zero alloc per frame.
     val smoothFling = dev.blazelight.p4oc.core.performance.rememberSmoothFlingBehavior()
-
-    val isAtBottom by remember {
-        derivedStateOf {
-            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 120
-        }
-    }
-    var userScrolledAway by remember { mutableStateOf(false) }
-    var hasNewContentWhileAway by remember { mutableStateOf(false) }
-
-    // Observer 1: scroll physics only — reads NO messages state, zero allocation per frame.
-    // Throttles SSE flushes and tracks user-scrolled-away purely from list scroll state.
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress to isAtBottom }
-            .collect { (scrolling, atBottom) ->
-                viewModel.messageStore.setFlushDelayWhileScrolling(scrolling)
-                if (scrolling && !atBottom) userScrolledAway = true
-                if (atBottom && !scrolling && userScrolledAway) {
-                    userScrolledAway = false
-                    hasNewContentWhileAway = false
-                }
-            }
-    }
-
-    // Observer 2: auto-scroll on new messages — completely separate from scroll observer.
-    // Uses animateScrollToItem for a smooth glide instead of a teleport.
-    // Debounced: only scrolls after 80ms of no new versions to avoid fighting rapid SSE tokens.
-    LaunchedEffect(messagesVersion) {
-        val count = messages.size
-        if (count == 0) return@LaunchedEffect
-        if (!userScrolledAway && !listState.isScrollInProgress) {
-            kotlinx.coroutines.delay(80)
-            if (!listState.isScrollInProgress) {
-                listState.animateScrollToItem(0)
-            }
-        } else if (userScrolledAway) {
-            hasNewContentWhileAway = true
-        }
-    }
-
-    // Scroll to bottom once when session first loads
-    LaunchedEffect(uiState.session?.id) {
-        if (messages.isNotEmpty()) listState.scrollToItem(0)
-    }
-
+    val isAtBottom = remember { derivedStateOf { listState.firstVisibleItemIndex == 0 } }
+    val userScrolledAway = remember { mutableStateOf(false) }
+    val hasNewContentWhileAway = remember { mutableStateOf(false) }
     var showCommandPalette by remember { mutableStateOf(false) }
     var showTodoTracker by remember { mutableStateOf(false) }
     var showFilePicker by remember { mutableStateOf(false) }
     var showRevertDialog by remember { mutableStateOf<String?>(null) }
     var showSkillPicker by remember { mutableStateOf(false) }
 
-    val lastChangedIds by viewModel.lastChangedIds.collectAsStateWithLifecycle()
-
-    // Delta-diff flatItems: on each version bump try patchFlatItems() first (O(changed)).
-    // Falls back to full buildFlatItems() only when structure changes (new msg / loadMore).
-    // Uses mutableStateOf directly - the state read inside remember doesn't trigger recomposition.
-    val prevFlatItemsRef = remember { mutableStateOf<List<FlatChatItem>>(emptyList()) }
-    val flatItems = remember(messagesVersion) {
-        // Read the ref value without triggering recomposition observation
-        val prevList = prevFlatItemsRef.value
-        val patched = patchFlatItems(prevList, messages, lastChangedIds)
-        if (patched != null) {
-            AppLog.d("ChatScreen", "flatItems patched: old=${prevList.size} new=${patched.size} changed=${lastChangedIds.size}")
-        } else {
-            AppLog.d("ChatScreen", "flatItems rebuild: messages=${messages.size}")
+    val isThinking by remember {
+        derivedStateOf {
+            messages.value.lastOrNull()?.parts?.any { it is Part.Reasoning && it.time?.end == null } == true
         }
-        val result = patched ?: buildFlatItems(groupMessagesIntoBlocks(messages))
-        prevFlatItemsRef.value = result
-        result
     }
 
-    // Pagination keyed on version too.
-    val hasMoreMessages   = remember(messagesVersion) { viewModel.hasMoreMessages() }
-    val totalMessageCount = remember(messagesVersion) { viewModel.getTotalMessageCount() }
-    val visibleMessageCount = messages.size
+    val flatItems = FlatItemsProvider(
+        viewModel = viewModel,
+        messages = messages,
+        messagesVersion = messagesVersion,
+        listState = listState,
+    )
 
-    // isBusy / isLoading isolated — consumers only recompose on boolean flip.
+    ScrollObservers(
+        viewModel = viewModel,
+        messages = messages,
+        messagesVersion = messagesVersion,
+        listState = listState,
+        isAtBottom = isAtBottom,
+        uiState = uiState,
+        userScrolledAway = userScrolledAway,
+        hasNewContentWhileAway = hasNewContentWhileAway,
+        flatItems = flatItems,
+    )
+
+    val hasMoreMessages by remember {
+        derivedStateOf { messagesVersion.value; viewModel.hasMoreMessages() }
+    }
+    val totalMessageCount by remember {
+        derivedStateOf { messagesVersion.value; viewModel.getTotalMessageCount() }
+    }
+    val visibleMessageCount by remember {
+        derivedStateOf { messages.value.size }
+    }
     val isBusy    by remember { derivedStateOf { uiState.isBusy } }
     val isLoading by remember { derivedStateOf { uiState.isLoading } }
 
-    // Stable lambdas — ViewModel reference is constant for session lifetime.
     val onToolApprove = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "once") } }
     val onToolDeny    = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "reject") } }
     val onToolAlways  = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "always") } }
@@ -279,7 +222,6 @@ fun ChatScreen(
 
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
-
     BackHandler {
         focusManager.clearFocus()
         keyboardController?.hide()
@@ -287,7 +229,7 @@ fun ChatScreen(
     }
 
     Scaffold(
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        contentWindowInsets = WindowInsets.ime,
         topBar = {
             // Session title from loaded session
             val displayTitle = uiState.session?.title ?: "Chat"
@@ -325,7 +267,6 @@ fun ChatScreen(
             if (!isSubAgent) {
                 Column(
                     modifier = Modifier
-                        .navigationBarsPadding()
                         .imePadding()
                         .background(LocalOpenCodeTheme.current.backgroundElement)
                 ) {
@@ -448,7 +389,7 @@ fun ChatScreen(
                 pendingPermissionsByCallId = pendingPermissionsByCallId,
                 onRevert = onRevert,
                 onFork = onFork,
-                showEmpty = messages.isEmpty() && !isBusy && !isLoading,
+                showEmpty = messages.value.isEmpty() && !isBusy && !isLoading,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 12.dp)
@@ -474,12 +415,12 @@ fun ChatScreen(
             }
 
             JumpToBottomButton(
-                visible = userScrolledAway && isBusy,
-                hasNewContent = hasNewContentWhileAway,
+                visible = userScrolledAway.value && isBusy,
+                hasNewContent = hasNewContentWhileAway.value,
                 onClick = {
                     coroutineScope.launch {
-                        userScrolledAway = false
-                        hasNewContentWhileAway = false
+                        userScrolledAway.value = false
+                        hasNewContentWhileAway.value = false
                         listState.scrollToItem(0)
                     }
                 },
@@ -563,16 +504,108 @@ fun ChatScreen(
         )
     }
 
-    // === SKELETON REMOVED ===
-    // Removed skeleton to prevent background placeholders during loading
-    // Messages will appear directly without placeholder backgrounds
 }
 
-// INSTANT PAINT Skeleton removed - no longer needed
-// Messages appear directly without placeholder backgrounds
+@Composable
+private fun ScrollObservers(
+    viewModel: ChatViewModel,
+    messages: State<List<MessageWithParts>>,
+    messagesVersion: State<Long>,
+    listState: LazyListState,
+    isAtBottom: State<Boolean>,
+    uiState: ChatUiState,
+    userScrolledAway: MutableState<Boolean>,
+    hasNewContentWhileAway: MutableState<Boolean>,
+    flatItems: List<FlatChatItem>,
+) {
+    var prevMsgIds by remember { mutableStateOf(emptySet<String>()) }
+    var isAutoScrolling by remember { mutableStateOf(false) }
+    val hasNewMessage = remember {
+        derivedStateOf {
+            val ids = messages.value.map { it.message.id }.toSet()
+            ids.any { it !in prevMsgIds }
+        }
+    }
 
-// LoadingSkeleton removed - no longer needed
-// Messages appear directly without placeholder backgrounds
+    LaunchedEffect(Unit) {
+        snapshotFlow {
+            Pair(listState.isScrollInProgress, isAtBottom.value)
+        }.collect { (scrolling, atBottom) ->
+            viewModel.messageStore.setFlushDelayWhileScrolling(scrolling)
+            if (!atBottom && scrolling && !userScrolledAway.value && !isAutoScrolling) {
+                userScrolledAway.value = true
+            }
+            if (atBottom && !scrolling && userScrolledAway.value) {
+                userScrolledAway.value = false
+                hasNewContentWhileAway.value = false
+            }
+        }
+    }
+
+    LaunchedEffect(hasNewMessage.value, flatItems) {
+        if (hasNewMessage.value && flatItems.isNotEmpty()) {
+            isAutoScrolling = true
+            prevMsgIds = messages.value.map { it.message.id }.toSet()
+            userScrolledAway.value = false
+            hasNewContentWhileAway.value = false
+            listState.scrollToItem(0)
+            isAutoScrolling = false
+        }
+    }
+
+    LaunchedEffect(uiState.session?.id) {
+        if (messages.value.isNotEmpty()) {
+            isAutoScrolling = true
+            listState.scrollToItem(0)
+            isAutoScrolling = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        snapshotFlow { messagesVersion.value }
+            .collect { version ->
+                delay(32)
+                if (version != messagesVersion.value) return@collect
+                if (!userScrolledAway.value && isAtBottom.value && !listState.isScrollInProgress) {
+                    listState.scrollToItem(0)
+                } else if (userScrolledAway.value && !hasNewMessage.value) {
+                    hasNewContentWhileAway.value = true
+                }
+            }
+    }
+}
+
+@Composable
+private fun FlatItemsProvider(
+    viewModel: ChatViewModel,
+    messages: State<List<MessageWithParts>>,
+    messagesVersion: State<Long>,
+    listState: LazyListState,
+): List<FlatChatItem> {
+    val lastChangedIds = viewModel.lastChangedIds.collectAsStateWithLifecycle()
+
+    class Ref<T>(var value: T)
+    val prevFlatItemsRef = remember { Ref<List<FlatChatItem>>(emptyList()) }
+    val flatItems by remember {
+        derivedStateOf {
+            val prevList = prevFlatItemsRef.value
+            messagesVersion.value
+            val patched = patchFlatItems(prevList, messages.value, lastChangedIds.value)
+            if (patched != null) {
+                AppLog.d("ChatScreen", "flatItems patched: old=${prevList.size} new=${patched.size} changed=${lastChangedIds.value.size}")
+            } else {
+                AppLog.d("ChatScreen", "flatItems rebuild: messages=${messages.value.size}")
+            }
+            val result = patched ?: buildFlatItems(groupMessagesIntoBlocks(messages.value))
+            if (result !== prevList) {
+                prevFlatItemsRef.value = result
+            }
+            result
+        }
+    }
+
+    return flatItems
+}
 
 @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1074,9 +1107,26 @@ private fun ChatMessageList(
     }
     val itemKey: (Int, FlatChatItem) -> Any = remember { { _, item -> item.key } }
     val itemContentType: (Int, FlatChatItem) -> Any = remember { { _, item -> item.contentType } }
+    val accentBarColor = LocalOpenCodeTheme.current.accent.copy(alpha = 0.85f)
     LazyColumn(
         state = listState,
-        modifier = modifier.testTag("message_list"),
+        modifier = modifier
+            .testTag("message_list")
+            .drawBehind {
+                val assistantTypes = ASSISTANT_TYPES
+                val startOffset = listState.layoutInfo.viewportStartOffset
+                for (item in listState.layoutInfo.visibleItemsInfo) {
+                    if (item.contentType in assistantTypes) {
+                        val y = item.offset.toFloat() - startOffset
+                        if (y + item.size <= 0f) continue
+                        drawRect(
+                            color = accentBarColor,
+                            topLeft = Offset(0f, y),
+                            size = Size(3.dp.toPx(), item.size.toFloat())
+                        )
+                    }
+                }
+            },
         reverseLayout = true,
         flingBehavior = flingBehavior,
         contentPadding = PaddingValues(vertical = 2.dp),

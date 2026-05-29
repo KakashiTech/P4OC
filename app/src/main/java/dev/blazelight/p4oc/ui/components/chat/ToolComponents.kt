@@ -209,7 +209,6 @@ fun DiffPreview(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RectangleShape)
             .background(theme.background)
     ) {
         hunks.forEach { hunk ->

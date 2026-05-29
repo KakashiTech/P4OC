@@ -45,6 +45,7 @@ import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.TuiCodeFontSize
+import dev.blazelight.p4oc.ui.components.LocalAnimationsPaused
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
 
 data class ModelOption(
@@ -82,7 +83,7 @@ fun ChatInputBar(
     val canSend    = hasContent && enabled && !isLoading && !isBusy
     val canQueue   = hasContent && isBusy && !hasQueuedMessage
     val showSlash  = value.startsWith("/") && !value.contains(" ") && commands.isNotEmpty()
-    val isIdle     = enabled && !isLoading && !isBusy
+    val isIdle = enabled && !isLoading && !isBusy
 
     // ── Status label ────────────────────────────────────────────────────────
     val statusLabel = when {
@@ -147,7 +148,7 @@ fun ChatInputBar(
                 elapsed, 9000, 0, false
             )
             this.value = t * PERIMETER
-            delay(16L)
+            delay(100L)
         }
     }
 
@@ -188,9 +189,7 @@ fun ChatInputBar(
     fun perimeterBrush(segStart: Float, segEnd: Float, isVertical: Boolean, invertGradient: Boolean = false): Brush {
         if (!isBusy || shimmerPos < 0f) return SolidColor(dimBase)
 
-        // 13 stops: enough resolution so a GLOW_RADIUS of 0.22 units samples
-        // at least 2-3 stops inside the glow even on the shortest segment.
-        val STOPS = 13
+        val STOPS = 5
         val length = run {
             val raw = (segEnd - segStart + PERIMETER) % PERIMETER
             if (raw == 0f) PERIMETER else raw
@@ -263,7 +262,7 @@ fun ChatInputBar(
                     fontSize = 9.sp,
                     style = if (isBusy) {
                         TextStyle(
-                            brush = perimeterBrush(segStart = 4f, segEnd = 4.6f, isVertical = false),
+                            brush = remember(isBusy, shimmerPos) { perimeterBrush(segStart = 4f, segEnd = 4.6f, isVertical = false) },
                             fontFamily = FontFamily.Monospace,
                             fontSize = 9.sp
                         )
@@ -283,7 +282,7 @@ fun ChatInputBar(
                     modifier = Modifier
                         .weight(1f)
                         .height(Sizing.strokeMd)
-                        .background(perimeterBrush(segStart = 4.6f, segEnd = 6f, isVertical = false))
+                        .background(remember(isBusy, shimmerPos) { perimeterBrush(segStart = 4.6f, segEnd = 6f, isVertical = false) })
                 )
                 // ┐ corner at perimeter pos 6
                 Text(
@@ -397,7 +396,7 @@ fun ChatInputBar(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     style = TextStyle(
-                        brush = perimeterBrush(segStart = 2f, segEnd = 4f, isVertical = true, invertGradient = true),
+                        brush = remember(isBusy, shimmerPos) { perimeterBrush(segStart = 2f, segEnd = 4f, isVertical = true, invertGradient = true) },
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp
                     )
@@ -554,7 +553,7 @@ fun ChatInputBar(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
                     style = TextStyle(
-                        brush = perimeterBrush(segStart = 6f, segEnd = 8f, isVertical = true),
+                        brush = remember(isBusy, shimmerPos) { perimeterBrush(segStart = 6f, segEnd = 8f, isVertical = true) },
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp
                     )
@@ -586,7 +585,7 @@ fun ChatInputBar(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 9.sp,
                     style = TextStyle(
-                        brush = perimeterBrush(segStart = 2f, segEnd = 2.2f, isVertical = false),
+                        brush = remember(isBusy, shimmerPos) { perimeterBrush(segStart = 2f, segEnd = 2.2f, isVertical = false) },
                         fontFamily = FontFamily.Monospace,
                         fontSize = 9.sp
                     )
@@ -611,7 +610,7 @@ fun ChatInputBar(
                         .height(Sizing.strokeMd)
                         .padding(horizontal = Spacing.xxs)
                         .background(
-                            perimeterBrush(segStart = 2.2f, segEnd = 8f, isVertical = false, invertGradient = true)
+                            remember(isBusy, shimmerPos) { perimeterBrush(segStart = 2.2f, segEnd = 8f, isVertical = false, invertGradient = true) }
                         )
                 )
                 // ┘ corner at perimeter pos 0

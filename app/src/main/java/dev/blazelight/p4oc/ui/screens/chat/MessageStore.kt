@@ -72,8 +72,7 @@ class MessageStore(
     private val pendingMutex = Mutex()
     private val pendingUpdates = mutableMapOf<String, MutableMap<String, PendingDelta>>() // messageId -> (partId -> delta)
     private var flushJob: Job? = null
-    @Volatile private var flushDelayMs: Long = 16L // 1 frame @60fps
-    @Volatile private var reasoningFlushDelayMs: Long = 32L // 2 frames — coalesce reasoning tokens
+    @Volatile private var flushSuppressed = false // when true, no flush jobs are scheduled
 
     /**
      * Messages flow — emits whenever messages or parts change.
@@ -183,7 +182,7 @@ class MessageStore(
     fun getTotalMessageCount(): Int = allMessagesMap.size
 
     fun upsertMessage(message: Message) {
-        scope.launch {
+        scope.launch(Dispatchers.Default) {
             messagesMutex.withLock {
                 val existing = _messagesMap[message.id]
                 val isNew = existing == null
@@ -192,16 +191,18 @@ class MessageStore(
                 val newEntry = if (existing != null) existing.copy(message = message)
                                else MessageWithParts(message, emptyList())
 
-                Snapshot.withMutableSnapshot {
-                    if (needsReposition) {
-                        messageOrder.remove(message.id)
-                        insertIntoOrder(message.id, message.createdAt)
-                    } else if (isNew) {
-                        insertIntoOrder(message.id, message.createdAt)
+                withContext(Dispatchers.Main) {
+                    Snapshot.withMutableSnapshot {
+                        if (needsReposition) {
+                            messageOrder.remove(message.id)
+                            insertIntoOrder(message.id, message.createdAt)
+                        } else if (isNew) {
+                            insertIntoOrder(message.id, message.createdAt)
+                        }
+                        _messagesMap[message.id] = newEntry
+                        _messagesVersion.value++
+                        _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                     }
-                    _messagesMap[message.id] = newEntry
-                    _messagesVersion.value++
-                    _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                 }
                 if (DEBUG_STREAM) AppLog.d(TAG, "upsertMessage: msgId=${message.id}, isNew=$isNew, reposition=$needsReposition")
             }
@@ -213,7 +214,7 @@ class MessageStore(
      * Single version bump for all changes reduces recompositions.
      */
     fun upsertMessages(messages: List<Message>) {
-        scope.launch {
+        scope.launch(Dispatchers.Default) {
             messagesMutex.withLock {
                 // Pre-compute all changes before touching snapshot state
                 data class Entry(val id: String, val msg: MessageWithParts, val reposition: Boolean, val isNew: Boolean)
@@ -226,14 +227,16 @@ class MessageStore(
                         isNew = existing == null
                     )
                 }
-                Snapshot.withMutableSnapshot {
-                    entries.forEach { e ->
-                        if (e.reposition) { messageOrder.remove(e.id); insertIntoOrder(e.id, e.msg.message.createdAt) }
-                        else if (e.isNew) insertIntoOrder(e.id, e.msg.message.createdAt)
-                        _messagesMap[e.id] = e.msg
+                withContext(Dispatchers.Main) {
+                    Snapshot.withMutableSnapshot {
+                        entries.forEach { e ->
+                            if (e.reposition) { messageOrder.remove(e.id); insertIntoOrder(e.id, e.msg.message.createdAt) }
+                            else if (e.isNew) insertIntoOrder(e.id, e.msg.message.createdAt)
+                            _messagesMap[e.id] = e.msg
+                        }
+                        _messagesVersion.value++
+                        _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                     }
-                    _messagesVersion.value++
-                    _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                 }
                 if (DEBUG_STREAM) AppLog.d(TAG, "upsertMessages: batch of ${messages.size}")
             }
@@ -244,50 +247,42 @@ class MessageStore(
      * Coalesced variant of upsertPart: accumulates rapid updates and applies in a single batch.
      * This reduces recompositions under heavy streaming.
      * 
-     * OPTIMIZED: Reasoning Parts flush immediately for real-time visibility.
+     * The add-to-map runs on Default dispatcher to avoid blocking the main thread.
+     * The flush runs asynchronously on Default after the add completes.
      */
     fun upsertPartBuffered(part: Part, delta: String?) {
-        scope.launch {
-            if (DEBUG_STREAM) AppLog.d(TAG, "upsertPartBuffered: partId=${part.id}, msgId=${part.messageID}, delta=${delta?.length ?: 0} chars")
-            
-            // Reasoning parts are buffered too — they stream dozens of tokens/sec.
-            // Bypassing the buffer caused a full list recomposition per token = scroll jank.
-            // We use a shorter delay (reasoningFlushDelayMs) so they still feel live.
-            
+        if (DEBUG_STREAM) AppLog.d(TAG, "upsertPartBuffered: partId=${part.id}, msgId=${part.messageID}, delta=${delta?.length ?: 0} chars")
+        
+        scope.launch(Dispatchers.Default) {
             pendingMutex.withLock {
                 val byPart = pendingUpdates.getOrPut(part.messageID) { mutableMapOf() }
                 val existing = byPart[part.id]
                 if (existing == null) {
                     byPart[part.id] = PendingDelta(part, delta?.let { StringBuilder(it) })
                 } else {
-                    // Merge: accumulate deltas for streaming text+reasoning; last-write for others
                     when {
                         existing.part is Part.Text && part is Part.Text -> {
                             val builder = existing.sb ?: StringBuilder()
                             if (delta != null) builder.append(delta)
-                            byPart[part.id] = PendingDelta(part.copy(text = part.text, isStreaming = true), builder)
+                            byPart[part.id] = PendingDelta(part.copy(text = part.text, isStreaming = part.isStreaming), builder)
                         }
                         existing.part is Part.Reasoning && part is Part.Reasoning -> {
                             val builder = existing.sb ?: StringBuilder()
                             if (delta != null) builder.append(delta)
-                            byPart[part.id] = PendingDelta(part, builder)
+                            val mergedPart = if (part.time == null) {
+                                if (existing.part.time != null) part.copy(time = existing.part.time) else part
+                            } else {
+                                part
+                            }
+                            byPart[part.id] = PendingDelta(mergedPart, builder)
                         }
                         else -> {
                             byPart[part.id] = PendingDelta(part, delta?.let { StringBuilder(it) })
                         }
                     }
                 }
-
-                if (flushJob?.isActive != true) {
-                    val pendingSize = pendingUpdates.values.sumOf { it.size }
-                    val baseDelay = if (part is Part.Reasoning) reasoningFlushDelayMs else flushDelayMs
-                    val scaledDelay = when {
-                        pendingSize >= 32 -> (baseDelay * 2).coerceAtMost(140L)
-                        pendingSize >= 8  -> (baseDelay + baseDelay / 2).coerceAtMost(120L)
-                        else -> baseDelay
-                    }
-                    flushJob = scope.launch {
-                        delay(scaledDelay)
+                if ((flushJob?.isActive != true) && !flushSuppressed) {
+                    flushJob = scope.launch(Dispatchers.Default) {
                         flushPendingParts()
                     }
                 }
@@ -345,17 +340,30 @@ class MessageStore(
             }
             if (changed) {
                 // Single atomic snapshot commit — one snapshotFlow emission for the entire batch.
-                Snapshot.withMutableSnapshot {
-                    updates.forEach { (id, msg) -> _messagesMap[id] = msg }
-                    _lastChangedIds.value = updates.keys.toSet()
-                    _messagesVersion.value++
-                    _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
+                withContext(Dispatchers.Main) {
+                    Snapshot.withMutableSnapshot {
+                        updates.forEach { (id, msg) -> _messagesMap[id] = msg }
+                        _lastChangedIds.value = updates.keys.toSet()
+                        _messagesVersion.value++
+                        val oldList = _messages.value
+                        val hasNewMessages = updates.keys.any { id -> oldList.none { it.message.id == id } }
+                        _messages.value = if (hasNewMessages) {
+                            messageOrder.mapNotNull { id -> _messagesMap[id] }
+                        } else {
+                            oldList.toMutableList().also { newList ->
+                                for ((msgId, updated) in updates) {
+                                    val idx = newList.indexOfFirst { it.message.id == msgId }
+                                    if (idx >= 0) newList[idx] = updated
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
         if (hadTruncated) {
-            scope.launch {
+            scope.launch(Dispatchers.Default) {
                 delay(24L)
                 flushPendingParts()
             }
@@ -368,9 +376,13 @@ class MessageStore(
         val current = existing.parts.firstOrNull { it.id == incoming.id }
         return when {
             delta != null && incoming is Part.Text && current is Part.Text ->
-                incoming.copy(text = current.text + delta, isStreaming = true)
+                incoming.copy(text = current.text + delta, isStreaming = incoming.isStreaming)
+            delta != null && incoming is Part.Text && current == null ->
+                incoming.copy(text = delta, isStreaming = incoming.isStreaming)
             delta != null && incoming is Part.Reasoning && current is Part.Reasoning ->
-                incoming.copy(text = current.text + delta)
+                incoming.copy(text = current.text + delta, time = current.time)
+            delta != null && incoming is Part.Reasoning && current == null ->
+                incoming.copy(text = delta)
             else -> incoming
         }
     }
@@ -382,7 +394,7 @@ class MessageStore(
      * ensure only the changed message item recomposes.
      */
     fun upsertPart(part: Part, delta: String?) {
-        scope.launch {
+        scope.launch(Dispatchers.Default) {
             messagesMutex.withLock {
                 val messageId = part.messageID
 
@@ -396,7 +408,7 @@ class MessageStore(
                 val partIndex = existing.parts.indexOfFirst { it.id == part.id }
                 if (DEBUG_STREAM) AppLog.d(TAG, "upsertPart: existing parts=${existing.parts.size}, partIndex=$partIndex, partId=${part.id}")
                 val updatedParts = if (partIndex >= 0) {
-                    existing.parts.toMutableList().apply {
+                    ArrayList(existing.parts).apply {
                         this[partIndex] = applyDelta(this[partIndex], part, delta)
                     }
                 } else {
@@ -417,14 +429,16 @@ class MessageStore(
      * Called when the server sends a message.removed event.
      */
     fun removeMessage(messageId: String) {
-        scope.launch {
+        scope.launch(Dispatchers.Default) {
             messagesMutex.withLock {
                 if (_messagesMap.containsKey(messageId)) {
-                    Snapshot.withMutableSnapshot {
-                        _messagesMap.remove(messageId)
-                        messageOrder.remove(messageId)
-                        _messagesVersion.value++
-                        _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
+                    withContext(Dispatchers.Main) {
+                        Snapshot.withMutableSnapshot {
+                            _messagesMap.remove(messageId)
+                            messageOrder.remove(messageId)
+                            _messagesVersion.value++
+                            _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
+                        }
                     }
                     if (DEBUG_STREAM) AppLog.d(TAG, "removeMessage: $messageId")
                 }
@@ -437,15 +451,17 @@ class MessageStore(
      * Called when the server sends a message.part.removed event.
      */
     fun removePart(messageId: String, partId: String) {
-        scope.launch {
+        scope.launch(Dispatchers.Default) {
             messagesMutex.withLock {
                 val existing = _messagesMap[messageId] ?: return@withLock
                 val updatedParts = existing.parts.filter { it.id != partId }
                 if (updatedParts.size != existing.parts.size) {
-                    Snapshot.withMutableSnapshot {
-                        _messagesMap[messageId] = existing.copy(parts = updatedParts)
-                        _messagesVersion.value++
-                        _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
+                    withContext(Dispatchers.Main) {
+                        Snapshot.withMutableSnapshot {
+                            _messagesMap[messageId] = existing.copy(parts = updatedParts)
+                            _messagesVersion.value++
+                            _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
+                        }
                     }
                     if (DEBUG_STREAM) AppLog.d(TAG, "removePart: partId=$partId from messageId=$messageId")
                 }
@@ -500,13 +516,16 @@ class MessageStore(
      * Slightly slower during scroll reduces layout thrash while keeping streaming responsive.
      */
     fun setFlushDelayWhileScrolling(isScrolling: Boolean) {
-        flushDelayMs = if (isScrolling) 80L else 16L           // 5 frames during scroll vs 1 at rest
-        reasoningFlushDelayMs = if (isScrolling) 120L else 32L // 7 frames during scroll vs 2 at rest
-    }
-
-    /** Directly control flush delay (used for speed-adaptive tuning). */
-    fun setFlushDelayMs(delayMs: Long) {
-        flushDelayMs = delayMs.coerceIn(8L, 120L)
+        if (isScrolling) {
+            flushSuppressed = true
+        } else {
+            flushSuppressed = false
+            if (flushJob?.isActive != true) {
+                flushJob = scope.launch(Dispatchers.Default) {
+                    flushPendingParts()
+                }
+            }
+        }
     }
 
     private fun insertIntoOrder(messageId: String, createdAt: Long) {

@@ -124,6 +124,7 @@ class SessionListViewModel constructor(
     private fun mapStatusDto(dto: dev.blazelight.p4oc.data.remote.dto.SessionStatusDto): SessionStatus {
         return when (dto.type) {
             "busy" -> SessionStatus.Busy
+            "working" -> SessionStatus.Busy
             "idle" -> SessionStatus.Idle
             "retry" -> SessionStatus.Retry(
                 attempt = dto.attempt ?: 0,

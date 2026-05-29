@@ -141,9 +141,6 @@ private fun buildBlockItems(block: MessageBlock): List<FlatChatItem> {
             var batchIndex = 0
             for (msg in block.messages) {
                 val msgId = msg.message.id
-                val reasoningParts = msg.parts.filterIsInstance<Part.Reasoning>()
-                val canGroupReasoning = reasoningParts.isNotEmpty() && reasoningParts.all { it.time?.end != null }
-                var reasoningGroupAdded = false
                 for (part in msg.parts) {
                     when (part) {
                         is Part.Tool -> toolBatch.add(part)
@@ -158,16 +155,10 @@ private fun buildBlockItems(block: MessageBlock): List<FlatChatItem> {
                             when (part) {
                                 is Part.Text -> result.add(FlatChatItem.TextPart(part, msgId))
                                 is Part.Reasoning -> {
-                                    if (canGroupReasoning && !reasoningGroupAdded) {
-                                        result.add(FlatChatItem.ReasoningGroup(reasoningParts, msgId, batchIndex++))
-                                        reasoningGroupAdded = true
-                                    } else if (!canGroupReasoning) {
-                                        result.add(FlatChatItem.ReasoningPart(part, msgId))
-                                    }
+                                    result.add(FlatChatItem.ReasoningPart(part, msgId))
                                 }
                                 is Part.File  -> result.add(FlatChatItem.FilePart(part, msgId))
                                 is Part.Patch -> result.add(FlatChatItem.PatchPart(part, msgId))
-                                else -> Unit
                             }
                         }
                     }
@@ -372,9 +363,6 @@ private fun buildChangedItemMap(
                 var batchIndex = 0
                 for (msg in block.messages) {
                     val msgId = msg.message.id
-                    val reasoningParts = msg.parts.filterIsInstance<Part.Reasoning>()
-                    val canGroupReasoning = reasoningParts.isNotEmpty() && reasoningParts.all { it.time?.end != null }
-                    var reasoningGroupAdded = false
                     for (part in msg.parts) {
                         when (part) {
                             is Part.Tool -> toolBatch.add(part)
@@ -389,12 +377,7 @@ private fun buildChangedItemMap(
                                 when (part) {
                                     is Part.Text -> items.add(FlatChatItem.TextPart(part, msgId))
                                     is Part.Reasoning -> {
-                                        if (canGroupReasoning && !reasoningGroupAdded) {
-                                            items.add(FlatChatItem.ReasoningGroup(reasoningParts, msgId, batchIndex++))
-                                            reasoningGroupAdded = true
-                                        } else if (!canGroupReasoning) {
-                                            items.add(FlatChatItem.ReasoningPart(part, msgId))
-                                        }
+                                        items.add(FlatChatItem.ReasoningPart(part, msgId))
                                     }
                                     is Part.File  -> items.add(FlatChatItem.FilePart(part, msgId))
                                     is Part.Patch -> items.add(FlatChatItem.PatchPart(part, msgId))
@@ -544,22 +527,12 @@ internal fun FlatChatItemView(
     }
 }
 
-// Draws the 3dp left accent bar for assistant content rows without
-// wrapping everything in a Column — zero IntrinsicSize overhead.
+// Accent bar is now drawn centrally by LazyColumn's drawBehind — only keep content padding.
 @Composable
 private fun AssistantPartRow(content: @Composable () -> Unit) {
-    val theme = dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme.current
-    val barColor = remember(theme.accent) { theme.accent.copy(alpha = 0.85f) }
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .drawBehind {
-                drawRect(
-                    color = barColor,
-                    topLeft = Offset.Zero,
-                    size = Size(3.dp.toPx(), size.height)
-                )
-            }
             .padding(start = 10.dp)
     ) {
         content()

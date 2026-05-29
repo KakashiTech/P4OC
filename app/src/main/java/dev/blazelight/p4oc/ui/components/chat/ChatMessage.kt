@@ -9,8 +9,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -130,19 +128,20 @@ internal fun ReasoningGroupView(items: List<Part.Reasoning>) {
                 .clickable(role = Role.Button) { expanded = !expanded }
                 .padding(vertical = Spacing.xxs)
         )
+        // Using simple Column + verticalScroll instead of nested LazyColumn:
+        // nested vertically-scrollable LazyColumns cause excessive measure/layout passes
+        // and break virtualization. A regular Column with 260dp cap is cheaper for
+        // the typical 3-15 reasoning items.
         if (expanded) {
-            LazyColumn(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 260.dp)
+                    .verticalScroll(rememberScrollState())
                     .padding(start = Spacing.sm),
-                contentPadding = PaddingValues(0.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                items(
-                    items = items,
-                    key = { it.id }
-                ) { r ->
+                items.forEach { r ->
                     ReasoningPart(r)
                 }
             }
@@ -421,24 +420,6 @@ private fun TextPart(part: Part.Text, enableVirtualization: Boolean = true) {
     val clipboardManager = LocalClipboardManager.current
     val haptic = LocalHapticFeedback.current
     val theme = LocalOpenCodeTheme.current
-    var expanded by remember(part.id) { mutableStateOf(false) }
-
-    val isLarge by remember(part.text, part.isStreaming) {
-        mutableStateOf(!part.isStreaming && (part.text.length > 2000 || part.text.count { it == '\n' } > 60))
-    }
-    val isVeryLarge by remember(part.text, part.isStreaming) {
-        mutableStateOf(!part.isStreaming && (part.text.length > 6000 || part.text.count { it == '\n' } > 200))
-    }
-    var renderAsMarkdown by remember(part.id) { mutableStateOf(false) }
-    val shouldVirtualizeMarkdown by remember(part.text, part.isStreaming) {
-        mutableStateOf(!part.isStreaming && (part.text.length > 1200 || part.text.count { it == '\n' } > 40))
-    }
-    val previewText by remember(part.text) {
-        mutableStateOf(
-            if (part.text.length <= 2000) part.text
-            else part.text.take(2000)
-        )
-    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -457,68 +438,22 @@ private fun TextPart(part: Part.Text, enableVirtualization: Boolean = true) {
                     onLongClickLabel = "Copy text"
                 )
         ) {
-            if (isLarge && !expanded) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    StreamingMarkdown(
-                        text = previewText,
-                        isStreaming = false,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "… more ▸",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = theme.accent,
-                        modifier = Modifier
-                            .padding(top = 2.dp)
-                            .clickable(role = Role.Button) { expanded = true }
-                    )
-                }
-            } else if (enableVirtualization && expanded && isVeryLarge && !renderAsMarkdown) {
-                // Virtualized plain-text view for extremely large content to avoid heavy
-                // paragraph shaping/painting stalls when entering the viewport.
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    // Header toggle to render full Markdown on demand
-                    Text(
-                        text = "Render markdown ▸",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = theme.accent,
-                        modifier = Modifier
-                            .padding(bottom = Spacing.xxs)
-                            .clickable(role = Role.Button) { renderAsMarkdown = true }
-                    )
-                    val lines = remember(part.id, part.text) { part.text.split('\n') }
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 360.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        lines.forEach { line ->
-                            Text(
-                                text = line,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 13.sp,
-                                color = theme.text,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    }
-                }
-            } else if (enableVirtualization && shouldVirtualizeMarkdown) {
+            if (part.isStreaming) {
+                Text(
+                    text = part.text,
+                    color = theme.markdownText,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        lineHeight = 20.sp,
+                    ),
+                    softWrap = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else if (part.text.length > 2000) {
                 val chunks = remember(part.id, part.text) { chunkMarkdown(part.text, 1400) }
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 360.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     chunks.forEach { chunk ->
                         StreamingMarkdown(
                             text = chunk,
-                            isStreaming = false,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -526,13 +461,11 @@ private fun TextPart(part: Part.Text, enableVirtualization: Boolean = true) {
             } else {
                 StreamingMarkdown(
                     text = part.text,
-                    isStreaming = part.isStreaming,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
         }
         if (part.isStreaming) {
-            // Keep indicator small and low-cost; could be a thin bar shimmer in future
             TuiLoadingIndicator()
         }
     }

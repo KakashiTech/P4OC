@@ -90,6 +90,7 @@ object SessionMapper {
     fun mapStatusToDomain(dto: SessionStatusDto): SessionStatus = when (dto.type) {
         "idle" -> SessionStatus.Idle
         "busy" -> SessionStatus.Busy
+        "working" -> SessionStatus.Busy
         "retry" -> SessionStatus.Retry(dto.attempt ?: 0, dto.message ?: "", dto.next ?: 0L)
         else -> SessionStatus.Idle
     }
@@ -577,6 +578,16 @@ class EventMapper constructor(
                 }
                 OpenCodeEvent.MessageUpdated(messageMapper.mapToDomain(info))
             }
+            "message.part.delta" -> {
+                val props = json.decodeFromJsonElement<MessagePartDeltaDto>(dto.properties)
+                OpenCodeEvent.MessagePartDelta(
+                    sessionID = props.sessionID,
+                    messageID = props.messageID,
+                    partID = props.partID,
+                    field = props.field,
+                    delta = props.delta
+                )
+            }
             "message.part.updated" -> {
                 val partDto = json.decodeFromJsonElement<PartUpdateDto>(dto.properties)
                 // Handle missing part field from server
@@ -810,6 +821,15 @@ class EventMapper constructor(
 private data class PartUpdateDto(
     val part: PartDto? = null,
     val delta: String? = null
+)
+
+@kotlinx.serialization.Serializable
+private data class MessagePartDeltaDto(
+    @SerialName("sessionID") val sessionID: String,
+    @SerialName("messageID") val messageID: String,
+    @SerialName("partID") val partID: String,
+    val field: String,
+    val delta: String
 )
 
 @kotlinx.serialization.Serializable

@@ -171,6 +171,16 @@ interface OpenCodeApi {
         @Query("directory") directory: String? = null
     ): MessageWrapperDto
 
+    @GET("question")
+    suspend fun getPendingQuestions(
+        @Query("directory") directory: String? = null
+    ): List<QuestionRequestDto>
+
+    @GET("permission")
+    suspend fun getPendingPermissions(
+        @Query("directory") directory: String? = null
+    ): List<PermissionDto>
+
     @POST("permission/{requestId}/reply")
     suspend fun respondToPermission(
         @Path("requestId") requestId: String,

@@ -242,7 +242,7 @@ private fun TabIndicator(
             fontFamily = FontFamily.Monospace,
             style = MaterialTheme.typography.labelSmall,
             color = indicatorColor ?: textColor,
-            modifier = Modifier.alpha(1f) // Fixed alpha to prevent resizing
+            modifier = Modifier // alpha(1f) removed — no-op on OpenGL
         )
 
         // Title
