@@ -82,6 +82,34 @@ class ChatViewModel constructor(
 
     val connectionState: StateFlow<ConnectionState> = connectionManager.connectionState
 
+    // Granular derived flows — each emits only when its specific field changes.
+    // ChatScreen reads these instead of the monolithic uiState to avoid
+    // recomposing the entire screen when unrelated fields (e.g. inputText) change.
+    val isBusy: StateFlow<Boolean> = _uiState.map { it.isBusy }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val isLoading: StateFlow<Boolean> = _uiState.map { it.isLoading }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val isSending: StateFlow<Boolean> = _uiState.map { it.isSending }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val abortSummary: StateFlow<AbortSummary?> = _uiState.map { it.abortSummary }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val errorMsg: StateFlow<String?> = _uiState.map { it.error }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val session: StateFlow<Session?> = _uiState.map { it.session }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val todos: StateFlow<List<Todo>> = _uiState.map { it.todos }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val commands: StateFlow<List<Command>> = _uiState.map { it.commands }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val inputText: StateFlow<String> = _uiState.map { it.inputText }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val queuedMessage: StateFlow<QueuedMessage?> = _uiState.map { it.queuedMessage }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val isLoadingCommands: StateFlow<Boolean> = _uiState.map { it.isLoadingCommands }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val isLoadingTodos: StateFlow<Boolean> = _uiState.map { it.isLoadingTodos }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
     private val _branchName = MutableStateFlow<String?>(null)
     val branchName: StateFlow<String?> = _branchName.asStateFlow()
 
@@ -621,9 +649,10 @@ class ChatViewModel constructor(
     fun respondToPermission(permissionId: String, response: String) {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: return@launch
+            val resolvedId = dialogManager.resolvePermissionId(permissionId)
             val request = PermissionResponseRequest(reply = response)
-            safeApiCall { api.respondToPermission(permissionId, request, getDirectory()) }
-            dialogManager.clearPermission(permissionId)
+            safeApiCall { api.respondToPermission(resolvedId, request, getDirectory()) }
+            dialogManager.clearPermission(resolvedId)
         }
     }
 

@@ -90,7 +90,7 @@ fun ToolCallOneline(
 ) {
     val theme = LocalOpenCodeTheme.current
     val (icon, color) = getToolStateIcon(tool.state, theme)
-    val description = getToolCompactDescription(tool)
+    val description = remember(tool) { getToolCompactDescription(tool) }
 
     Row(
         modifier = modifier
@@ -132,7 +132,9 @@ fun ToolCallCompact(
 ) {
     val theme = LocalOpenCodeTheme.current
     val (icon, color) = getToolStateIcon(tool.state, theme)
-    val description = getToolCompactDescription(tool)
+    val description = remember(tool) { getToolCompactDescription(tool) }
+    val leftBarColor = remember(color) { color.copy(alpha = 0.55f) }
+    val diffStats = remember(tool) { getDiffStats(tool) }
 
     Box(
         modifier = modifier
@@ -145,7 +147,7 @@ fun ToolCallCompact(
                 .align(Alignment.TopStart)
                 .width(2.dp)
                 .matchParentSize()
-                .background(color.copy(alpha = 0.55f))
+                .background(leftBarColor)
         )
         Row(
             modifier = Modifier
@@ -172,7 +174,8 @@ fun ToolCallCompact(
             if (tool.state is ToolState.Running) {
                 TuiLoadingIndicator()
             }
-            getDiffStats(tool)?.let { (added, removed) ->
+            if (diffStats != null) {
+                val (added, removed) = diffStats
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("+$added", fontFamily = FontFamily.Monospace,
                         fontSize = TuiCodeFontSize.lg, color = theme.success)
@@ -210,7 +213,27 @@ fun ToolCallExpanded(
             onClick = onClick,
             modifier = modifier
         )
+        "grep", "search", "serena_search_for_pattern" -> GrepWidgetExpanded(
+            tool = tool,
+            onClick = onClick,
+            modifier = modifier
+        )
         "edit", "write", "morph_edit_file", "serena_replace_content", "serena_create_text_file" -> EditWidgetExpanded(
+            tool = tool,
+            onClick = onClick,
+            modifier = modifier
+        )
+        "todowrite", "todoread", "todo_write", "todo_read" -> TodoWriteWidgetExpanded(
+            tool = tool,
+            onClick = onClick,
+            modifier = modifier
+        )
+        "skill", "slashcommand" -> SkillWidgetExpanded(
+            tool = tool,
+            onClick = onClick,
+            modifier = modifier
+        )
+        "glob", "find", "serena_find_file" -> GlobWidgetExpanded(
             tool = tool,
             onClick = onClick,
             modifier = modifier
@@ -257,12 +280,14 @@ private fun getToolCompactDescription(tool: Part.Tool): String {
             extractParam(input, "command")?.take(60) ?: tool.toolName
         }
         name in listOf("read", "read_file", "serena_read_file") -> {
-            val path = extractParam(input, "filePath") 
+            val path = extractParam(input, "filePath")
                 ?: extractParam(input, "path")
                 ?: extractParam(input, "relative_path")
-            val fileName = path?.substringAfterLast("/") ?: "file"
-            val lines = extractParam(input, "limit")?.toIntOrNull()
-            if (lines != null) "Read $fileName ($lines lines)" else "Read $fileName"
+            val clean = if (path != null) {
+                val idx = path.indexOf("/P4OC/")
+                if (idx >= 0) path.substring(idx + 1) else path.substringAfterLast("/")
+            } else "file"
+            "Read  $clean"
         }
         name in listOf("edit", "write", "morph_edit_file", "serena_replace_content", "serena_create_text_file") -> {
             val path = extractParam(input, "filePath") 
@@ -271,14 +296,26 @@ private fun getToolCompactDescription(tool: Part.Tool): String {
             val fileName = path?.substringAfterLast("/") ?: "file"
             "Modified $fileName"
         }
+        name in listOf("skill", "slashcommand") -> {
+            val skillName = extractParam(input, "name") ?: extractParam(input, "command")
+            skillName?.let { "Skill \"$it\"" } ?: tool.toolName
+        }
         name in listOf("glob", "find", "serena_find_file") -> {
             val pattern = extractParam(input, "pattern") ?: extractParam(input, "file_mask")
-            pattern?.let { "Glob $it" } ?: tool.toolName
+            pattern?.let { "Glob \"$it\"" } ?: tool.toolName
         }
         name in listOf("grep", "search", "serena_search_for_pattern") -> {
             val pattern = extractParam(input, "pattern") ?: extractParam(input, "substring_pattern")
-            pattern?.take(40)?.let { "Search: $it" } ?: tool.toolName
+            val filePath = extractParam(input, "filePath") ?: extractParam(input, "path") ?: extractParam(input, "relative_path")
+            val clean = if (filePath != null) {
+                val idx = filePath.indexOf("/P4OC/")
+                if (idx >= 0) filePath.substring(idx + 1) else filePath.substringAfterLast("/")
+            } else ""
+            if (pattern != null && clean.isNotEmpty()) "Grep \"$pattern\"  in  $clean"
+            else if (pattern != null) "Grep \"$pattern\""
+            else "Grep  $clean"
         }
+        name in listOf("todowrite", "todoread", "todo_write", "todo_read") -> "todos"
         else -> tool.toolName
     }
 }

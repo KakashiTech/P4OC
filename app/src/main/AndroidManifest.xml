@@ -39,7 +39,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="portrait"
-            android:windowSoftInputMode="adjustResize"
+            android:windowSoftInputMode="adjustNothing"
             android:theme="@style/Theme.PocketCode.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

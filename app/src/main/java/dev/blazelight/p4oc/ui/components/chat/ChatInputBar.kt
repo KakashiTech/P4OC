@@ -148,7 +148,7 @@ fun ChatInputBar(
                 elapsed, 9000, 0, false
             )
             this.value = t * PERIMETER
-            delay(100L)
+            delay(33L)
         }
     }
 
@@ -189,7 +189,7 @@ fun ChatInputBar(
     fun perimeterBrush(segStart: Float, segEnd: Float, isVertical: Boolean, invertGradient: Boolean = false): Brush {
         if (!isBusy || shimmerPos < 0f) return SolidColor(dimBase)
 
-        val STOPS = 5
+        val STOPS = 12
         val length = run {
             val raw = (segEnd - segStart + PERIMETER) % PERIMETER
             if (raw == 0f) PERIMETER else raw

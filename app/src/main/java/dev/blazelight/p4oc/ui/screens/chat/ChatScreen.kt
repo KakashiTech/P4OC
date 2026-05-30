@@ -43,6 +43,9 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import android.app.Activity
+import android.view.WindowManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -59,9 +62,15 @@ import dev.blazelight.p4oc.domain.model.SessionConnectionState
 import dev.blazelight.p4oc.domain.model.Agent
 import dev.blazelight.p4oc.domain.model.Model
 import dev.blazelight.p4oc.core.datastore.VisualSettings
-import dev.blazelight.p4oc.ui.screens.chat.ChatUiState
+import dev.blazelight.p4oc.domain.model.Session
+import dev.blazelight.p4oc.domain.model.PermissionResponse
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import dev.blazelight.p4oc.ui.components.chat.AbortSummaryCard
+import dev.blazelight.p4oc.ui.components.chat.LocalIsThinkingPhase
 import dev.blazelight.p4oc.ui.components.chat.ChatInputBar
 import dev.blazelight.p4oc.ui.components.chat.FilePickerDialog
 import dev.blazelight.p4oc.ui.components.chat.JumpToBottomButton
@@ -82,6 +91,7 @@ import kotlinx.coroutines.delay
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.RectangleShape
@@ -123,17 +133,37 @@ fun ChatScreen(
     onConnectionStateChanged: ((SessionConnectionState?) -> Unit)? = null,
     isActiveTab: Boolean = true
 ) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // Granular flows — each emits only when its specific field changes.
+    // Keeps ChatScreen recomposition scoped to what actually changed.
     val messages = viewModel.messages.collectAsStateWithLifecycle()
     val messagesVersion = viewModel.messagesVersion.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val branchName by viewModel.branchName.collectAsStateWithLifecycle()
-    val reasoningEffort by viewModel.reasoningEffort.collectAsStateWithLifecycle()
     val sessionConnectionState by viewModel.sessionConnectionState.collectAsStateWithLifecycle()
     val visualSettings by viewModel.visualSettings.collectAsStateWithLifecycle()
+    val session by viewModel.session.collectAsStateWithLifecycle()
+    val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val abortSummary by viewModel.abortSummary.collectAsStateWithLifecycle()
+    val errorMsg by viewModel.errorMsg.collectAsStateWithLifecycle()
+    val todos by viewModel.todos.collectAsStateWithLifecycle()
+
+    val screenContext = LocalContext.current
+    DisposableEffect(isBusy) {
+        val window = (screenContext as? Activity)?.window
+        if (isBusy) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     val pendingQuestion by viewModel.dialogManager.pendingQuestion.collectAsStateWithLifecycle()
     val pendingPermissionsByCallId by viewModel.dialogManager.pendingPermissionsByCallId.collectAsStateWithLifecycle()
+    val reasoningEffort by viewModel.reasoningEffort.collectAsStateWithLifecycle()
     val availableAgents by viewModel.modelAgentManager.availableAgents.collectAsStateWithLifecycle()
     val selectedAgent by viewModel.modelAgentManager.selectedAgent.collectAsStateWithLifecycle()
     val availableModels by viewModel.modelAgentManager.availableModels.collectAsStateWithLifecycle()
@@ -145,8 +175,8 @@ fun ChatScreen(
     val pickerCurrentPath by viewModel.filePickerManager.pickerCurrentPath.collectAsStateWithLifecycle()
     val isPickerLoading by viewModel.filePickerManager.isPickerLoading.collectAsStateWithLifecycle()
 
-    LaunchedEffect(uiState.session) {
-        uiState.session?.let { onSessionLoaded?.invoke(it.id, it.title) }
+    LaunchedEffect(session) {
+        session?.let { onSessionLoaded?.invoke(it.id, it.title) }
     }
     LaunchedEffect(sessionConnectionState) {
         onConnectionStateChanged?.invoke(sessionConnectionState)
@@ -176,6 +206,15 @@ fun ChatScreen(
         }
     }
 
+    val thinkingMessageIds by remember {
+        derivedStateOf {
+            messages.value
+                .filter { it.parts.any { p -> p is Part.Reasoning && p.time?.end == null } }
+                .map { it.message.id }
+                .toSet()
+        }
+    }
+
     val flatItems = FlatItemsProvider(
         viewModel = viewModel,
         messages = messages,
@@ -189,7 +228,7 @@ fun ChatScreen(
         messagesVersion = messagesVersion,
         listState = listState,
         isAtBottom = isAtBottom,
-        uiState = uiState,
+        session = session,
         userScrolledAway = userScrolledAway,
         hasNewContentWhileAway = hasNewContentWhileAway,
         flatItems = flatItems,
@@ -204,12 +243,10 @@ fun ChatScreen(
     val visibleMessageCount by remember {
         derivedStateOf { messages.value.size }
     }
-    val isBusy    by remember { derivedStateOf { uiState.isBusy } }
-    val isLoading by remember { derivedStateOf { uiState.isLoading } }
 
-    val onToolApprove = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "once") } }
-    val onToolDeny    = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "reject") } }
-    val onToolAlways  = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "always") } }
+    val onToolApprove = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, PermissionResponse.ONCE.value) } }
+    val onToolDeny    = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, PermissionResponse.REJECT.value) } }
+    val onToolAlways  = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, PermissionResponse.ALWAYS.value) } }
     val onRevert      = remember<(String) -> Unit> { { id -> showRevertDialog = id } }
     val onFork        = remember(viewModel, onOpenSubSession) {
         { messageId: String ->
@@ -229,13 +266,11 @@ fun ChatScreen(
     }
 
     Scaffold(
-        contentWindowInsets = WindowInsets.ime,
+        contentWindowInsets = WindowInsets(0),
         topBar = {
-            // Session title from loaded session
-            val displayTitle = uiState.session?.title ?: "Chat"
             ChatTopBar(
                 modifier = Modifier,
-                title = displayTitle,
+                title = session?.title ?: "Chat",
                 connectionState = connectionState,
                 onBack = onNavigateBack,
                 onTerminal = onOpenTerminal,
@@ -245,13 +280,13 @@ fun ChatScreen(
                     showCommandPalette = true
                 },
                 onViewChanges = {
-                    uiState.session?.id?.let { onViewSessionDiff?.invoke(it) }
+                    session?.id?.let { onViewSessionDiff?.invoke(it) }
                 },
                 onAbort = viewModel::abortSession,
-                isBusy = uiState.isBusy,
+                isBusy = isBusy,
                 branchName = branchName,
-                todoCount = uiState.todos.count { it.status == "in_progress" || it.status == "pending" },
-                inProgressCount = uiState.todos.count { it.status == "in_progress" },
+                todoCount = todos.count { it.status == "in_progress" || it.status == "pending" },
+                inProgressCount = todos.count { it.status == "in_progress" },
                 onTodos = {
                     viewModel.loadTodos()
                     showTodoTracker = true
@@ -262,17 +297,20 @@ fun ChatScreen(
             )
         },
         bottomBar = {
-            // Sub-agent sessions are read-only — hide input bar and model selector
-            val isSubAgent = uiState.session?.parentID != null
+            val isSubAgent = session?.parentID != null
             if (!isSubAgent) {
+                val inputText by viewModel.inputText.collectAsStateWithLifecycle()
+                val isSending by viewModel.isSending.collectAsStateWithLifecycle()
+                val queuedMessage by viewModel.queuedMessage.collectAsStateWithLifecycle()
+                val commands by viewModel.commands.collectAsStateWithLifecycle()
                 Column(
                     modifier = Modifier
                         .imePadding()
                         .background(LocalOpenCodeTheme.current.backgroundElement)
                 ) {
-                    var localInput by remember { mutableStateOf(uiState.inputText) }
-                    LaunchedEffect(uiState.inputText) {
-                        if (uiState.inputText != localInput) localInput = uiState.inputText
+                    var localInput by remember { mutableStateOf(inputText) }
+                    LaunchedEffect(inputText) {
+                        if (inputText != localInput) localInput = inputText
                     }
                     ChatInputBar(
                         value = localInput,
@@ -318,7 +356,7 @@ fun ChatScreen(
                         agentSelector = { },
                         onValueChange = { text ->
                             localInput = text
-                            if (text.startsWith("/") && uiState.commands.isEmpty()) {
+                            if (text.startsWith("/") && commands.isEmpty()) {
                                 viewModel.loadCommands()
                             }
                         },
@@ -327,24 +365,24 @@ fun ChatScreen(
                             viewModel.sendMessage()
                             localInput = ""
                         },
-                        isLoading = uiState.isSending,
+                        isLoading = isSending,
                         enabled = connectionState is ConnectionState.Connected,
-                        isBusy = uiState.isBusy,
-                        hasQueuedMessage = uiState.queuedMessage != null,
+                        isBusy = isBusy,
+                        hasQueuedMessage = queuedMessage != null,
                         onQueueMessage = {
                             viewModel.updateInput(localInput)
                             viewModel.queueMessage()
                             localInput = ""
                         },
                         onCancelQueue = { /* TODO: Implementar cancelacion de mensaje encolado */ },
-                        queuedMessagePreview = uiState.queuedMessage?.text,
+                        queuedMessagePreview = queuedMessage?.text,
                         attachedFiles = attachedFiles,
                         onAttachClick = {
                             viewModel.filePickerManager.loadPickerFiles()
                             showFilePicker = true
                         },
                         onRemoveAttachment = viewModel.filePickerManager::detachFile,
-                        commands = uiState.commands,
+                        commands = commands,
                         onCommandSelected = { },
                         requestFocus = isActiveTab
                     )
@@ -358,8 +396,7 @@ fun ChatScreen(
                     .fillMaxSize()
                     .padding(padding)
             ) {
-            // Revert active banner — isolated, only reads uiState.session.revert
-            val revert = uiState.session?.revert
+            val revert = session?.revert
             if (revert != null) {
                 RevertActiveBanner(
                     onUnrevert = viewModel::unrevertSession,
@@ -369,37 +406,40 @@ fun ChatScreen(
 
             // Main message list — isolated composable, no uiState/connectionState reads.
             // Only recomposes when flatItems, pendingQuestion, abortSummary, or pagination change.
-            ChatMessageList(
-                listState = listState,
-                flingBehavior = smoothFling,
-                flatItems = flatItems,
-                pendingQuestion = pendingQuestion,
-                abortSummary = uiState.abortSummary,
-                hasMoreMessages = hasMoreMessages,
-                visibleMessageCount = visibleMessageCount,
-                totalMessageCount = totalMessageCount,
-                onLoadMore = { viewModel.loadOlderMessages() },
-                onDismissQuestion = viewModel::dismissQuestion,
-                onRespondQuestion = { id, r -> viewModel.respondToQuestion(id, r) },
-                onToolApprove = onToolApprove,
-                onToolDeny = onToolDeny,
-                onToolAlways = onToolAlways,
-                onOpenSubSession = onOpenSubSession,
-                defaultToolWidgetState = defaultToolWidgetState,
-                pendingPermissionsByCallId = pendingPermissionsByCallId,
-                onRevert = onRevert,
-                onFork = onFork,
-                showEmpty = messages.value.isEmpty() && !isBusy && !isLoading,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 12.dp)
-            )
+            CompositionLocalProvider(LocalIsThinkingPhase provides (isBusy && isThinking)) {
+                ChatMessageList(
+                    listState = listState,
+                    flingBehavior = smoothFling,
+                    flatItems = flatItems,
+                    pendingQuestion = pendingQuestion,
+                    abortSummary = abortSummary,
+                    hasMoreMessages = hasMoreMessages,
+                    visibleMessageCount = visibleMessageCount,
+                    totalMessageCount = totalMessageCount,
+                    onLoadMore = { viewModel.loadOlderMessages() },
+                    onDismissQuestion = viewModel::dismissQuestion,
+                    onRespondQuestion = { id, r -> viewModel.respondToQuestion(id, r) },
+                    onToolApprove = onToolApprove,
+                    onToolDeny = onToolDeny,
+                    onToolAlways = onToolAlways,
+                    onOpenSubSession = onOpenSubSession,
+                    defaultToolWidgetState = defaultToolWidgetState,
+                    pendingPermissionsByCallId = pendingPermissionsByCallId,
+                    onRevert = onRevert,
+                    onFork = onFork,
+                    thinkingMessageIds = thinkingMessageIds,
+                    showEmpty = messages.value.isEmpty() && !isBusy && !isLoading,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp)
+                )
+            }
 
             if (isLoading) {
                 TuiLoadingScreen(modifier = Modifier.align(Alignment.Center))
             }
 
-            uiState.error?.let { error ->
+            errorMsg?.let { error ->
                 TuiSnackbar(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -421,7 +461,7 @@ fun ChatScreen(
                     coroutineScope.launch {
                         userScrolledAway.value = false
                         hasNewContentWhileAway.value = false
-                        listState.scrollToItem(0)
+                        listState.scrollToItem(firstContentIndex(flatItems))
                     }
                 },
                 modifier = Modifier
@@ -433,9 +473,11 @@ fun ChatScreen(
     }
 
     if (showCommandPalette) {
+        val commands by viewModel.commands.collectAsStateWithLifecycle()
+        val isLoadingCommands by viewModel.isLoadingCommands.collectAsStateWithLifecycle()
         CommandPalette(
-            commands = uiState.commands,
-            isLoading = uiState.isLoadingCommands,
+            commands = commands,
+            isLoading = isLoadingCommands,
             onCommandSelected = { command, args ->
                 viewModel.executeCommand(command.name, args)
             },
@@ -444,9 +486,10 @@ fun ChatScreen(
     }
 
     if (showTodoTracker) {
+        val isLoadingTodos by viewModel.isLoadingTodos.collectAsStateWithLifecycle()
         TodoTrackerSheet(
-            todos = uiState.todos,
-            isLoading = uiState.isLoadingTodos,
+            todos = todos,
+            isLoading = isLoadingTodos,
             onDismiss = { showTodoTracker = false },
             onRefresh = { viewModel.loadTodos() }
         )
@@ -506,6 +549,13 @@ fun ChatScreen(
 
 }
 
+private fun firstContentIndex(items: List<FlatChatItem>): Int {
+    val idx = items.indexOfFirst {
+        it !is FlatChatItem.AssistantBarStart && it !is FlatChatItem.AssistantBarEnd
+    }
+    return if (idx < 0) 0 else idx
+}
+
 @Composable
 private fun ScrollObservers(
     viewModel: ChatViewModel,
@@ -513,17 +563,25 @@ private fun ScrollObservers(
     messagesVersion: State<Long>,
     listState: LazyListState,
     isAtBottom: State<Boolean>,
-    uiState: ChatUiState,
+    session: Session?,
     userScrolledAway: MutableState<Boolean>,
     hasNewContentWhileAway: MutableState<Boolean>,
     flatItems: List<FlatChatItem>,
 ) {
-    var prevMsgIds by remember { mutableStateOf(emptySet<String>()) }
     var isAutoScrolling by remember { mutableStateOf(false) }
-    val hasNewMessage = remember {
-        derivedStateOf {
-            val ids = messages.value.map { it.message.id }.toSet()
-            ids.any { it !in prevMsgIds }
+
+    var prevFlatItemsSize by remember { mutableStateOf(flatItems.size) }
+    LaunchedEffect(flatItems) {
+        if (flatItems.size > prevFlatItemsSize) {
+            prevFlatItemsSize = flatItems.size
+            isAutoScrolling = true
+            userScrolledAway.value = false
+            hasNewContentWhileAway.value = false
+            listState.scrollToItem(firstContentIndex(flatItems))
+            isAutoScrolling = false
+        }
+        if (flatItems.size < prevFlatItemsSize) {
+            prevFlatItemsSize = flatItems.size
         }
     }
 
@@ -542,21 +600,10 @@ private fun ScrollObservers(
         }
     }
 
-    LaunchedEffect(hasNewMessage.value, flatItems) {
-        if (hasNewMessage.value && flatItems.isNotEmpty()) {
-            isAutoScrolling = true
-            prevMsgIds = messages.value.map { it.message.id }.toSet()
-            userScrolledAway.value = false
-            hasNewContentWhileAway.value = false
-            listState.scrollToItem(0)
-            isAutoScrolling = false
-        }
-    }
-
-    LaunchedEffect(uiState.session?.id) {
+    LaunchedEffect(session?.id) {
         if (messages.value.isNotEmpty()) {
             isAutoScrolling = true
-            listState.scrollToItem(0)
+            listState.scrollToItem(firstContentIndex(flatItems))
             isAutoScrolling = false
         }
     }
@@ -567,14 +614,15 @@ private fun ScrollObservers(
                 delay(32)
                 if (version != messagesVersion.value) return@collect
                 if (!userScrolledAway.value && isAtBottom.value && !listState.isScrollInProgress) {
-                    listState.scrollToItem(0)
-                } else if (userScrolledAway.value && !hasNewMessage.value) {
+                    listState.scrollToItem(firstContentIndex(flatItems))
+                } else if (userScrolledAway.value) {
                     hasNewContentWhileAway.value = true
                 }
             }
     }
 }
 
+@OptIn(FlowPreview::class)
 @Composable
 private fun FlatItemsProvider(
     viewModel: ChatViewModel,
@@ -586,22 +634,30 @@ private fun FlatItemsProvider(
 
     class Ref<T>(var value: T)
     val prevFlatItemsRef = remember { Ref<List<FlatChatItem>>(emptyList()) }
-    val flatItems by remember {
-        derivedStateOf {
-            val prevList = prevFlatItemsRef.value
-            messagesVersion.value
-            val patched = patchFlatItems(prevList, messages.value, lastChangedIds.value)
-            if (patched != null) {
-                AppLog.d("ChatScreen", "flatItems patched: old=${prevList.size} new=${patched.size} changed=${lastChangedIds.value.size}")
-            } else {
-                AppLog.d("ChatScreen", "flatItems rebuild: messages=${messages.value.size}")
-            }
-            val result = patched ?: buildFlatItems(groupMessagesIntoBlocks(messages.value))
-            if (result !== prevList) {
-                prevFlatItemsRef.value = result
-            }
-            result
+
+    val compute: () -> List<FlatChatItem> = {
+        val currentMessages = messages.value
+        val currentChangedIds = lastChangedIds.value
+        val prevList = prevFlatItemsRef.value
+        val patched = patchFlatItems(prevList, currentMessages, currentChangedIds)
+        if (patched != null) {
+            AppLog.d("ChatScreen", "flatItems patched: old=${prevList.size} new=${patched.size} changed=${currentChangedIds.size}")
+        } else {
+            AppLog.d("ChatScreen", "flatItems rebuild: messages=${currentMessages.size}")
         }
+        val result = patched ?: buildFlatItems(groupMessagesIntoBlocks(currentMessages))
+        if (result !== prevList) {
+            prevFlatItemsRef.value = result
+        }
+        result
+    }
+
+    val flatItems by produceState(initialValue = emptyList(), key1 = Unit) {
+        value = compute()
+        snapshotFlow { messagesVersion.value }
+            .drop(1)
+            .debounce(33)
+            .collectLatest { value = compute() }
     }
 
     return flatItems
@@ -1096,6 +1152,7 @@ private fun ChatMessageList(
     pendingPermissionsByCallId: Map<String, dev.blazelight.p4oc.domain.model.Permission>,
     onRevert: (String) -> Unit,
     onFork: (String) -> Unit,
+    thinkingMessageIds: Set<String> = emptySet(),
     showEmpty: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -1111,22 +1168,7 @@ private fun ChatMessageList(
     LazyColumn(
         state = listState,
         modifier = modifier
-            .testTag("message_list")
-            .drawBehind {
-                val assistantTypes = ASSISTANT_TYPES
-                val startOffset = listState.layoutInfo.viewportStartOffset
-                for (item in listState.layoutInfo.visibleItemsInfo) {
-                    if (item.contentType in assistantTypes) {
-                        val y = item.offset.toFloat() - startOffset
-                        if (y + item.size <= 0f) continue
-                        drawRect(
-                            color = accentBarColor,
-                            topLeft = Offset(0f, y),
-                            size = Size(3.dp.toPx(), item.size.toFloat())
-                        )
-                    }
-                }
-            },
+            .testTag("message_list"),
         reverseLayout = true,
         flingBehavior = flingBehavior,
         contentPadding = PaddingValues(vertical = 2.dp),
@@ -1154,17 +1196,40 @@ private fun ChatMessageList(
             key = itemKey,
             contentType = itemContentType
         ) { _, item ->
-            FlatChatItemView(
-                item = item,
-                onToolApprove = onToolApprove,
-                onToolDeny = onToolDeny,
-                onToolAlways = onToolAlways,
-                onOpenSubSession = onOpenSubSession,
-                defaultToolWidgetState = defaultToolWidgetState,
-                pendingPermissionsByCallId = pendingPermissionsByCallId,
-                onRevert = onRevert,
-                onFork = onFork
-            )
+            val itemIsThinking = when (item) {
+                is FlatChatItem.TextPart -> item.msgId in thinkingMessageIds
+                else -> false
+            }
+            val hasAccent = item.contentType in ASSISTANT_TYPES
+            val isStreaming = when (item) {
+                is FlatChatItem.TextPart -> item.part.isStreaming
+                is FlatChatItem.ReasoningPart -> item.part.time?.end == null
+                else -> false
+            }
+            val itemModifier = remember(accentBarColor, hasAccent) {
+                if (hasAccent) Modifier.drawBehind {
+                    drawRect(
+                        color = accentBarColor,
+                        topLeft = Offset.Zero,
+                        size = Size(3.dp.toPx(), size.height)
+                    )
+                } else Modifier
+            }
+            CompositionLocalProvider(LocalIsThinkingPhase provides itemIsThinking) {
+                Box(modifier = itemModifier) {
+                    FlatChatItemView(
+                        item = item,
+                        onToolApprove = onToolApprove,
+                        onToolDeny = onToolDeny,
+                        onToolAlways = onToolAlways,
+                        onOpenSubSession = onOpenSubSession,
+                        defaultToolWidgetState = defaultToolWidgetState,
+                        pendingPermissionsByCallId = pendingPermissionsByCallId,
+                        onRevert = onRevert,
+                        onFork = onFork
+                    )
+                }
+            }
         }
         if (hasMoreMessages && visibleMessageCount < totalMessageCount) {
             item(key = "load_more_messages", contentType = "load_more") {

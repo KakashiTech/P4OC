@@ -62,7 +62,7 @@ fun StreamingMarkdown(
         )
     }
 
-    val markdownState = rememberMarkdownState(content = text, retainState = true)
+    val markdownState = rememberMarkdownState(content = text, retainState = isStreaming)
 
     Markdown(
         markdownState = markdownState,

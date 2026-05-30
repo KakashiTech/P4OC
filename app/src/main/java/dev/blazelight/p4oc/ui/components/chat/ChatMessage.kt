@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -32,9 +33,15 @@ import dev.blazelight.p4oc.domain.model.*
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
+import androidx.compose.runtime.compositionLocalOf
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolGroupWidget
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
+import kotlinx.coroutines.delay
+
+// CompositionLocal to communicate thinking-phase state from ChatScreen
+// down to TextPart without threading parameters through every layer.
+val LocalIsThinkingPhase = compositionLocalOf { false }
 
 // ── Cached shapes — file-level singletons, zero allocation during scroll ──────
 private val pillShape       = RoundedCornerShape(20.dp)
@@ -420,6 +427,7 @@ private fun TextPart(part: Part.Text, enableVirtualization: Boolean = true) {
     val clipboardManager = LocalClipboardManager.current
     val haptic = LocalHapticFeedback.current
     val theme = LocalOpenCodeTheme.current
+    val isThinkingPhase = LocalIsThinkingPhase.current
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -438,37 +446,26 @@ private fun TextPart(part: Part.Text, enableVirtualization: Boolean = true) {
                     onLongClickLabel = "Copy text"
                 )
         ) {
-            if (part.isStreaming) {
-                Text(
-                    text = part.text,
-                    color = theme.markdownText,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        lineHeight = 20.sp,
-                    ),
-                    softWrap = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            } else if (part.text.length > 2000) {
-                val chunks = remember(part.id, part.text) { chunkMarkdown(part.text, 1400) }
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    chunks.forEach { chunk ->
-                        StreamingMarkdown(
-                            text = chunk,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+            // Hide streaming text during the thinking phase — only show the
+            // loading indicator. Once thinking ends, text renders normally.
+            if (!isThinkingPhase || !part.isStreaming) {
+                if (part.text.length > 2000) {
+                    val chunks = remember(part.id, part.text) { chunkMarkdown(part.text, 1400) }
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        chunks.forEach { chunk ->
+                            StreamingMarkdown(text = chunk, modifier = Modifier.fillMaxWidth(), isStreaming = part.isStreaming)
+                        }
                     }
+                } else {
+                    StreamingMarkdown(text = part.text, modifier = Modifier.fillMaxWidth(), isStreaming = part.isStreaming)
                 }
-            } else {
-                StreamingMarkdown(
-                    text = part.text,
-                    modifier = Modifier.fillMaxWidth()
-                )
             }
-        }
-        if (part.isStreaming) {
-            TuiLoadingIndicator()
-        }
+            if (part.isStreaming && isThinkingPhase) {
+                TuiLoadingIndicator()
+            }
     }
+}
+
 }
 
 // ── THOUGHT — single-pass flat row, zero IntrinsicSize overhead ───────────────
@@ -486,9 +483,23 @@ private fun ReasoningPart(part: Part.Reasoning) {
 
     val isThinking = part.time?.end == null
 
+    // Client-side thinking phase: show loading even when server sends
+    // complete reasoning in one chunk (OpenCode streaming bug #27549).
+    // Keys on text.length to re-arm the 80ms buffer every time a new
+    // text chunk arrives after isThinking becomes false.
+    var thinkingPhase by remember(part.id) { mutableStateOf(true) }
+    LaunchedEffect(part.id, isThinking, part.text.length) {
+        thinkingPhase = true
+        if (!isThinking && part.text.isNotEmpty()) {
+            delay(80)
+            thinkingPhase = false
+        }
+    }
+
     // All colors in remember — avoid .copy() allocation on every recompose
     val thoughtColor    = remember(theme.textMuted) { theme.textMuted.copy(alpha = 0.45f) }
-    val thoughtColorDim = remember(theme.textMuted) { theme.textMuted.copy(alpha = 0.25f) }
+    val thoughtDim      = remember(theme.textMuted) { theme.textMuted.copy(alpha = 0.25f) }
+    val thoughtGray     = remember { androidx.compose.ui.graphics.Color(0xFF888888).copy(alpha = 0.50f) }
 
     val durationLabel = remember(part.time) {
         part.time?.let { t ->
@@ -502,17 +513,17 @@ private fun ReasoningPart(part: Part.Reasoning) {
     }
 
     // Single Text node — no Row/Spacer/weight → single layout pass, fixed height
-    val headerText = remember(isThinking, durationLabel, expanded, part.text.isNotEmpty()) {
+    val showLoading = thinkingPhase || isThinking
+    val headerText = remember(showLoading, durationLabel, expanded, part.text.isNotEmpty()) {
         buildString {
-            append(if (isThinking) "· thinking…" else "· thought")
-            if (!isThinking && durationLabel != null) append("  [$durationLabel]")
+            append(if (showLoading) "· thinking…" else "· thought")
+            if (!showLoading && durationLabel != null) append("  [$durationLabel]")
             if (part.text.isNotEmpty()) append(if (expanded) "  ▾" else "  ▸")
         }
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        // If actively thinking show the spinner inline, otherwise pure Text header
-        if (isThinking) {
+        if (showLoading) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -520,20 +531,37 @@ private fun ReasoningPart(part: Part.Reasoning) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
             ) {
-                TuiLoadingIndicator()
                 Text(
-                    text = "thinking…",
+                    text = headerText,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    color = thoughtColor
+                    color = thoughtColor,
+                    modifier = Modifier.weight(1f)
                 )
+            }
+            if (part.text.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 60.dp)
+                        .clipToBounds()
+                        .padding(start = Spacing.sm)
+                ) {
+                    Text(
+                        text = part.text,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        lineHeight = 13.sp,
+                        color = thoughtGray,
+                    )
+                }
             }
         } else {
             Text(
                 text = headerText,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
-                color = thoughtColorDim,
+                color = thoughtDim,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(role = Role.Button) { expanded = !expanded }
@@ -541,7 +569,8 @@ private fun ReasoningPart(part: Part.Reasoning) {
             )
         }
 
-        if (expanded && part.text.isNotEmpty()) {
+        // Only show reasoning content when NOT actively thinking
+        if (!showLoading && expanded && part.text.isNotEmpty()) {
             var prevText by remember(part.id) { mutableStateOf("") }
             val parasState = remember(part.id) { mutableStateListOf<String>() }
             LaunchedEffect(part.text) {
@@ -580,7 +609,7 @@ private fun ReasoningPart(part: Part.Reasoning) {
                         text = para,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = thoughtColorDim,
+                        color = thoughtGray,
                         modifier = Modifier
                             .fillMaxWidth()
                             .combinedClickable(

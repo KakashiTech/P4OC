@@ -262,13 +262,11 @@ class MessageStore(
                 } else {
                     when {
                         existing.part is Part.Text && part is Part.Text -> {
-                            val builder = existing.sb ?: StringBuilder()
-                            if (delta != null) builder.append(delta)
+                            val builder = if (delta != null) (existing.sb ?: StringBuilder()).also { it.append(delta) } else null
                             byPart[part.id] = PendingDelta(part.copy(text = part.text, isStreaming = part.isStreaming), builder)
                         }
                         existing.part is Part.Reasoning && part is Part.Reasoning -> {
-                            val builder = existing.sb ?: StringBuilder()
-                            if (delta != null) builder.append(delta)
+                            val builder = if (delta != null) (existing.sb ?: StringBuilder()).also { it.append(delta) } else null
                             val mergedPart = if (part.time == null) {
                                 if (existing.part.time != null) part.copy(time = existing.part.time) else part
                             } else {
@@ -380,9 +378,9 @@ class MessageStore(
             delta != null && incoming is Part.Text && current == null ->
                 incoming.copy(text = delta, isStreaming = incoming.isStreaming)
             delta != null && incoming is Part.Reasoning && current is Part.Reasoning ->
-                incoming.copy(text = current.text + delta, time = current.time)
+                incoming.copy(text = current.text + delta, time = current.time ?: incoming.time)
             delta != null && incoming is Part.Reasoning && current == null ->
-                incoming.copy(text = delta)
+                incoming.copy(text = delta, time = incoming.time)
             else -> incoming
         }
     }

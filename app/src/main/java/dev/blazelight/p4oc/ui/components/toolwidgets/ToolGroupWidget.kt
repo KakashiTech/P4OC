@@ -138,7 +138,7 @@ fun ToolGroupWidget(
     }
     
     Column(modifier = modifier.fillMaxWidth()) {
-        // HUD summary row - only visible in ONELINE mode
+        // HUD summary row — only visible in ONELINE mode
         if (currentState == ToolWidgetState.ONELINE) {
             Row(
                 modifier = Modifier
@@ -163,24 +163,39 @@ fun ToolGroupWidget(
                 )
             }
         }
-        
-        // Compact/Expanded details — no animateContentSize to avoid repeated intrinsic passes.
+
+        // Compact/Expanded details
         if (currentState != ToolWidgetState.ONELINE) {
             Column(
                 modifier = Modifier,
                 verticalArrangement = Arrangement.spacedBy(1.dp)
             ) {
                 tools.forEach { tool ->
+                    val toolName = tool.toolName.lowercase()
                     when (currentState) {
                         ToolWidgetState.COMPACT -> {
-                            // Show compact row - click to cycle state
-                            ToolCallCompact(
-                                tool = tool,
-                                onClick = { currentState = currentState.next() },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            
-                            // Show approval buttons if pending
+                            when {
+                                toolName in listOf("todowrite", "todoread", "todo_write", "todo_read") -> TodoWriteWidgetExpanded(
+                                    tool = tool,
+                                    onClick = { currentState = currentState.next() },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                toolName in listOf("skill", "slashcommand") -> SkillWidgetExpanded(
+                                    tool = tool,
+                                    onClick = { currentState = currentState.next() },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                toolName in listOf("glob", "find", "serena_find_file") -> GlobWidgetExpanded(
+                                    tool = tool,
+                                    onClick = { currentState = currentState.next() },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                else -> ToolCallCompact(
+                                    tool = tool,
+                                    onClick = { currentState = currentState.next() },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                             if (tool.state is ToolState.Pending) {
                                 PendingApprovalButtonsInline(
                                     onApprove = { onToolApprove(tool.callID) },
@@ -189,7 +204,6 @@ fun ToolGroupWidget(
                             }
                         }
                         ToolWidgetState.EXPANDED -> {
-                            // Show full expanded widget
                             ToolCallExpanded(
                                 tool = tool,
                                 onClick = { currentState = currentState.next() },
@@ -199,7 +213,7 @@ fun ToolGroupWidget(
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
-                        else -> {} // Oneline handled above
+                        else -> {}
                     }
                 }
             }

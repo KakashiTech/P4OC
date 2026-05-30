@@ -14,7 +14,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
-import androidx.compose.animation.core.RepeatMode
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.animation.core.withInfiniteAnimationFrameMillis
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -40,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
+
 import dev.blazelight.p4oc.core.performance.rememberOptimizedLoadingRotation
 
 // =============================================================================
@@ -892,29 +898,49 @@ fun TuiLoadingIndicator(
     text: String? = null
 ) {
     val theme = LocalOpenCodeTheme.current
-    val animationsPaused = LocalAnimationsPaused.current
-    
+    val dots = remember {
+        // Each frame: [dot1, dot2, dot3, dot4, dot5, dot6]
+        // Clockwise rotation: 1→4→5→6→3→2→1, 1 dot changes per frame
+        listOf(
+            booleanArrayOf(true,  false, false, true,  true,  false), // ⠙ = 1,4,5
+            booleanArrayOf(false, false, false, true,  true,  true),  // ⠸ = 4,5,6
+            booleanArrayOf(false, false, true,  false, true,  true),  // ⠴ = 3,5,6
+            booleanArrayOf(false, true,  true,  false, false, true),  // ⠦ = 2,3,6
+            booleanArrayOf(true,  true,  true,  false, false, false), // ⠇ = 1,2,3
+            booleanArrayOf(true,  true,  false, true,  false, false), // ⠋ = 1,2,4
+        )
+    }
+    var frame by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            withInfiniteAnimationFrameMillis { ms ->
+                frame = ((ms / 111).toInt()) % dots.size
+            }
+        }
+    }
     Row(
         modifier = modifier, // NO PADDING - crucial for button alignment
         horizontalArrangement = Arrangement.spacedBy(Spacing.inlineSpacing),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (animationsPaused) {
-            androidx.compose.material3.Surface(
-                modifier = Modifier.size(Sizing.iconSm),
-                color = theme.accent,
-                shape = androidx.compose.foundation.shape.CircleShape
-            ) {}
-        } else {
-            CircularProgressIndicator(
-                modifier = Modifier.size(Sizing.iconMd),
-                strokeWidth = Sizing.strokeThin,
-                color = theme.accent,
-                trackColor = theme.backgroundElement,
-                strokeCap = StrokeCap.Round
-            )
+        val active = dots[frame]
+        Canvas(modifier = Modifier.size(16.dp)) {
+            val dotR = size.minDimension / 9f
+            val spacing = size.minDimension / 4f
+            val sx = (size.width - spacing * 2f) / 2f
+            val sy = (size.height - spacing * 3f) / 2f
+            for (i in 0..5) {
+                if (active[i]) {
+                    val col = if (i < 3) 0 else 1
+                    val row = i % 3
+                    drawCircle(
+                        color = theme.accent,
+                        radius = dotR,
+                        center = Offset(sx + spacing * col, sy + spacing * row)
+                    )
+                }
+            }
         }
-        
         text?.let {
             Text(
                 text = it,

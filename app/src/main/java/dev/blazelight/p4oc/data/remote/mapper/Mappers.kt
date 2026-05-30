@@ -571,8 +571,10 @@ class EventMapper constructor(
         when (dto.type) {
             "message.updated" -> {
                 val wrapper = json.decodeFromJsonElement<MessageEventDto>(dto.properties)
-                // Handle missing info field from server
-                val info = wrapper.info ?: run {
+                // Handle missing info field — server may send fields flat instead of nested
+                val info = wrapper.info ?: try {
+                    json.decodeFromJsonElement<MessageInfoDto>(dto.properties)
+                } catch (_: Exception) {
                     AppLog.w(TAG, "message.updated missing info field, skipping")
                     return null
                 }
@@ -589,15 +591,17 @@ class EventMapper constructor(
                 )
             }
             "message.part.updated" -> {
-                val partDto = json.decodeFromJsonElement<PartUpdateDto>(dto.properties)
-                // Handle missing part field from server
-                val part = partDto.part ?: run {
+                val partUpdate = json.decodeFromJsonElement<PartUpdateDto>(dto.properties)
+                // Handle missing part field — server may send fields flat instead of nested
+                val part = partUpdate.part ?: try {
+                    json.decodeFromJsonElement<PartDto>(dto.properties)
+                } catch (_: Exception) {
                     AppLog.w(TAG, "message.part.updated missing part field, skipping")
                     return null
                 }
                 OpenCodeEvent.MessagePartUpdated(
                     part = PartMapper.mapToDomain(part),
-                    delta = partDto.delta
+                    delta = partUpdate.delta
                 )
             }
             "message.removed" -> {
@@ -623,7 +627,7 @@ class EventMapper constructor(
                     null
                 }
                 if (sessionDto == null || sessionDto.id.isEmpty()) {
-                    AppLog.w(TAG, "session.created with null or empty id, skipping")
+                    AppLog.d(TAG, "session.created with null or empty id, skipping")
                     return null
                 }
                 OpenCodeEvent.SessionCreated(SessionMapper.mapToDomain(sessionDto))
@@ -642,7 +646,7 @@ class EventMapper constructor(
                     return null
                 }
                 if (sessionDto.id.isEmpty()) {
-                    AppLog.w(TAG, "session.updated with empty id, skipping")
+                    AppLog.d(TAG, "session.updated with empty id, skipping")
                     return null
                 }
                 OpenCodeEvent.SessionUpdated(SessionMapper.mapToDomain(sessionDto))
@@ -661,7 +665,7 @@ class EventMapper constructor(
                     return null
                 }
                 if (sessionDto.id.isEmpty()) {
-                    AppLog.w(TAG, "session.deleted with empty id, skipping")
+                    AppLog.d(TAG, "session.deleted with empty id, skipping")
                     return null
                 }
                 OpenCodeEvent.SessionDeleted(SessionMapper.mapToDomain(sessionDto))
