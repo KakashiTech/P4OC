@@ -15,15 +15,6 @@ import dev.blazelight.p4oc.ui.theme.opencode.rememberTertiaryMarkdownColors
 import dev.snipme.highlights.Highlights
 import dev.snipme.highlights.model.SyntaxThemes
 
-/**
- * Compose wrapper for mikepenz's multiplatform-markdown-renderer.
- *
- * Performance notes:
- * - highlightsBuilder: keyed on isDarkTheme only — syntax theme never changes mid-session.
- * - components: keyed on highlightsBuilder — same instance reused across all recompositions.
- * - markdownState: retainState=true lets the library skip re-parsing unchanged regions.
- *   The library diffs internally; we don't need to add extra keying here.
- */
 @Composable
 fun StreamingMarkdown(
     text: String,
@@ -73,9 +64,6 @@ fun StreamingMarkdown(
     )
 }
 
-/**
- * Convenience overload for tertiary-styled markdown (e.g., reasoning blocks).
- */
 @Composable
 fun TertiaryStreamingMarkdown(
     text: String,

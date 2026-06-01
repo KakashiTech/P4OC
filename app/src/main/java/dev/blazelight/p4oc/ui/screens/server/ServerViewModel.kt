@@ -15,6 +15,7 @@ import dev.blazelight.p4oc.core.network.MdnsDiscoveryManager
 import dev.blazelight.p4oc.core.network.ServerConfig
 import dev.blazelight.p4oc.core.network.safeApiCall
 import dev.blazelight.p4oc.core.security.CredentialStore
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,6 +53,7 @@ class ServerViewModel constructor(
 
     private fun tryAutoReconnect() {
         viewModelScope.launch {
+            delay(150)
             val (lastConfig, password) = settingsDataStore.getLastConnection() ?: return@launch
             
             AppLog.d(TAG, "Found last connection: ${lastConfig.url}")
@@ -67,8 +69,11 @@ class ServerViewModel constructor(
             result.fold(
                 onSuccess = {
                     AppLog.d(TAG, "Auto-reconnect successful")
-                    sessionDataCache.prewarm()
                     initializeProjectContext()
+                    viewModelScope.launch {
+                        delay(600)
+                        sessionDataCache.prewarm()
+                    }
                     _uiState.update { it.copy(isConnecting = false, isConnected = true) }
                 },
                 onFailure = { error ->
@@ -128,8 +133,11 @@ class ServerViewModel constructor(
                     _uiState.update { it.copy(password = "") }
                     settingsDataStore.saveLastConnection(config, password)
                     settingsDataStore.addRecentServer(url, "Remote Server", state.username.takeIf { it.isNotBlank() }, password)
-                    sessionDataCache.prewarm()
                     initializeProjectContext()
+                    viewModelScope.launch {
+                        delay(600)
+                        sessionDataCache.prewarm()
+                    }
                     _uiState.update { it.copy(isConnecting = false, isConnected = true) }
                 },
                 onFailure = { error ->

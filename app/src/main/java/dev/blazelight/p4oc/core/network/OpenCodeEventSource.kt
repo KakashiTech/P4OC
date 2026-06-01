@@ -179,7 +179,7 @@ class OpenCodeEventSource(
 
         val connectStrategy = ConnectStrategy.http(URI(eventUrl))
             .httpClient(okHttpClient)
-            .readTimeout(0, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
 
         val retryMs = computeRetryDelayMs()
         val eventSourceBuilder = EventSource.Builder(connectStrategy)

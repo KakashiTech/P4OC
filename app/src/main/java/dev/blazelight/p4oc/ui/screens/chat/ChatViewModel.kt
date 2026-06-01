@@ -26,6 +26,7 @@ import dev.blazelight.p4oc.domain.model.SessionConnectionState as TabConnectionS
 import dev.blazelight.p4oc.ui.components.chat.AbortSummary
 import dev.blazelight.p4oc.ui.components.chat.InterruptedTool
 import dev.blazelight.p4oc.ui.components.chat.SelectedFile
+import dev.blazelight.p4oc.ui.components.ContextUsage
 import dev.blazelight.p4oc.ui.navigation.Screen
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.flatMapLatest
@@ -54,6 +55,11 @@ class ChatViewModel constructor(
 
     // Child session IDs (subagent sessions whose parentID == this sessionId)
     private val childSessionIds = CopyOnWriteArraySet<String>()
+
+    // Saved scroll position — persists across ChatScreen dispose/recreate
+    // (ViewModel survives NavHost backstack navigation to Settings and back)
+    var savedScrollIndex: Int = 0
+    var savedScrollOffset: Int = 0
 
     private fun isOwnedSession(eventSessionId: String): Boolean =
         eventSessionId == sessionId || eventSessionId in childSessionIds
@@ -109,6 +115,32 @@ class ChatViewModel constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     val isLoadingTodos: StateFlow<Boolean> = _uiState.map { it.isLoadingTodos }.distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val contextUsage: StateFlow<ContextUsage?> = combine(
+        messageStore.messages,
+        modelAgentManager.selectedModel,
+        modelAgentManager.availableModels
+    ) { messages, selected, available ->
+        if (selected == null) return@combine null
+        val pair = available.firstOrNull { (provId, model) ->
+            provId == selected.providerID && model.id == selected.modelID
+        } ?: return@combine null
+        val maxTokens = pair.second.limit?.context ?: pair.second.contextLength ?: return@combine null
+        var totalInput = 0; var totalOutput = 0; var totalCached = 0
+        for (mwp in messages) {
+            val t = (mwp.message as? Message.Assistant)?.tokens ?: continue
+            totalInput += t.input
+            totalOutput += t.output
+            totalCached += t.cacheRead
+        }
+        ContextUsage(
+            usedTokens = totalInput + totalOutput,
+            maxTokens = maxTokens,
+            inputTokens = totalInput,
+            outputTokens = totalOutput,
+            cachedTokens = totalCached
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _branchName = MutableStateFlow<String?>(null)
     val branchName: StateFlow<String?> = _branchName.asStateFlow()
@@ -226,6 +258,7 @@ class ChatViewModel constructor(
                     }
                     // Reload VCS now that we have the canonical session directory
                     loadVcsInfo()
+                    loadTodos()
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(error = "Failed to load session") }

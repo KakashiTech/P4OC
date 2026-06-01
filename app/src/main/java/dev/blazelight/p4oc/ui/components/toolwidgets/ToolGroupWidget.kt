@@ -71,7 +71,8 @@ fun ToolGroupWidget(
     val hasPendingTools = tools.any { it.state is ToolState.Pending }
     val effectiveDefault = if (hasPendingTools) ToolWidgetState.EXPANDED else defaultState
     
-    var currentState by remember(tools.firstOrNull()?.callID) { mutableStateOf(effectiveDefault) }
+    val groupKey = remember(tools) { tools.firstOrNull()?.callID ?: "empty_${System.identityHashCode(tools)}" }
+    var currentState by remember(groupKey) { mutableStateOf(effectiveDefault) }
     
     // Update state if tools become pending (HITL)
     LaunchedEffect(hasPendingTools) {

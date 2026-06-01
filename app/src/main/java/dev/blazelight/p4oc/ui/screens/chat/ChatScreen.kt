@@ -10,11 +10,13 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import dev.blazelight.p4oc.ui.components.chat.SkillPickerBottomSheet
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,8 +35,10 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.*
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
@@ -69,6 +73,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.sample
 import dev.blazelight.p4oc.ui.components.chat.AbortSummaryCard
 import dev.blazelight.p4oc.ui.components.chat.LocalIsThinkingPhase
 import dev.blazelight.p4oc.ui.components.chat.ChatInputBar
@@ -82,6 +87,7 @@ import dev.blazelight.p4oc.ui.components.todo.TodoTrackerSheet
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
 import dev.blazelight.p4oc.ui.components.TuiTerminalMenu
 import dev.blazelight.p4oc.ui.components.TuiTerminalMenuItem
+import dev.blazelight.p4oc.ui.components.ContextUsage
 import dev.blazelight.p4oc.ui.components.TuiTopBar
 import dev.blazelight.p4oc.ui.components.TuiConfirmDialog
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
@@ -92,6 +98,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.RectangleShape
@@ -131,7 +139,8 @@ fun ChatScreen(
     onOpenSubSession: ((String) -> Unit)? = null,
     onSessionLoaded: ((sessionId: String, sessionTitle: String) -> Unit)? = null,
     onConnectionStateChanged: ((SessionConnectionState?) -> Unit)? = null,
-    isActiveTab: Boolean = true
+    isActiveTab: Boolean = true,
+    scrollState: LazyListState? = null,
 ) {
     // Granular flows — each emits only when its specific field changes.
     // Keeps ChatScreen recomposition scoped to what actually changed.
@@ -147,6 +156,7 @@ fun ChatScreen(
     val abortSummary by viewModel.abortSummary.collectAsStateWithLifecycle()
     val errorMsg by viewModel.errorMsg.collectAsStateWithLifecycle()
     val todos by viewModel.todos.collectAsStateWithLifecycle()
+    val contextUsage by viewModel.contextUsage.collectAsStateWithLifecycle()
 
     val screenContext = LocalContext.current
     DisposableEffect(isBusy) {
@@ -188,12 +198,13 @@ fun ChatScreen(
     val defaultToolWidgetState = remember(visualSettings.toolWidgetDefaultState) {
         ToolWidgetState.fromString(visualSettings.toolWidgetDefaultState)
     }
-    val listState = rememberLazyListState()
+    val listState = scrollState ?: rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     val smoothFling = dev.blazelight.p4oc.core.performance.rememberSmoothFlingBehavior()
     val isAtBottom = remember { derivedStateOf { listState.firstVisibleItemIndex == 0 } }
     val userScrolledAway = remember { mutableStateOf(false) }
     val hasNewContentWhileAway = remember { mutableStateOf(false) }
+    var focusTriggerCount by remember { mutableIntStateOf(0) }
     var showCommandPalette by remember { mutableStateOf(false) }
     var showTodoTracker by remember { mutableStateOf(false) }
     var showFilePicker by remember { mutableStateOf(false) }
@@ -232,6 +243,7 @@ fun ChatScreen(
         userScrolledAway = userScrolledAway,
         hasNewContentWhileAway = hasNewContentWhileAway,
         flatItems = flatItems,
+        onScrollToBottom = {},
     )
 
     val hasMoreMessages by remember {
@@ -293,7 +305,8 @@ fun ChatScreen(
                 },
                 onSkills = {
                     showSkillPicker = true
-                }
+                },
+                contextUsage = contextUsage
             )
         },
         bottomBar = {
@@ -306,6 +319,7 @@ fun ChatScreen(
                 Column(
                     modifier = Modifier
                         .imePadding()
+                        .navigationBarsPadding()
                         .background(LocalOpenCodeTheme.current.backgroundElement)
                 ) {
                     var localInput by remember { mutableStateOf(inputText) }
@@ -314,6 +328,7 @@ fun ChatScreen(
                     }
                     ChatInputBar(
                         value = localInput,
+                        focusTriggerCount = focusTriggerCount,
                         isThinking = isThinking,
                         modelSelector = {
                             val t = LocalOpenCodeTheme.current
@@ -364,6 +379,7 @@ fun ChatScreen(
                             viewModel.updateInput(localInput)
                             viewModel.sendMessage()
                             localInput = ""
+                            focusTriggerCount++
                         },
                         isLoading = isSending,
                         enabled = connectionState is ConnectionState.Connected,
@@ -373,6 +389,7 @@ fun ChatScreen(
                             viewModel.updateInput(localInput)
                             viewModel.queueMessage()
                             localInput = ""
+                            focusTriggerCount++
                         },
                         onCancelQueue = { /* TODO: Implementar cancelacion de mensaje encolado */ },
                         queuedMessagePreview = queuedMessage?.text,
@@ -431,7 +448,7 @@ fun ChatScreen(
                     showEmpty = messages.value.isEmpty() && !isBusy && !isLoading,
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 12.dp)
+                        .padding(horizontal = Spacing.lg)
                 )
             }
 
@@ -455,13 +472,13 @@ fun ChatScreen(
             }
 
             JumpToBottomButton(
-                visible = userScrolledAway.value && isBusy,
+                visible = userScrolledAway.value,
                 hasNewContent = hasNewContentWhileAway.value,
                 onClick = {
                     coroutineScope.launch {
                         userScrolledAway.value = false
                         hasNewContentWhileAway.value = false
-                        listState.scrollToItem(firstContentIndex(flatItems))
+                        listState.animateScrollToItem(firstContentIndex(flatItems))
                     }
                 },
                 modifier = Modifier
@@ -556,6 +573,7 @@ private fun firstContentIndex(items: List<FlatChatItem>): Int {
     return if (idx < 0) 0 else idx
 }
 
+@OptIn(FlowPreview::class)
 @Composable
 private fun ScrollObservers(
     viewModel: ChatViewModel,
@@ -567,22 +585,27 @@ private fun ScrollObservers(
     userScrolledAway: MutableState<Boolean>,
     hasNewContentWhileAway: MutableState<Boolean>,
     flatItems: List<FlatChatItem>,
+    onScrollToBottom: () -> Unit = {},
 ) {
     var isAutoScrolling by remember { mutableStateOf(false) }
 
     var prevFlatItemsSize by remember { mutableStateOf(flatItems.size) }
-    LaunchedEffect(flatItems) {
-        if (flatItems.size > prevFlatItemsSize) {
-            prevFlatItemsSize = flatItems.size
-            isAutoScrolling = true
-            userScrolledAway.value = false
-            hasNewContentWhileAway.value = false
-            listState.scrollToItem(firstContentIndex(flatItems))
-            isAutoScrolling = false
-        }
-        if (flatItems.size < prevFlatItemsSize) {
-            prevFlatItemsSize = flatItems.size
-        }
+    LaunchedEffect(Unit) {
+        snapshotFlow { messagesVersion.value to flatItems.size }
+            .collect { (version, size) ->
+                if (size > prevFlatItemsSize && !userScrolledAway.value && !listState.isScrollInProgress) {
+                    prevFlatItemsSize = size
+                    isAutoScrolling = true
+                    try {
+                        listState.scrollToItem(firstContentIndex(flatItems))
+                    } finally {
+                        isAutoScrolling = false
+                    }
+                }
+                if (size < prevFlatItemsSize) {
+                    prevFlatItemsSize = size
+                }
+            }
     }
 
     LaunchedEffect(Unit) {
@@ -593,28 +616,40 @@ private fun ScrollObservers(
             if (!atBottom && scrolling && !userScrolledAway.value && !isAutoScrolling) {
                 userScrolledAway.value = true
             }
-            if (atBottom && !scrolling && userScrolledAway.value) {
+            val wasAway = userScrolledAway.value
+            if (atBottom && !scrolling && wasAway) {
                 userScrolledAway.value = false
                 hasNewContentWhileAway.value = false
+                onScrollToBottom()
             }
         }
     }
 
     LaunchedEffect(session?.id) {
-        if (messages.value.isNotEmpty()) {
+        if (messages.value.isNotEmpty() &&
+            listState.firstVisibleItemIndex == 0 &&
+            listState.firstVisibleItemScrollOffset == 0
+        ) {
             isAutoScrolling = true
-            listState.scrollToItem(firstContentIndex(flatItems))
-            isAutoScrolling = false
+            try {
+                listState.scrollToItem(firstContentIndex(flatItems))
+            } finally {
+                isAutoScrolling = false
+            }
         }
     }
 
     LaunchedEffect(Unit) {
         snapshotFlow { messagesVersion.value }
+            .sample(80)
             .collect { version ->
-                delay(32)
-                if (version != messagesVersion.value) return@collect
                 if (!userScrolledAway.value && isAtBottom.value && !listState.isScrollInProgress) {
-                    listState.scrollToItem(firstContentIndex(flatItems))
+                    isAutoScrolling = true
+                    try {
+                        listState.scrollToItem(firstContentIndex(flatItems))
+                    } finally {
+                        isAutoScrolling = false
+                    }
                 } else if (userScrolledAway.value) {
                     hasNewContentWhileAway.value = true
                 }
@@ -652,7 +687,7 @@ private fun FlatItemsProvider(
         result
     }
 
-    val flatItems by produceState(initialValue = emptyList(), key1 = Unit) {
+    val flatItems by produceState(initialValue = compute(), key1 = Unit) {
         value = compute()
         snapshotFlow { messagesVersion.value }
             .drop(1)
@@ -681,22 +716,20 @@ private fun ChatTopBar(
     todoCount: Int = 0,
     inProgressCount: Int = 0,
     onTodos: () -> Unit = {},
-    onSkills: () -> Unit = {}
+    onSkills: () -> Unit = {},
+    contextUsage: ContextUsage? = null
 ) {
-    // Unified Chat TopBar - coherent with MainTabScreen style
     val theme = LocalOpenCodeTheme.current
     var showOverflow by remember { mutableStateOf(false) }
-    
-    // NOTE: glow animation is isolated in ConnectionGlowDot below — do NOT inline it here.
-    // An inline rememberInfiniteTransition recomposes the entire ChatTopBar on every frame.
 
-    Column(
+        Column(
         modifier = modifier
             .fillMaxWidth()
             .background(theme.background)
-            .padding(horizontal = 12.dp, vertical = 0.dp) // No vertical padding for connector contact
+            .consumeWindowInsets(WindowInsets.statusBars)
+            .padding(horizontal = 12.dp, vertical = 0.dp)
     ) {
-        // Top connector - direct connection from MainTabScreen
+        // Top connector line
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -708,10 +741,10 @@ private fun ChatTopBar(
                     .background(theme.border.copy(alpha = 0.3f))
             )
             Text(
-                text = "├", // Changed from ┌ to ├ for direct connection
+                text = "├",
                 fontFamily = FontFamily.Monospace,
                 style = MaterialTheme.typography.bodySmall,
-                color = theme.accent.copy(alpha = 0.7f) // Matches MainTabScreen connector
+                color = theme.accent.copy(alpha = 0.7f)
             )
             Box(
                 modifier = Modifier
@@ -741,199 +774,20 @@ private fun ChatTopBar(
             )
         }
 
-        // Segmented terminal layout - 3 connected sections
+        // Main content row
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(24.dp) // More compact height
-                .background(theme.background),
+                .height(24.dp)
+                .background(theme.background)
+                .offset(x = (-8).dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Section 1: Back button segment - ASCII style
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 6.dp, vertical = 0.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Text(
-                    text = "[",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = theme.textMuted.copy(alpha = 0.6f),
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "←",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp,
-                    color = theme.accent.copy(alpha = 0.8f),
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .clickable(role = Role.Button, onClick = onBack)
-                        .padding(horizontal = 4.dp, vertical = 0.dp)
-                )
-                Text(
-                    text = "]",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = theme.textMuted.copy(alpha = 0.6f),
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            // ASCII connector 1
-            Text(
-                text = "┼",
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodySmall,
-                color = theme.accent.copy(alpha = 0.7f)
-            )
-
-            // Center section with proper weight distribution
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                // Section 2: Compact status indicators (truly centered)
-                Row(
-                    modifier = Modifier
-                        .wrapContentWidth()
-                        .border(1.dp, theme.border.copy(alpha = 0.4f))
-                        .background(theme.backgroundElement.copy(alpha = 0.08f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    // Compact status display
-                    Text(
-                        text = if (isBusy) "⚙" else "✦",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isBusy) theme.warning.copy(alpha = 0.9f) else theme.success.copy(alpha = 0.9f)
-                    )
-                    
-                    Text(
-                        text = if (isBusy) "run" else "idle",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isBusy) theme.warning.copy(alpha = 0.9f) else theme.success.copy(alpha = 0.9f),
-                        modifier = Modifier.padding(horizontal = 2.dp)
-                    )
-
-                    branchName?.let {
-                        Text(
-                            text = "·",
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.border.copy(alpha = 0.5f)
-                        )
-                        Text(
-                            text = it.take(6),
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.success.copy(alpha = 0.8f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    Text(
-                        text = "·",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = theme.border.copy(alpha = 0.5f)
-                    )
-                    Text(
-                        text = "●",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (connectionState is ConnectionState.Connected) theme.success else theme.warning.copy(alpha = 0.6f)
-                    )
-                }
-            }
-
-            // ASCII connector 2
-            Text(
-                text = "┼",
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodySmall,
-                color = theme.accent.copy(alpha = 0.7f)
-            )
-
-            // Section 3: Controls segment
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 6.dp, vertical = 0.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                if (isBusy) {
-                    var clickCount by remember { mutableIntStateOf(0) }
-                    val scope = rememberCoroutineScope()
-                    
-                    Text(
-                        text = "■",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = theme.error.copy(alpha = if (clickCount > 0) 1.0f else 0.8f),
-                        modifier = Modifier
-                            .clickable(role = Role.Button, onClick = {
-                                clickCount++
-                                if (clickCount == 1) {
-                                    // Reset after 2 seconds if no second click
-                                    scope.launch {
-                                        delay(2000)
-                                        if (clickCount == 1) clickCount = 0
-                                    }
-                                } else if (clickCount >= 2) {
-                                    onAbort()
-                                    clickCount = 0
-                                }
-                            })
-                            .padding(4.dp)
-                    )
-                }
-
-                if (todoCount > 0) {
+                    // Back button [←]
                     Row(
-                        modifier = Modifier
-                            .clickable(role = Role.Button, onClick = onTodos)
-                            .padding(2.dp),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "[",
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.textMuted.copy(alpha = 0.6f)
-                        )
-                        if (inProgressCount > 0) {
-                            TodoLiveDot(activeCount = inProgressCount)
-                        } else {
-                            Text(
-                                text = "$todoCount",
-                                fontFamily = FontFamily.Monospace,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = theme.accent.copy(alpha = 0.8f)
-                            )
-                        }
-                        Text(
-                            text = "]",
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.textMuted.copy(alpha = 0.6f)
-                        )
-                    }
-                }
-
-                // ASCII menu button with special brackets - wrapped in Box for menu positioning
-                Box {
-                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 0.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable(role = Role.Button, onClick = { showOverflow = true })
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
                         Text(
                             text = "[",
@@ -943,12 +797,14 @@ private fun ChatTopBar(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "☰",
+                            text = "←",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 14.sp,
                             color = theme.accent.copy(alpha = 0.8f),
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.dp)
+                            modifier = Modifier
+                                .clickable(role = Role.Button, onClick = onBack)
+                                .padding(horizontal = 4.dp, vertical = 0.dp)
                         )
                         Text(
                             text = "]",
@@ -959,43 +815,210 @@ private fun ChatTopBar(
                         )
                     }
 
-                    // Terminal-style ASCII menu positioned below the button
-                    TuiTerminalMenu(
-                        expanded = showOverflow,
-                        onDismissRequest = { showOverflow = false },
-                        modifier = Modifier.align(Alignment.TopEnd),
-                        offset = DpOffset(8.dp, 22.dp)
+                    // ┼ connector
+                    Text(
+                        text = "┼",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = theme.accent.copy(alpha = 0.7f)
+                    )
+
+                    // Token count (left)
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TuiTerminalMenuItem(
-                            text = "Changes",
-                            symbol = "±",
-                            onClick = { showOverflow = false; onViewChanges() }
-                        )
-                        TuiTerminalMenuItem(
-                            text = "Commands",
-                            symbol = "/",
-                            onClick = { showOverflow = false; onCommands() }
-                        )
-                        TuiTerminalMenuItem(
-                            text = "Terminal",
-                            symbol = ">_",
-                            onClick = { showOverflow = false; onTerminal() }
-                        )
-                        TuiTerminalMenuItem(
-                            text = "Files",
-                            symbol = "#",
-                            onClick = { showOverflow = false; onFiles() }
-                        )
-                        TuiTerminalMenuItem(
-                            text = "Skills",
-                            symbol = ">",
-                            onClick = { showOverflow = false; onSkills() }
-                        )
+                        contextUsage?.let { usage ->
+                            val usedFormatted = formatTokenCount(usage.usedTokens)
+                            val pct = if (usage.maxTokens > 0) (usage.usedTokens.toFloat() / usage.maxTokens * 100).toInt() else 0
+                            val baseAlpha = 0.4f
+                            val tokenColor = when {
+                                pct >= 95 -> theme.error.copy(alpha = baseAlpha + 0.3f)
+                                pct >= 85 -> theme.warning.copy(alpha = baseAlpha + 0.2f)
+                                pct >= 70 -> theme.warning.copy(alpha = baseAlpha)
+                                else -> theme.textMuted.copy(alpha = baseAlpha)
+                            }
+                            Text(
+                                text = usedFormatted,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 9.sp,
+                                color = tokenColor,
+                                modifier = Modifier.padding(start = 4.dp, end = 4.dp)
+                            )
+                        }
+
+                        // Honeycomb animation (center, weight 1f)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(16.dp)
+                        .offset(x = (-4).dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                            HoneycombAnimation(isBusy = isBusy)
+                        }
+
+                        // Context percent + abort + todo (right)
+                        contextUsage?.let { usage ->
+                            if (usage.maxTokens > 0) {
+                                val pct = ((usage.usedTokens.toFloat() / usage.maxTokens) * 100).toInt()
+                                val baseAlpha = 0.4f
+                                val pctColor = when {
+                                    pct >= 95 -> theme.error.copy(alpha = baseAlpha + 0.3f)
+                                    pct >= 85 -> theme.warning.copy(alpha = baseAlpha + 0.2f)
+                                    pct >= 70 -> theme.warning.copy(alpha = baseAlpha)
+                                    else -> theme.textMuted.copy(alpha = baseAlpha)
+                                }
+                                Text(
+                                    text = "${pct}%",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 9.sp,
+                                    color = pctColor,
+                                    modifier = Modifier.padding(horizontal = 2.dp)
+                                )
+                            }
+                        }
+
+                        if (isBusy) {
+                            var clickCount by remember { mutableIntStateOf(0) }
+                            val scope = rememberCoroutineScope()
+                            Text(
+                                text = "■",
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = theme.error.copy(alpha = if (clickCount > 0) 1.0f else 0.8f),
+                                modifier = Modifier
+                                    .clickable(role = Role.Button, onClick = {
+                                        clickCount++
+                                        if (clickCount == 1) {
+                                            scope.launch {
+                                                delay(2000)
+                                                if (clickCount == 1) clickCount = 0
+                                            }
+                                        } else if (clickCount >= 2) {
+                                            onAbort()
+                                            clickCount = 0
+                                        }
+                                    })
+                                    .padding(horizontal = 2.dp)
+                            )
+                        }
+
+                        if (todoCount > 0) {
+                            Row(
+                                modifier = Modifier
+                                    .clickable(role = Role.Button, onClick = onTodos)
+                                    .padding(horizontal = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "[",
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = theme.textMuted.copy(alpha = 0.6f)
+                                )
+                                if (inProgressCount > 0) {
+                                    TodoLiveDot(activeCount = inProgressCount)
+                                } else {
+                                    Text(
+                                        text = "$todoCount",
+                                        fontFamily = FontFamily.Monospace,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = theme.accent.copy(alpha = 0.8f)
+                                    )
+                                }
+                                Text(
+                                    text = "]",
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = theme.textMuted.copy(alpha = 0.6f)
+                                )
+                            }
+                        }
                     }
+
+                    // ┼ connector
+                    Text(
+                        text = "┼",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = theme.accent.copy(alpha = 0.7f)
+                    )
+
+                // Overflow menu [⋮]
+            Box(
+                modifier = Modifier.offset(x = 4.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clickable(role = Role.Button, onClick = { showOverflow = true })
+                ) {
+                    Text(
+                        text = "[",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = theme.textMuted.copy(alpha = 0.6f),
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "⋮",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        color = theme.accent.copy(alpha = 0.8f),
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.dp)
+                    )
+                    Text(
+                        text = "]",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = theme.textMuted.copy(alpha = 0.6f),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                TuiTerminalMenu(
+                    expanded = showOverflow,
+                    onDismissRequest = { showOverflow = false },
+                    modifier = Modifier.align(Alignment.TopEnd),
+                    offset = DpOffset(8.dp, 22.dp)
+                ) {
+                    TuiTerminalMenuItem(
+                        text = "Changes",
+                        symbol = "±",
+                        onClick = { showOverflow = false; onViewChanges() }
+                    )
+                    TuiTerminalMenuItem(
+                        text = "Commands",
+                        symbol = "/",
+                        onClick = { showOverflow = false; onCommands() }
+                    )
+                    TuiTerminalMenuItem(
+                        text = "Terminal",
+                        symbol = ">_",
+                        onClick = { showOverflow = false; onTerminal() }
+                    )
+                    TuiTerminalMenuItem(
+                        text = "Files",
+                        symbol = "#",
+                        onClick = { showOverflow = false; onFiles() }
+                    )
+                    TuiTerminalMenuItem(
+                        text = "Skills",
+                        symbol = ">",
+                        onClick = { showOverflow = false; onSkills() }
+                    )
                 }
             }
         }
     }
+}
+
+private fun formatTokenCount(n: Int): String = when {
+    n < 1000 -> "$n"
+    n < 1_000_000 -> "${n / 1000}K"
+    else -> "${n / 1_000_000}M"
 }
 
 @Composable
@@ -1310,6 +1333,88 @@ private fun RevertActiveBanner(
                 fontWeight = FontWeight.Medium,
                 color = theme.warning
             )
+        }
+    }
+}
+
+@Composable
+private fun HoneycombAnimation(
+    isBusy: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val theme = LocalOpenCodeTheme.current
+    val transition = rememberInfiniteTransition(label = "hexWave")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "hexPhase"
+    )
+
+    Box(modifier = modifier) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.align(Alignment.Center)
+        ) {
+            for (i in 0..2) {
+                if (isBusy) {
+                    val t = ((phase + i.toFloat() / 3f) % 1f)
+                    val glow = (sin(t * 2f * PI.toFloat()) + 1f) / 2f
+                    HexIcon(
+                        glow = glow,
+                        accent = theme.accent,
+                        size = 10.dp
+                    )
+                } else {
+                    HexIcon(
+                        glow = 0f,
+                        accent = theme.textMuted,
+                        size = 10.dp
+                    )
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = !isBusy,
+            enter = fadeIn(animationSpec = tween(300)),
+            exit = fadeOut(animationSpec = tween(300)),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            Text(
+                text = "IDLE",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 7.sp,
+                color = theme.textMuted.copy(alpha = 0.25f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun HexIcon(glow: Float, accent: Color, size: Dp) {
+    Canvas(modifier = Modifier.size(size)) {
+        val r = size.toPx() / 2f
+        val path = Path().apply {
+            var first = true
+            for (j in 0..5) {
+                val angle = j * 60.0 - 30.0
+                val rad = angle * PI / 180.0
+                val px = r + r * cos(rad).toFloat()
+                val py = r + r * sin(rad).toFloat()
+                if (first) { moveTo(px, py); first = false } else lineTo(px, py)
+            }
+            close()
+        }
+        if (glow > 0f) {
+            drawPath(path, color = accent.copy(alpha = glow * 0.25f), style = Fill)
+            drawPath(path, color = accent.copy(alpha = 0.15f + glow * 0.6f), style = Stroke(width = 1.5f))
+        } else {
+            drawPath(path, color = accent.copy(alpha = 0.2f), style = Stroke(width = 1f))
         }
     }
 }

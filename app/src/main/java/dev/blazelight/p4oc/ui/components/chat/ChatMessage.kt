@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.R
@@ -449,11 +450,11 @@ private fun TextPart(part: Part.Text, enableVirtualization: Boolean = true) {
             // Hide streaming text during the thinking phase — only show the
             // loading indicator. Once thinking ends, text renders normally.
             if (!isThinkingPhase || !part.isStreaming) {
-                if (part.text.length > 2000) {
+                if (part.text.length > 2000 && !part.isStreaming) {
                     val chunks = remember(part.id, part.text) { chunkMarkdown(part.text, 1400) }
                     Column(modifier = Modifier.fillMaxWidth()) {
                         chunks.forEach { chunk ->
-                            StreamingMarkdown(text = chunk, modifier = Modifier.fillMaxWidth(), isStreaming = part.isStreaming)
+                            StreamingMarkdown(text = chunk, modifier = Modifier.fillMaxWidth(), isStreaming = false)
                         }
                     }
                 } else {
@@ -543,8 +544,6 @@ private fun ReasoningPart(part: Part.Reasoning) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 60.dp)
-                        .clipToBounds()
                         .padding(start = Spacing.sm)
                 ) {
                     Text(
@@ -553,6 +552,8 @@ private fun ReasoningPart(part: Part.Reasoning) {
                         fontSize = 10.sp,
                         lineHeight = 13.sp,
                         color = thoughtGray,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }

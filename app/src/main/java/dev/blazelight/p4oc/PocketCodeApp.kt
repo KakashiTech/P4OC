@@ -2,6 +2,7 @@ package dev.blazelight.p4oc
 
 import android.app.Application
 
+import dev.blazelight.p4oc.core.debug.CrashReporter
 import dev.blazelight.p4oc.core.notification.NotificationEventObserver
 import dev.blazelight.p4oc.di.allModules
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -28,6 +29,7 @@ class PocketCodeApp : Application() {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     
     override fun onCreate() {
+        CrashReporter.init(this)
         super.onCreate()
 
         startKoin {

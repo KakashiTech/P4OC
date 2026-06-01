@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.mutableFloatStateOf
@@ -46,7 +48,6 @@ import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.TuiCodeFontSize
 import dev.blazelight.p4oc.ui.components.LocalAnimationsPaused
-import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
 
 data class ModelOption(
     val key: String,
@@ -74,10 +75,17 @@ fun ChatInputBar(
     onRemoveAttachment: (String) -> Unit = {},
     commands: List<Command> = emptyList(),
     onCommandSelected: (Command) -> Unit = {},
-    requestFocus: Boolean = false
+    requestFocus: Boolean = false,
+    focusTriggerCount: Int = 0
 ) {
     val theme = LocalOpenCodeTheme.current
     val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(focusTriggerCount) {
+        if (focusTriggerCount > 0 && enabled) {
+            try { focusRequester.requestFocus() } catch (_: Exception) {}
+        }
+    }
 
     val hasContent = value.isNotBlank() || attachedFiles.isNotEmpty()
     val canSend    = hasContent && enabled && !isLoading && !isBusy
@@ -86,19 +94,8 @@ fun ChatInputBar(
     val isIdle = enabled && !isLoading && !isBusy
 
     // ── Status label ────────────────────────────────────────────────────────
-    val statusLabel = when {
-        !enabled                   -> "✗"
-        isLoading                  -> "…"
-        isBusy && hasQueuedMessage -> "⊕"
-        isBusy                     -> "◐"
-        else                       -> ">"
-    }
-    val statusColor = when {
-        !enabled  -> theme.textMuted.copy(alpha = 0.4f)
-        isLoading -> theme.textMuted
-        isBusy    -> theme.warning
-        else      -> theme.accent
-    }
+    val statusLabel = if (isLoading) "…" else ">"
+    val statusColor = if (isLoading) theme.textMuted else theme.accent
 
     // ── Shimmer Animation ─────────────────────────────────────────────────────
     //
@@ -402,13 +399,11 @@ fun ChatInputBar(
                     )
                 )
 
-                // Attach — ◈ diamond, no brackets
-                Text(
-                    text = "◈",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (enabled) theme.accent else theme.textMuted.copy(alpha = 0.35f),
+                // Attach — paperclip icon
+                Icon(
+                    imageVector = Icons.Default.AttachFile,
+                    contentDescription = "Attach file",
+                    tint = if (enabled) theme.accent else theme.textMuted.copy(alpha = 0.35f),
                     modifier = Modifier
                         .then(
                             if (enabled && !isLoading)
@@ -417,6 +412,7 @@ fun ChatInputBar(
                         )
                         .testTag("attach_button")
                         .padding(horizontal = Spacing.xs)
+                        .size(16.dp)
                 )
 
                 // ▏ vertical bar — vertical gradient when idle, plain when busy
@@ -497,35 +493,22 @@ fun ChatInputBar(
                     color = theme.border.copy(alpha = 0.3f)
                 )
 
-                // Action — ↑ / ⊕ / ✕  no brackets
-                val isCancelState = isBusy && onCancelQueue != null
-                val actionGlyph = when {
-                    isLoading     -> null
-                    isCancelState -> "✕"
-                    canQueue      -> "⊕"
-                    else          -> "↑"
-                }
+                // Action — ↑ or ⊕
+                val actionGlyph = if (canQueue) "⊕" else "↑"
                 val actionColor = when {
-                    canSend       -> theme.accent
-                    canQueue      -> theme.warning
-                    isCancelState -> theme.error.copy(alpha = 0.8f)
-                    else          -> theme.textMuted.copy(alpha = 0.28f)
+                    canSend  -> theme.accent
+                    canQueue -> theme.warning
+                    else     -> theme.textMuted.copy(alpha = 0.28f)
                 }
                 Box(
                     modifier = Modifier
                         .then(
                             when {
-                                isCancelState -> Modifier.clickable(role = Role.Button) {
-                                    onCancelQueue?.invoke()
-                                    try { focusRequester.requestFocus() } catch (_: Exception) {}
-                                }.testTag("cancel_button")
-                                canSend -> Modifier.clickable(role = Role.Button) {
+                                canSend  -> Modifier.clickable(role = Role.Button) {
                                     onSend()
-                                    try { focusRequester.requestFocus() } catch (_: Exception) {}
                                 }.testTag("send_button")
                                 canQueue -> Modifier.clickable(role = Role.Button) {
                                     onQueueMessage()
-                                    try { focusRequester.requestFocus() } catch (_: Exception) {}
                                 }.testTag("chat_queue_button")
                                 else -> Modifier
                             }
@@ -533,17 +516,13 @@ fun ChatInputBar(
                         .padding(horizontal = Spacing.xs),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isLoading) {
-                        TuiLoadingIndicator()
-                    } else {
-                        Text(
-                            text = actionGlyph ?: "·",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = actionColor
-                        )
-                    }
+                    Text(
+                        text = actionGlyph,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = actionColor
+                    )
                 }
 
                 // Right wall ┤: perimeter 6→8(=0) (top→bottom, clockwise).

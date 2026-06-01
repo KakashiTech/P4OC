@@ -230,7 +230,7 @@ object PartMapper {
             callID = dto.callID ?: "",
             toolName = dto.toolName ?: "",
             state = dto.state?.let { mapToolStateToDomain(it) }
-                ?: ToolState.Pending(buildJsonObject {}, ""),
+                ?: ToolState.Running(buildJsonObject {}, title = null, startedAt = 0L, metadata = null),
             metadata = dto.metadata
         )
         "file" -> Part.File(
@@ -339,7 +339,7 @@ object PartMapper {
                 endedAt = time?.end ?: 0L,
                 metadata = dto.metadata
             )
-            else -> ToolState.Pending(input, dto.raw ?: "")
+            else -> ToolState.Running(input, title = null, startedAt = 0L, metadata = null)
         }
     }
 

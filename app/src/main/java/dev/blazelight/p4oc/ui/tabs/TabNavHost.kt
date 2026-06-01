@@ -10,6 +10,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -94,6 +95,7 @@ fun TabNavHost(
     isActiveTab: Boolean = true,
     startRoute: String = Screen.Sessions.route,
     onConnectionStateChanged: ((SessionConnectionState?) -> Unit)? = null,
+    scrollState: LazyListState? = null,
     modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier
 ) {
     // Read visual settings for sub-agent tab behavior
@@ -252,7 +254,8 @@ fun TabNavHost(
                     tabManager.updateTabSession(tabId, sessionId, sessionTitle)
                 },
                 onConnectionStateChanged = onConnectionStateChanged,
-                isActiveTab = isActiveTab
+                isActiveTab = isActiveTab,
+                scrollState = scrollState
             )
         }
 

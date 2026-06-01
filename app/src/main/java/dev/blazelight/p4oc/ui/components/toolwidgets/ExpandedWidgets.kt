@@ -39,25 +39,20 @@ import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.*
 
-/**
- * Bash widget expanded view
- * Shows: command + stdout/stderr preview (scrollable, max ~100dp)
- */
+// ─────────────────────────────────────────────────────────────
+//  BASH
+// ─────────────────────────────────────────────────────────────
+
 @Composable
 fun BashWidgetExpanded(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
     onToolApprove: (String) -> Unit,
     onToolDeny: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
     val state = tool.state
-    val (_, stateColor) = getStateIconColor(state, theme)
-    val terminalBg   = theme.backgroundPanel
-    val terminalFg   = theme.text
-    val promptColor  = stateColor
-
     val command = remember(state.input) { extractJsonParam(state.input, "command") ?: "bash" }
     val output = remember(state) {
         when (state) {
@@ -67,148 +62,136 @@ fun BashWidgetExpanded(
             else                   -> null
         }
     }
-    val leftBarColor = remember(promptColor) { promptColor.copy(alpha = 0.75f) }
-    val titleBgColor = remember(promptColor) { promptColor.copy(alpha = 0.10f) }
-    val dividerColor = remember(promptColor) { promptColor.copy(alpha = 0.12f) }
-    val outputBgColor = remember(terminalBg) { terminalBg.copy(alpha = 0.6f) }
-    val outputFgColor = remember(terminalFg) { terminalFg.copy(alpha = 0.82f) }
+    val label = remember(state) {
+        when (state) {
+            is ToolState.Running -> state.title?.trim()
+            is ToolState.Completed -> state.title.trim()
+            else -> null
+        }?.takeLast(60)?.ifBlank { null }
+    }
+    val cardBg = theme.backgroundPanel.copy(alpha = 0.35f)
 
-    // Outer: left color bar overlay (3dp, flush)
-    Box(
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .padding(vertical = 2.dp)
+            .background(cardBg)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier),
     ) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .width(3.dp)
-                .matchParentSize()
-                .background(leftBarColor)
-        )
-        // Inner column — flat background, no graphicsLayer clip on container
-        Column(
+        // ── Label row: spinner + "# label" ──────────────────────────
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 3.dp)
-                .background(terminalBg)
+                .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // ── Title bar: tmux-style ──────────────────────────────────────────
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(titleBgColor)
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                // ■ active tab indicator
+            if (state is ToolState.Running) {
+                TuiLoadingIndicator()
+            } else {
                 Text(
-                    text = "■ bash",
+                    text = when (state) {
+                        is ToolState.Error -> "✗"
+                        is ToolState.Completed -> "✓"
+                        else -> "○"
+                    },
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    color = promptColor,
-                    fontWeight = FontWeight.Bold
+                    fontSize = TuiCodeFontSize.lg,
+                    color = when (state) {
+                        is ToolState.Error -> theme.error
+                        is ToolState.Completed -> theme.success
+                        else -> theme.secondary
+                    },
                 )
-                // exit code indicator
-                if (state is ToolState.Completed) {
-                    Text(
-                        text = "[0]",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        color = theme.success.copy(alpha = 0.70f)
-                    )
-                } else if (state is ToolState.Error) {
-                    Text(
-                        text = "[1]",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        color = theme.error.copy(alpha = 0.70f)
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                if (state is ToolState.Running) TuiLoadingIndicator()
             }
-            // ── Prompt line ──────────────────────────────────────────────────
-            Row(
+            Text(
+                text = label ?: "Bash",
+                fontFamily = FontFamily.Monospace,
+                fontSize = TuiCodeFontSize.lg,
+                color = theme.text,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+            )
+        }
+
+        // ── Command line: $ command (no background) ─────────────────
+        Text(
+            text = "\$ $command",
+            fontFamily = FontFamily.Monospace,
+            fontSize = TuiCodeFontSize.sm,
+            color = theme.textMuted,
+            maxLines = 1,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg),
+        )
+
+        // ── Output (with background) ────────────────────────────────
+        if (!output.isNullOrBlank()) {
+            Spacer(Modifier.height(Spacing.xs))
+            val outputBg = theme.backgroundElement
+            val outputFg = if (state is ToolState.Error) theme.error else theme.text.copy(alpha = 0.82f)
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    .heightIn(max = 180.dp)
+                    .background(outputBg)
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
             ) {
-                Text("\u276f", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = promptColor, fontWeight = FontWeight.Bold)
-                Text(command, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = terminalFg, modifier = Modifier.weight(1f))
-            }
-            // ── Output pane ──────────────────────────────────────────────────
-            if (!output.isNullOrBlank()) {
-                Box(Modifier.fillMaxWidth().height(1.dp).background(dividerColor))
-                Box(
+                Text(
+                    text = output,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = TuiCodeFontSize.xs,
+                    lineHeight = 14.sp,
+                    color = outputFg,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(outputBgColor)
-                        .heightIn(max = 160.dp)
-                        .padding(horizontal = 10.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = output,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        lineHeight = 15.sp,
-                        color = if (state is ToolState.Error) theme.error else outputFgColor,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                            .horizontalScroll(rememberScrollState())
-                    )
-                }
+                        .verticalScroll(rememberScrollState())
+                        .horizontalScroll(rememberScrollState()),
+                )
             }
-            // ── Pending approval ──────────────────────────────────────────────
-            if (state is ToolState.Pending) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(remember(theme.secondary) { theme.secondary.copy(alpha = 0.08f) })
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    PendingApprovalButtons(
-                        onApprove = { onToolApprove(tool.callID) },
-                        onDeny = { onToolDeny(tool.callID) }
-                    )
-                }
+        }
+
+        // ── Approval buttons (when pending) ─────────────────────────
+        if (state is ToolState.Pending) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            ) {
+                PendingApprovalButtons(
+                    onApprove = { onToolApprove(tool.callID) },
+                    onDeny = { onToolDeny(tool.callID) },
+                )
             }
-        } // Column
-    } // Box
+        }
+    }
 }
 
-/**
- * Read widget expanded view — minimal one-liner.
- * Shows "→ Read relative-path/file [limit=N, offset=M]".
- */
+// ─────────────────────────────────────────────────────────────
+//  READ — single-line
+// ─────────────────────────────────────────────────────────────
+
 @Composable
 fun ReadWidgetExpanded(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
     val state = tool.state
     val filePath = remember(state.input) {
         extractJsonParam(state.input, "filePath")
             ?: extractJsonParam(state.input, "path")
-            ?: extractJsonParam(state.input, "relative_path")
-            ?: "file"
+            ?: extractJsonParam(state.input, "relative_path") ?: "file"
     }
     val shortPath = remember(filePath) { cleanPath(filePath).takeLast(48) }
-    val limit   = remember(state.input) { extractJsonParam(state.input, "limit")?.take(6) ?: "" }
-    val offset  = remember(state.input) { extractJsonParam(state.input, "offset")?.take(6) ?: "" }
-
+    val limit = remember(state.input) { extractJsonParam(state.input, "limit")?.take(6) ?: "" }
+    val offset = remember(state.input) { extractJsonParam(state.input, "offset")?.take(6) ?: "" }
     val suffix = remember(shortPath, limit, offset) {
         buildString {
-            append("  $shortPath")
+            append(shortPath)
             if (limit.isNotEmpty() || offset.isNotEmpty()) {
-                append("  [")
+                append(" [")
                 if (limit.isNotEmpty()) append("limit=$limit")
                 if (limit.isNotEmpty() && offset.isNotEmpty()) append(", ")
                 if (offset.isNotEmpty()) append("offset=$offset")
@@ -216,9 +199,8 @@ fun ReadWidgetExpanded(
             }
         }
     }
-
     Text(
-        text = "→  Read$suffix",
+        text = "→  Read  $suffix",
         fontFamily = FontFamily.Monospace,
         fontSize = TuiCodeFontSize.md,
         color = theme.textMuted,
@@ -226,35 +208,31 @@ fun ReadWidgetExpanded(
         overflow = TextOverflow.Ellipsis,
         modifier = modifier
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .padding(vertical = 2.dp, horizontal = Spacing.sm)
+            .padding(vertical = 2.dp, horizontal = Spacing.sm),
     )
 }
 
-/**
- * Grep/Search widget expanded view — minimal one-liner.
- * Shows "✱ Grep "pattern" in relative-path/file (N matches)".
- */
+// ─────────────────────────────────────────────────────────────
+//  GREP / SEARCH — single-line
+// ─────────────────────────────────────────────────────────────
+
 @Composable
 fun GrepWidgetExpanded(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
     val state = tool.state
-
     val pattern = remember(state.input) {
         extractJsonParam(state.input, "pattern")
-            ?: extractJsonParam(state.input, "substring_pattern")
-            ?: ""
+            ?: extractJsonParam(state.input, "substring_pattern") ?: ""
     }
     val filePath = remember(state.input) {
         extractJsonParam(state.input, "filePath")
             ?: extractJsonParam(state.input, "path")
-            ?: extractJsonParam(state.input, "relative_path")
-            ?: ""
+            ?: extractJsonParam(state.input, "relative_path") ?: ""
     }
-
     val shortPath = remember(filePath) { if (filePath.isNotEmpty()) cleanPath(filePath).takeLast(40) else "" }
     val output = remember(state) {
         when (state) {
@@ -267,17 +245,15 @@ fun GrepWidgetExpanded(
     val matchCount = remember(output) {
         if (output != null) output.lines().count { it.isNotBlank() } else null
     }
-
     val suffix = remember(pattern, shortPath, matchCount) {
         buildString {
-            append("  \"$pattern\"")
+            append("\"$pattern\"")
             if (shortPath.isNotEmpty()) append("  in  $shortPath")
             if (matchCount != null) append("  ($matchCount match${if (matchCount != 1) "es" else ""})")
         }
     }
-
     Text(
-        text = "\u2731  Grep$suffix",
+        text = "→  Grep  $suffix",
         fontFamily = FontFamily.Monospace,
         fontSize = TuiCodeFontSize.md,
         color = theme.textMuted,
@@ -285,31 +261,29 @@ fun GrepWidgetExpanded(
         overflow = TextOverflow.Ellipsis,
         modifier = modifier
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .padding(vertical = 2.dp, horizontal = Spacing.sm)
+            .padding(vertical = 2.dp, horizontal = Spacing.sm),
     )
 }
 
-/**
- * Skill widget expanded view — minimal one-liner.
- * Shows "✦  Skill "skill-name"".
- */
+// ─────────────────────────────────────────────────────────────
+//  SKILL — single-line
+// ─────────────────────────────────────────────────────────────
+
 @Composable
 fun SkillWidgetExpanded(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
     val state = tool.state
-
     val skillName = remember(state.input) {
         extractJsonParam(state.input, "name")
             ?: extractJsonParam(state.input, "command")
             ?: tool.toolName
     }
-
     Text(
-        text = "\u2726  Skill \"$skillName\"",
+        text = "→  Skill  \"$skillName\"",
         fontFamily = FontFamily.Monospace,
         fontSize = TuiCodeFontSize.md,
         color = theme.textMuted,
@@ -317,35 +291,31 @@ fun SkillWidgetExpanded(
         overflow = TextOverflow.Ellipsis,
         modifier = modifier
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .padding(vertical = 2.dp, horizontal = Spacing.sm)
+            .padding(vertical = 2.dp, horizontal = Spacing.sm),
     )
 }
 
-/**
- * Glob widget expanded view — minimal one-liner.
- * Shows "⌕  Glob "pattern"" like the Read widget.
- */
+// ─────────────────────────────────────────────────────────────
+//  GLOB / FIND — single-line
+// ─────────────────────────────────────────────────────────────
+
 @Composable
 fun GlobWidgetExpanded(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
     val state = tool.state
-
     val pattern = remember(state.input) {
         extractJsonParam(state.input, "pattern")
-            ?: extractJsonParam(state.input, "file_mask")
-            ?: ""
+            ?: extractJsonParam(state.input, "file_mask") ?: ""
     }
     val filePath = remember(state.input) {
         extractJsonParam(state.input, "filePath")
             ?: extractJsonParam(state.input, "path")
-            ?: extractJsonParam(state.input, "relative_path")
-            ?: ""
+            ?: extractJsonParam(state.input, "relative_path") ?: ""
     }
-
     val shortPath = remember(filePath) { if (filePath.isNotEmpty()) cleanPath(filePath).takeLast(40) else "" }
     val output = remember(state) {
         when (state) {
@@ -358,17 +328,15 @@ fun GlobWidgetExpanded(
     val matchCount = remember(output) {
         if (output != null) output.lines().count { it.isNotBlank() } else null
     }
-
     val suffix = remember(pattern, shortPath, matchCount) {
         buildString {
-            append("  \"$pattern\"")
+            append("\"$pattern\"")
             if (shortPath.isNotEmpty()) append("  in  $shortPath")
             if (matchCount != null) append("  ($matchCount match${if (matchCount != 1) "es" else ""})")
         }
     }
-
     Text(
-        text = "\u2315  Glob$suffix",
+        text = "→  Glob  $suffix",
         fontFamily = FontFamily.Monospace,
         fontSize = TuiCodeFontSize.md,
         color = theme.textMuted,
@@ -376,99 +344,76 @@ fun GlobWidgetExpanded(
         overflow = TextOverflow.Ellipsis,
         modifier = modifier
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .padding(vertical = 2.dp, horizontal = Spacing.sm)
+            .padding(vertical = 2.dp, horizontal = Spacing.sm),
     )
 }
 
-/**
- * Edit widget expanded view
- * Shows: file path header + diff summary/preview
- */
+// ─────────────────────────────────────────────────────────────
+//  EDIT
+// ─────────────────────────────────────────────────────────────
+
 @Composable
 fun EditWidgetExpanded(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
     val state = tool.state
-    val (icon, color) = getStateIconColor(state, theme)
-    
     val filePath = remember(state.input) {
         extractJsonParam(state.input, "filePath")
             ?: extractJsonParam(state.input, "path")
-            ?: extractJsonParam(state.input, "relative_path")
-            ?: "file"
+            ?: extractJsonParam(state.input, "relative_path") ?: "file"
     }
     val fileName = remember(filePath) { filePath.substringAfterLast("/") }
-    
     val oldString = remember(state.input) { extractJsonParam(state.input, "oldString") }
     val newString = remember(state.input) { extractJsonParam(state.input, "newString") }
     val codeEdit = remember(state.input) { extractJsonParam(state.input, "code_edit") }
-    
     val previewContent = remember(codeEdit, oldString, newString) {
         when {
-            codeEdit != null                       -> codeEdit.take(500)
+            codeEdit != null -> codeEdit.take(500)
             oldString != null && newString != null -> "- ${oldString.take(100)}\n+ ${newString.take(100)}"
-            else                                   -> null
+            else -> null
         }
     }
-    val leftBarColor = remember(color) { color.copy(alpha = 0.55f) }
-    val panelBg = remember(theme.backgroundPanel) { theme.backgroundPanel.copy(alpha = 0.4f) }
-    val borderColor = remember(theme.border) { theme.border.copy(alpha = 0.25f) }
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .padding(vertical = 2.dp)
+
+    ToolCard(
+        tool = tool,
+        icon = when (state) {
+            is ToolState.Error -> "✗"
+            is ToolState.Running -> "◐"
+            is ToolState.Pending -> "○"
+            is ToolState.Completed -> "✓"
+        },
+        title = stringResource(R.string.edit_file, fileName),
+        subtitle = filePath,
+        onClick = onClick,
+        modifier = modifier,
     ) {
-        Box(modifier = Modifier.align(Alignment.TopStart).width(2.dp).matchParentSize().background(leftBarColor))
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 10.dp)
-                .background(panelBg)
-        ) {
-            Row(
+        if (previewContent != null) {
+            val borderColor = theme.border.copy(alpha = 0.2f)
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 7.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
             ) {
-                Text(text = icon, fontFamily = FontFamily.Monospace, color = color)
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.edit_file, fileName),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.lg,
-                        color = theme.text, maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = filePath,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.sm,
-                        color = theme.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                }
-                if (state is ToolState.Running) TuiLoadingIndicator()
-            }
-            if (previewContent != null) {
-                Box(Modifier.fillMaxWidth().height(1.dp).background(borderColor))
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 100.dp)
+                        .heightIn(max = 120.dp)
                         .background(theme.backgroundElement)
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .border(Sizing.strokeThin, borderColor)
+                        .padding(Spacing.sm),
                 ) {
                     Text(
                         text = previewContent,
                         fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.sm,
-                        lineHeight = TuiCodeFontSize.xxl,
+                        fontSize = TuiCodeFontSize.xs,
+                        lineHeight = 14.sp,
                         color = theme.textMuted,
-                        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
                     )
                 }
             }
@@ -476,23 +421,20 @@ fun EditWidgetExpanded(
     }
 }
 
-/**
- * Default widget expanded view (fallback for unknown tools)
- * Shows: tool name + input/output preview
- */
+// ─────────────────────────────────────────────────────────────
+//  DEFAULT (fallback for unknown tools)
+// ─────────────────────────────────────────────────────────────
+
 @Composable
 fun DefaultWidgetExpanded(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
     onToolApprove: (String) -> Unit,
     onToolDeny: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
     val state = tool.state
-    val (icon, color) = getStateIconColor(state, theme)
-    
-    // Extract any output
     val output = remember(state) {
         when (state) {
             is ToolState.Completed -> state.output.take(1000)
@@ -501,67 +443,64 @@ fun DefaultWidgetExpanded(
             else -> null
         }
     }
-    
     val inputPreview = remember(state.input) {
         state.input.entries.take(2).joinToString("  ") { (k, v) -> "$k=${v.toString().take(28)}" }
     }
-    val leftBarColor = remember(color) { color.copy(alpha = 0.55f) }
-    val panelBg = remember(theme.backgroundPanel) { theme.backgroundPanel.copy(alpha = 0.4f) }
-    val borderColor = remember(theme.border) { theme.border.copy(alpha = 0.25f) }
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .padding(vertical = 2.dp)
+
+    ToolCard(
+        tool = tool,
+        icon = when (state) {
+            is ToolState.Running -> "◐"
+            is ToolState.Pending -> "○"
+            is ToolState.Error -> "✗"
+            is ToolState.Completed -> "✓"
+        },
+        title = tool.toolName,
+        subtitle = inputPreview.ifBlank { null },
+        onClick = onClick,
+        onApprove = { onToolApprove(tool.callID) },
+        onDeny = { onToolDeny(tool.callID) },
+        modifier = modifier,
     ) {
-        Box(modifier = Modifier.align(Alignment.TopStart).width(2.dp).matchParentSize().background(leftBarColor))
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 10.dp)
-                .background(panelBg)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+        if (!output.isNullOrBlank()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
             ) {
-                Text(text = icon, fontFamily = FontFamily.Monospace, color = color)
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = tool.toolName, fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.lg, color = theme.text)
-                    if (inputPreview.isNotEmpty()) {
-                        Text(text = inputPreview, fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.sm,
-                            color = theme.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                if (state is ToolState.Running) TuiLoadingIndicator()
-            }
-            if (!output.isNullOrBlank()) {
-                Box(Modifier.fillMaxWidth().height(1.dp).background(borderColor))
                 Box(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 80.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 100.dp)
                         .background(theme.backgroundElement)
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .padding(Spacing.sm),
                 ) {
-                    Text(text = output, fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.sm,
-                        lineHeight = TuiCodeFontSize.xxl,
+                    Text(
+                        text = output,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = TuiCodeFontSize.xs,
+                        lineHeight = 14.sp,
                         color = if (state is ToolState.Error) theme.error else theme.text,
-                        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()))
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                    )
                 }
             }
-            if (state is ToolState.Pending) {
-                Box(modifier = Modifier.fillMaxWidth().background(remember(theme.secondary) { theme.secondary.copy(alpha = 0.08f) }).padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    PendingApprovalButtons(onApprove = { onToolApprove(tool.callID) }, onDeny = { onToolDeny(tool.callID) })
-                }
-            }
-        } // Column
-    } // Box
+        }
+    }
 }
 
-/**
- * Task widget expanded view
- * Shows: description + sub-agent type + "Open in Tab" button
- */
+// ─────────────────────────────────────────────────────────────
+//  TASK (sub-agent) — matches opencode TUI subagent style
+// ─────────────────────────────────────────────────────────────
+
+private data class TaskToolInfo(
+    val tool: String,
+    val title: String? = null,
+    val status: String? = null,
+)
+
 @Composable
 fun TaskWidgetExpanded(
     tool: Part.Tool,
@@ -569,114 +508,239 @@ fun TaskWidgetExpanded(
     onToolApprove: (String) -> Unit,
     onToolDeny: (String) -> Unit,
     onOpenSubSession: ((String) -> Unit)?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
     val state = tool.state
-    val (icon, color) = getStateIconColor(state, theme)
-    
-    // Extract task info from input
     val description = remember(state.input) { extractJsonParam(state.input, "description") ?: "Sub-agent task" }
     val subagentType = remember(state.input) { extractJsonParam(state.input, "subagent_type") ?: "general" }
     val sessionId = extractSubSessionId(tool, state)
-    
-    // Extract output/result
-    val output = remember(state) {
+
+    // Parse tool call summary from metadata (part-level or state-level) or output JSON
+    val toolCalls = remember(tool, state) { parseTaskToolCalls(tool) }
+    val completedCount = remember(toolCalls) { toolCalls.count { it.status != "pending" } }
+    val totalCount = remember(toolCalls) { toolCalls.size }
+    val currentTool = remember(toolCalls, state) {
+        if (state is ToolState.Running) {
+            toolCalls.lastOrNull { it.status == "running" || it.status == "streaming" }
+                ?: toolCalls.lastOrNull { it.status == "completed" }
+                ?: if (toolCalls.isEmpty()) {
+                    // Fallback: use state.title which may contain current tool description
+                    val title = state.title?.trim()
+                    if (!title.isNullOrBlank()) TaskToolInfo(tool = title)
+                    else null
+                } else null
+        } else null
+    }
+
+    // Duration
+    val elapsedMs = remember(state) {
         when (state) {
-            is ToolState.Completed -> state.output.take(500)
-            is ToolState.Running -> state.title ?: "Running..."
-            is ToolState.Error -> state.error
-            else -> null
+            is ToolState.Completed -> state.endedAt - state.startedAt
+            is ToolState.Running -> System.currentTimeMillis() - state.startedAt
+            else -> 0L
         }
     }
-    
-    val leftBarColor = remember(color) { color.copy(alpha = 0.55f) }
-    val panelBg = remember(theme.backgroundPanel) { theme.backgroundPanel.copy(alpha = 0.4f) }
-    val borderColor = remember(theme.border) { theme.border.copy(alpha = 0.25f) }
-    
-    Box(
+    val durationStr = remember(elapsedMs) {
+        val secs = elapsedMs / 1000.0
+        if (secs < 60) "%.1fs".format(secs)
+        else "${(secs / 60).toInt()}m ${(secs % 60).toInt()}s"
+    }
+
+    val accentColor = theme.text
+
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .padding(vertical = 2.dp)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier),
     ) {
-        Box(modifier = Modifier.align(Alignment.TopStart).width(2.dp).matchParentSize().background(leftBarColor))
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 10.dp)
-                .background(panelBg)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(text = icon, fontFamily = FontFamily.Monospace, color = color)
-                Text(text = "task", fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.lg, color = theme.text)
-                Text(text = "[$subagentType]", fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.sm, color = theme.secondary)
-                Spacer(Modifier.weight(1f))
-                if (state is ToolState.Running) TuiLoadingIndicator()
-            }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(borderColor))
-            Text(
-                text = description,
-                fontFamily = FontFamily.Monospace,
-                fontSize = TuiCodeFontSize.md,
-                color = theme.text, maxLines = 3, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
-            )
-            if (!output.isNullOrBlank() && state !is ToolState.Running) {
-                Box(Modifier.fillMaxWidth().height(1.dp).background(borderColor))
-                Box(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 60.dp)
-                        .background(theme.backgroundElement)
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Text(text = output, fontFamily = FontFamily.Monospace, fontSize = TuiCodeFontSize.sm,
-                        lineHeight = TuiCodeFontSize.xxl,
-                        color = if (state is ToolState.Error) theme.error else theme.textMuted,
-                        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()))
+        // ── Title: "{Type} Task — {description}" ────────────────────
+        Text(
+            text = "${subagentType.replaceFirstChar { it.uppercase() }} Task — $description",
+            fontFamily = FontFamily.Monospace,
+            fontSize = TuiCodeFontSize.lg,
+            color = accentColor,
+            maxLines = 1,
+        )
+
+        Spacer(Modifier.height(Spacing.xxs))
+
+        // ── Status line ─────────────────────────────────────────────
+        when (state) {
+            is ToolState.Running -> {
+                if (currentTool != null) {
+                    val currentToolStr = currentTool.title
+                        ?: currentTool.tool
+                    Text(
+                        text = "↳ $currentToolStr",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = TuiCodeFontSize.sm,
+                        color = theme.textMuted,
+                        maxLines = 1,
+                    )
+                } else {
+                    Text(
+                        text = "↳ Delegating...",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = TuiCodeFontSize.sm,
+                        color = theme.textMuted,
+                    )
                 }
             }
-            if (sessionId != null && onOpenSubSession != null) {
-                Box(Modifier.fillMaxWidth().height(1.dp).background(borderColor))
+            is ToolState.Completed -> {
+                Text(
+                    text = "└ $completedCount toolcalls · $durationStr",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = TuiCodeFontSize.sm,
+                    color = theme.textMuted,
+                )
+            }
+            is ToolState.Error -> {
+                Text(
+                    text = "└ Error: ${state.error.take(60)}",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = TuiCodeFontSize.sm,
+                    color = theme.error,
+                    maxLines = 1,
+                )
+            }
+            is ToolState.Pending -> {
                 Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .clickable(role = Role.Button) { onOpenSubSession(sessionId) }
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = stringResource(R.string.cd_open_sub_agent),
-                        modifier = Modifier.size(12.dp), tint = theme.accent)
-                    Text(stringResource(R.string.open_sub_agent), fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.lg, color = theme.accent)
+                    Text(
+                        text = "○",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = TuiCodeFontSize.lg,
+                        color = theme.secondary,
+                    )
+                    Text(
+                        text = stringResource(R.string.allow),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = TuiCodeFontSize.sm,
+                        color = theme.textMuted,
+                        modifier = Modifier
+                            .clickable(role = Role.Button) { onToolApprove(tool.callID) },
+                    )
+                    Text(
+                        text = stringResource(R.string.deny),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = TuiCodeFontSize.sm,
+                        color = theme.textMuted,
+                        modifier = Modifier
+                            .clickable(role = Role.Button) { onToolDeny(tool.callID) },
+                    )
                 }
             }
-            if (state is ToolState.Pending) {
-                Box(modifier = Modifier.fillMaxWidth().background(remember(theme.secondary) { theme.secondary.copy(alpha = 0.08f) }).padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    PendingApprovalButtons(onApprove = { onToolApprove(tool.callID) }, onDeny = { onToolDeny(tool.callID) })
-                }
+        }
+
+        // ── Open sub-session link ───────────────────────────────────
+        if (sessionId != null && onOpenSubSession != null) {
+            Row(
+                modifier = Modifier
+                    .clickable(role = Role.Button) { onOpenSubSession(sessionId) },
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.OpenInNew,
+                    contentDescription = stringResource(R.string.cd_open_sub_agent),
+                    modifier = Modifier.size(Sizing.iconXs),
+                    tint = theme.accent.copy(alpha = 0.7f),
+                )
+                Text(
+                    text = stringResource(R.string.open_sub_agent),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = TuiCodeFontSize.sm,
+                    color = theme.accent.copy(alpha = 0.7f),
+                )
             }
-        } // Column
-    } // Box
+        }
+    }
 }
 
 /**
- * TodoWrite / TodoRead widget expanded view.
- * Renders todo list with [•] / [ ] markers, no backgrounds.
+ * Parse tool call summary from task tool.
+ * Checks (in order): tool.metadata.summary, state.metadata.summary, output JSON, state.title.
  */
+private fun parseTaskToolCalls(tool: Part.Tool): List<TaskToolInfo> {
+    val state = tool.state
+    val allMetadata = listOfNotNull(tool.metadata, stateMeta(state))
+
+    for (meta in allMetadata) {
+        try {
+            val summary = meta["summary"]?.jsonArray
+            if (summary != null && summary.isNotEmpty()) {
+                return summary.map { elem ->
+                    val obj = elem.jsonObject
+                    TaskToolInfo(
+                        tool = obj["tool"]?.jsonPrimitive?.content ?: "?",
+                        title = obj["state"]?.jsonObject?.get("title")?.jsonPrimitive?.contentOrNull,
+                        status = obj["state"]?.jsonObject?.get("status")?.jsonPrimitive?.contentOrNull,
+                    )
+                }
+            }
+        } catch (_: Exception) { }
+    }
+
+    // Try output as JSON with summary (Completed only)
+    val output = when (state) {
+        is ToolState.Completed -> state.output
+        else -> null
+    }
+    if (output != null) {
+        try {
+            val root = Json.parseToJsonElement(output)
+            val summary = when (root) {
+                is JsonArray -> root
+                is JsonObject -> root["summary"]?.jsonArray
+                else -> null
+            }
+            if (summary != null && summary.isNotEmpty()) {
+                return summary.map { elem ->
+                    val obj = elem.jsonObject
+                    TaskToolInfo(
+                        tool = obj["tool"]?.jsonPrimitive?.content ?: "?",
+                        title = obj["state"]?.jsonObject?.get("title")?.jsonPrimitive?.contentOrNull,
+                        status = obj["state"]?.jsonObject?.get("status")?.jsonPrimitive?.contentOrNull,
+                    )
+                }
+            }
+        } catch (_: Exception) { }
+    }
+
+    // Fallback: try to get count from output lines (non-JSON)
+    if (output != null) {
+        val lines = output.lines().filter { it.isNotBlank() }
+        if (lines.isNotEmpty()) {
+            return lines.map { TaskToolInfo(tool = it.trim(), status = "completed") }
+        }
+    }
+
+    return emptyList()
+}
+
+private fun stateMeta(state: ToolState): JsonObject? = when (state) {
+    is ToolState.Completed -> state.metadata
+    is ToolState.Running -> state.metadata
+    is ToolState.Error -> state.metadata
+    else -> null
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TODO WRITE / READ
+// ─────────────────────────────────────────────────────────────
+
 @Composable
 fun TodoWriteWidgetExpanded(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
     val state = tool.state
-    val (icon, color) = getStateIconColor(state, theme)
-
     val output = remember(state) {
         when (state) {
             is ToolState.Completed -> state.output
@@ -685,68 +749,77 @@ fun TodoWriteWidgetExpanded(
             else -> ""
         }
     }
-    val todoItems = remember(output) {
-        parseTodosFromOutput(output)
-    }
+    val todoItems = remember(output) { parseTodosFromOutput(output) }
 
-    Column(modifier = modifier.then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier).padding(vertical = 2.dp, horizontal = Spacing.sm)) {
+    ToolCard(
+        tool = tool,
+        icon = when (state) {
+            is ToolState.Running -> "◐"
+            is ToolState.Pending -> "○"
+            is ToolState.Error -> "✗"
+            is ToolState.Completed -> "✓"
+        },
+        title = "Todos",
+        onClick = onClick,
+        modifier = modifier,
+    ) {
         if (todoItems.isNotEmpty()) {
-            // ── Header ─────────────────────────────────────────────────
-            Text(
-                text = "\u2501  Todos",
-                fontFamily = FontFamily.Monospace,
-                fontSize = TuiCodeFontSize.lg,
-                fontWeight = FontWeight.Bold,
-                color = theme.textMuted,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-            // ── Items ─────────────────────────────────────────────────
-            todoItems.forEach { (status, text) ->
-                val (marker, markerColor) = when (status) {
-                    TodoStatus.COMPLETED -> "\u2713" to theme.textMuted
-                    TodoStatus.IN_PROGRESS -> "\u2022" to color
-                    TodoStatus.PENDING -> " " to color
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 1.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "[$marker]",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.sm,
-                        color = markerColor,
-                        modifier = Modifier.width(18.dp)
-                    )
-                    Text(
-                        text = text,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.sm,
-                        color = if (status == TodoStatus.COMPLETED) theme.textMuted else theme.text,
-                        lineHeight = TuiCodeFontSize.lg,
-                        modifier = Modifier.weight(1f)
-                    )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xxs),
+            ) {
+                todoItems.forEach { (status, text) ->
+                    val (marker, markerColor) = when (status) {
+                        TodoStatus.COMPLETED -> "✓" to theme.textMuted.copy(alpha = 0.6f)
+                        TodoStatus.IN_PROGRESS -> "•" to theme.warning
+                        TodoStatus.PENDING -> " " to theme.secondary
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Text(
+                            text = "[$marker]",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = TuiCodeFontSize.sm,
+                            color = markerColor,
+                            modifier = Modifier.width(Sizing.iconSm),
+                        )
+                        Text(
+                            text = text,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = TuiCodeFontSize.sm,
+                            color = if (status == TodoStatus.COMPLETED) theme.textMuted.copy(alpha = 0.7f) else theme.text,
+                            lineHeight = TuiCodeFontSize.lg,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
-        } else {
-            Text(
-                text = "$icon  ${tool.toolName}",
-                fontFamily = FontFamily.Monospace,
-                fontSize = TuiCodeFontSize.md,
-                color = color
-            )
+        } else if (output.isNotBlank()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            ) {
+                Text(
+                    text = output.take(300),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = TuiCodeFontSize.sm,
+                    color = theme.textMuted,
+                )
+            }
         }
     }
 }
 
-// ============== Shared Components ==============
+// ─────────────────────────────────────────────────────────────
+//  SHARED COMPONENTS
+// ─────────────────────────────────────────────────────────────
 
-/**
- * Terminal-style flat key button.
- * Press animates scale+alpha. No elevation, no rounded corners, no Material ripple chrome.
- */
 @Composable
 private fun TuiKey(
     label: String,
@@ -755,19 +828,19 @@ private fun TuiKey(
     textColor: Color,
     fillColor: Color = Color.Transparent,
     modifier: Modifier = Modifier,
-    height: Dp = Sizing.buttonHeightSm
+    height: Dp = Sizing.buttonHeightSm,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (isPressed) 0.94f else 1f,
         animationSpec = tween(80),
-        label = "keyScale"
+        label = "keyScale",
     )
     val bgAlpha by animateFloatAsState(
         targetValue = if (isPressed) 0.22f else if (fillColor == Color.Transparent) 0f else 1f,
         animationSpec = tween(80),
-        label = "keyBg"
+        label = "keyBg",
     )
     Box(
         modifier = modifier
@@ -775,14 +848,17 @@ private fun TuiKey(
             .height(height)
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .border(Sizing.strokeMd, borderColor.copy(alpha = if (isPressed) 1f else 0.65f), RectangleShape)
-            .background(if (fillColor == Color.Transparent) borderColor.copy(alpha = bgAlpha) else fillColor.copy(alpha = bgAlpha + (if (fillColor == Color.Transparent) 0f else 0.15f)))
+            .background(
+                if (fillColor == Color.Transparent) borderColor.copy(alpha = bgAlpha)
+                else fillColor.copy(alpha = bgAlpha + (if (fillColor == Color.Transparent) 0f else 0.15f)),
+            )
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
                 role = Role.Button,
-                onClick = onClick
+                onClick = onClick,
             ),
-        contentAlignment = Alignment.Center
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
@@ -790,7 +866,7 @@ private fun TuiKey(
             fontSize = TuiCodeFontSize.lg,
             fontWeight = FontWeight.Medium,
             color = textColor.copy(alpha = if (isPressed) 1f else 0.88f),
-            maxLines = 1
+            maxLines = 1,
         )
     }
 }
@@ -799,19 +875,19 @@ private fun TuiKey(
 fun PendingApprovalButtons(
     onApprove: () -> Unit,
     onDeny: () -> Unit,
-    onAlways: (() -> Unit)? = null
+    onAlways: (() -> Unit)? = null,
 ) {
     val theme = LocalOpenCodeTheme.current
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         TuiKey(
             label = "✗ ${stringResource(R.string.deny)}",
             onClick = onDeny,
             borderColor = theme.error,
             textColor = theme.error,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
         )
         if (onAlways != null) {
             TuiKey(
@@ -819,7 +895,7 @@ fun PendingApprovalButtons(
                 onClick = onAlways,
                 borderColor = theme.textMuted,
                 textColor = theme.textMuted,
-                modifier = Modifier.weight(1.4f)
+                modifier = Modifier.weight(1.4f),
             )
         }
         TuiKey(
@@ -828,28 +904,19 @@ fun PendingApprovalButtons(
             borderColor = theme.success,
             textColor = theme.background,
             fillColor = theme.success,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
         )
     }
 }
 
-// ============== Helper Types ==============
+// ─────────────────────────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────────────────────────
 
 private enum class TodoStatus { COMPLETED, IN_PROGRESS, PENDING }
 
-private fun JsonElement?.jsonObjectOrNull(): JsonObject? {
-    return if (this is JsonObject) this else null
-}
-
-private fun JsonObject.stringOrNull(key: String): String? {
-    val element = this[key] ?: return null
-    return try { element.jsonPrimitive.content } catch (_: Exception) { null }
-}
-
 private fun parseTodosFromOutput(output: String): List<Pair<TodoStatus, String>> {
     if (output.isBlank()) return emptyList()
-
-    // Try JSON parsing first
     try {
         val element = Json.parseToJsonElement(output)
         val items = when (element) {
@@ -881,14 +948,9 @@ private fun parseTodosFromOutput(output: String): List<Pair<TodoStatus, String>>
             }
             if (list.isNotEmpty()) return list
         }
-    } catch (_: Exception) {
-        // Not JSON, fall through to text parsing
-    }
-
-    // Fallback: text-based bullet parsing
+    } catch (_: Exception) { }
     val lines = output.lines().filter { it.isNotBlank() }
     if (lines.isEmpty()) return emptyList()
-
     return lines.mapNotNull { line ->
         val trimmed = line.trimStart()
         when {
@@ -909,12 +971,18 @@ private fun parseTodosFromOutput(output: String): List<Pair<TodoStatus, String>>
     }
 }
 
-// ============== Helper Functions ==============
+private fun JsonElement?.jsonObjectOrNull(): JsonObject? {
+    return if (this is JsonObject) this else null
+}
 
-@Composable
-private fun getStateIconColor(
-    state: ToolState, 
-    theme: dev.blazelight.p4oc.ui.theme.opencode.OpenCodeTheme
+private fun JsonObject.stringOrNull(key: String): String? {
+    val element = this[key] ?: return null
+    return try { element.jsonPrimitive.content } catch (_: Exception) { null }
+}
+
+fun getToolStateIcon(
+    state: ToolState,
+    theme: dev.blazelight.p4oc.ui.theme.opencode.OpenCodeTheme,
 ): Pair<String, androidx.compose.ui.graphics.Color> {
     return when (state) {
         is ToolState.Running -> "◐" to theme.warning
@@ -925,16 +993,12 @@ private fun getStateIconColor(
 }
 
 private fun extractJsonParam(input: JsonObject, paramName: String): String? {
-    return input[paramName]?.jsonPrimitive?.content
+    return try {
+        input[paramName]?.jsonPrimitive?.content
+    } catch (_: Exception) { null }
 }
 
-/**
- * Extract the sub-agent session ID from tool/state metadata.
- * The server places the sub-session ID in metadata, not in the tool input params.
- * Try multiple possible key names for robustness.
- */
-private fun extractSubSessionId(tool: Part.Tool, state: ToolState): String? {
-    // Check state-level metadata first (most specific - set during Running/Completed/Error)
+fun extractSubSessionId(tool: Part.Tool, state: ToolState): String? {
     val stateMetadata = when (state) {
         is ToolState.Completed -> state.metadata
         is ToolState.Running -> state.metadata
@@ -943,23 +1007,20 @@ private fun extractSubSessionId(tool: Part.Tool, state: ToolState): String? {
     }
     stateMetadata?.let { meta ->
         SESSION_ID_KEYS.forEach { key ->
-            meta[key]?.jsonPrimitive?.content?.let { return it }
+            try { meta[key]?.jsonPrimitive?.content?.let { return it } } catch (_: Exception) { }
         }
     }
-    // Fallback to part-level metadata
     tool.metadata?.let { meta ->
         SESSION_ID_KEYS.forEach { key ->
-            meta[key]?.jsonPrimitive?.content?.let { return it }
+            try { meta[key]?.jsonPrimitive?.content?.let { return it } } catch (_: Exception) { }
         }
     }
-    // Last resort: check input (unlikely to have it, but backwards compat)
     return extractJsonParam(state.input, "session_id")
 }
 
 private val SESSION_ID_KEYS = listOf("sessionID", "sessionId", "session_id", "subSessionId")
 
-/** Strip absolute prefix for a project-relative display path. */
-private fun cleanPath(path: String): String {
+fun cleanPath(path: String): String {
     val idx = path.indexOf("/P4OC/")
     return if (idx >= 0) path.substring(idx + 1) else path.substringAfterLast("/").let { if (it.length > 6) it else path }
 }

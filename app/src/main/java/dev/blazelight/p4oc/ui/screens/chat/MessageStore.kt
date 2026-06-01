@@ -72,7 +72,8 @@ class MessageStore(
     private val pendingMutex = Mutex()
     private val pendingUpdates = mutableMapOf<String, MutableMap<String, PendingDelta>>() // messageId -> (partId -> delta)
     private var flushJob: Job? = null
-    @Volatile private var flushSuppressed = false // when true, no flush jobs are scheduled
+    @Volatile private var flushSuppressed = false
+    private var scrollFlushJob: Job? = null
 
     /**
      * Messages flow — emits whenever messages or parts change.
@@ -138,7 +139,9 @@ class MessageStore(
      * Returns true if more messages available, false if all loaded.
      */
     fun loadMore(count: Int = MESSAGES_PER_PAGE): Boolean {
-        val allMessageIds = allMessagesMap.keys.sortedBy { allMessagesMap[it]!!.message.createdAt }
+        val allMessageIds = allMessagesMap.entries
+            .sortedBy { it.value.message.createdAt }
+            .map { it.key }
         val currentVisibleIds = messageOrder.toSet()
 
         val oldestVisibleIndex = allMessageIds.indexOfFirst { it in currentVisibleIds }
@@ -289,81 +292,84 @@ class MessageStore(
     }
 
     private suspend fun flushPendingParts() {
-        var hadTruncated = false
-        val batch: Map<String, Map<String, PendingDelta>> = pendingMutex.withLock {
-            if (pendingUpdates.isEmpty()) {
-                AppLog.v(TAG, "flushPendingParts: no pending updates")
-                return
+        while (true) {
+            var hadTruncated = false
+            val batch: Map<String, Map<String, PendingDelta>> = pendingMutex.withLock {
+                if (pendingUpdates.isEmpty()) {
+                    return@flushPendingParts
+                }
+                val old = pendingUpdates.toMap()
+                val msgCount = old.size
+                val partCount = old.values.sumOf { it.size }
+                if (DEBUG_STREAM) AppLog.d(TAG, "flushPendingParts: flushing $msgCount messages, $partCount parts")
+                hadTruncated = old.any { it.value.values.any { pd -> (pd.sb?.length ?: 0) > 4000 } }
+                pendingUpdates.clear()
+                old
             }
-            val old = pendingUpdates.toMap()
-            val msgCount = old.size
-            val partCount = old.values.sumOf { it.size }
-            if (DEBUG_STREAM) AppLog.d(TAG, "flushPendingParts: flushing $msgCount messages, $partCount parts")
-            hadTruncated = old.any { it.value.values.any { pd -> (pd.sb?.length ?: 0) > 4000 } }
-            pendingUpdates.clear()
-            old
-        }
 
-        var changed = false
-        // Pre-compute all updated MessageWithParts outside the snapshot so the
-        // snapshot block is as short as possible (no allocation inside it).
-        val updates = mutableMapOf<String, MessageWithParts>()
-        messagesMutex.withLock {
-            batch.forEach { (messageId, partsMap) ->
-                val existing = _messagesMap[messageId] ?: run {
-                    val placeholder = createPlaceholderMessage(messageId)
-                    ensureInOrderList(messageId, placeholder.message.createdAt)
-                    placeholder
-                }
-
-                var updated = existing
-                val existingParts = updated.parts
-                val newParts = ArrayList<Part>(existingParts.size + partsMap.size)
-                val existingIds = HashSet<String>(existingParts.size)
-                for (p in existingParts) {
-                    existingIds.add(p.id)
-                    newParts.add(p)
-                }
-                for ((_, pd) in partsMap) {
-                    val existingIdx = existingParts.indexOfFirst { it.id == pd.part.id }
-                    if (existingIdx >= 0) {
-                        newParts[existingIdx] = applyDeltaIfNeeded(updated, pd)
-                    } else {
-                        newParts.add(applyDeltaIfNeeded(updated, pd))
+            var changed = false
+            // Pre-compute all updated MessageWithParts outside the snapshot so the
+            // snapshot block is as short as possible (no allocation inside it).
+            val updates = mutableMapOf<String, MessageWithParts>()
+            messagesMutex.withLock {
+                batch.forEach { (messageId, partsMap) ->
+                    val existing = _messagesMap[messageId] ?: run {
+                        val placeholder = createPlaceholderMessage(messageId)
+                        ensureInOrderList(messageId, placeholder.message.createdAt)
+                        placeholder
                     }
+
+                    var updated = existing
+                    val existingParts = updated.parts
+                    val newParts = ArrayList<Part>(existingParts.size + partsMap.size)
+                    val existingIds = HashSet<String>(existingParts.size)
+                    for (p in existingParts) {
+                        existingIds.add(p.id)
+                        newParts.add(p)
+                    }
+                    for ((_, pd) in partsMap) {
+                        val existingIdx = existingParts.indexOfFirst { it.id == pd.part.id }
+                        if (existingIdx >= 0) {
+                            newParts[existingIdx] = applyDeltaIfNeeded(updated, pd)
+                        } else {
+                            newParts.add(applyDeltaIfNeeded(updated, pd))
+                        }
+                    }
+                    updated = updated.copy(parts = newParts)
+                    changed = true
+                    updates[messageId] = updated
                 }
-                updated = updated.copy(parts = newParts)
-                changed = true
-                updates[messageId] = updated
-            }
-            if (changed) {
-                // Single atomic snapshot commit — one snapshotFlow emission for the entire batch.
-                withContext(Dispatchers.Main) {
-                    Snapshot.withMutableSnapshot {
-                        updates.forEach { (id, msg) -> _messagesMap[id] = msg }
-                        _lastChangedIds.value = updates.keys.toSet()
-                        _messagesVersion.value++
+                if (changed) {
+                    // Single atomic snapshot commit — one snapshotFlow emission for the entire batch.
+                    withContext(Dispatchers.Main) {
                         val oldList = _messages.value
                         val hasNewMessages = updates.keys.any { id -> oldList.none { it.message.id == id } }
-                        _messages.value = if (hasNewMessages) {
-                            messageOrder.mapNotNull { id -> _messagesMap[id] }
+                        val idxMap = if (!hasNewMessages) {
+                            oldList.mapIndexed { idx, msg -> msg.message.id to idx }.toMap()
                         } else {
-                            oldList.toMutableList().also { newList ->
-                                for ((msgId, updated) in updates) {
-                                    val idx = newList.indexOfFirst { it.message.id == msgId }
-                                    if (idx >= 0) newList[idx] = updated
+                            emptyMap()
+                        }
+                        Snapshot.withMutableSnapshot {
+                            updates.forEach { (id, msg) -> _messagesMap[id] = msg }
+                            _lastChangedIds.value = updates.keys.toSet()
+                            _messagesVersion.value++
+                            _messages.value = if (hasNewMessages) {
+                                messageOrder.mapNotNull { id -> _messagesMap[id] }
+                            } else {
+                                oldList.toMutableList().also { newList ->
+                                    for ((msgId, updated) in updates) {
+                                        val idx = idxMap[msgId]
+                                        if (idx != null) newList[idx] = updated
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
-        if (hadTruncated) {
-            scope.launch(Dispatchers.Default) {
+            if (hadTruncated) {
                 delay(24L)
-                flushPendingParts()
             }
         }
     }
@@ -516,8 +522,26 @@ class MessageStore(
     fun setFlushDelayWhileScrolling(isScrolling: Boolean) {
         if (isScrolling) {
             flushSuppressed = true
+            if (scrollFlushJob?.isActive != true) {
+                scrollFlushJob = scope.launch(Dispatchers.Default) {
+                    while (flushSuppressed) {
+                        delay(SCROLL_DEBOUNCE_MS)
+                        if (flushSuppressed && flushJob?.isActive != true) {
+                            pendingMutex.withLock {
+                                if (pendingUpdates.isNotEmpty()) {
+                                    flushJob = scope.launch(Dispatchers.Default) {
+                                        flushPendingParts()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         } else {
             flushSuppressed = false
+            scrollFlushJob?.cancel()
+            scrollFlushJob = null
             if (flushJob?.isActive != true) {
                 flushJob = scope.launch(Dispatchers.Default) {
                     flushPendingParts()
@@ -571,5 +595,6 @@ class MessageStore(
     private companion object {
         const val TAG = "MessageStore"
         const val DEBUG_STREAM = false
+        const val SCROLL_DEBOUNCE_MS = 100L
     }
 }

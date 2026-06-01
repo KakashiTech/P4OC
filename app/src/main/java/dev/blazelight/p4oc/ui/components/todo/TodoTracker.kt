@@ -172,7 +172,7 @@ fun TodoTrackerSheet(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(200.dp),
+                            .heightIn(min = 120.dp, max = 300.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         TuiLoadingIndicator()

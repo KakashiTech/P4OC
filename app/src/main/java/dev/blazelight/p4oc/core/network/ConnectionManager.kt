@@ -41,6 +41,8 @@ class ConnectionManager constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var sseForwardingJob: Job? = null
+    private var cachedBaseClient: OkHttpClient? = null
+    private var cachedBaseConfig: String? = null
 
     private val _connection = MutableStateFlow<Connection?>(null)
     val connection: StateFlow<Connection?> = _connection.asStateFlow()
@@ -177,6 +179,8 @@ class ConnectionManager constructor(
         }
         _connection.value = null
         _authOkHttpClient.value = null
+        cachedBaseClient = null
+        cachedBaseConfig = null
         _connectionState.value = ConnectionState.Disconnected
     }
 
@@ -191,6 +195,10 @@ class ConnectionManager constructor(
      * Optimized for minimal latency with aggressive connection pooling.
      */
     private fun buildBaseOkHttpClient(config: ServerConfig, password: String?): OkHttpClient {
+        val cacheKey = "${config.url}|${config.username}|${password}"
+        if (cachedBaseClient != null && cachedBaseConfig == cacheKey) {
+            return cachedBaseClient!!
+        }
         val cacheDir = File(context.cacheDir, "http_cache")
         val cache = Cache(cacheDir, 20L * 1024L * 1024L)
 
@@ -220,7 +228,10 @@ class ConnectionManager constructor(
             builder.addInterceptor(createAuthInterceptor(config.username, password))
         }
 
-        return builder.build()
+        val client = builder.build()
+        cachedBaseClient = client
+        cachedBaseConfig = cacheKey
+        return client
     }
 
     private fun buildOkHttpClient(base: OkHttpClient): OkHttpClient =
@@ -235,7 +246,7 @@ class ConnectionManager constructor(
 
     private fun buildSseOkHttpClient(base: OkHttpClient): OkHttpClient =
         base.newBuilder()
-            .readTimeout(0, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply {
                 level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE
                 redactHeader("Authorization")
