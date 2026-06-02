@@ -9,7 +9,7 @@
 
 > **P4OC is an Android client for [OpenCode](https://github.com/anomalyco/opencode) — the terminal-based AI coding assistant.** It is **not** part of OpenCode itself, nor is it affiliated with the OpenCode team. It's a third-party client that speaks the OpenCode protocol, nothing more.
 
-This project is a **fork** of the original [P4OC by Jasmin Le Roux](https://github.com/theblazehen/P4OC). All credit for the original work goes to them — this fork just adds a few tweaks on top.
+This project is a **fork** of the original [P4OC by theblazehen](https://github.com/theblazehen/P4OC). All credit for the original work goes to them — this fork just adds a few tweaks on top.
 
 Point it at a running server, and your phone becomes a pocket-sized AI pair programmer. Built with love by nerds for nerds.
 
