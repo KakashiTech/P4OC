@@ -68,6 +68,9 @@ compact_context.md
 # R8 mapping files (too large for git — upload to Play Console directly)
 mappings/
 
+# LibreOffice lock files
+.~lock.*
+
 # Temporary/debug files
 detekt-*.jar
 detekt-*.html
