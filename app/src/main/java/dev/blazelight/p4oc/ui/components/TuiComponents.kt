@@ -52,6 +52,15 @@ import dev.blazelight.p4oc.ui.theme.Spacing
 
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.TransformOrigin
+import kotlinx.coroutines.delay
+import androidx.compose.animation.core.animateFloatAsState
 import dev.blazelight.p4oc.core.performance.rememberOptimizedLoadingRotation
 
 // =============================================================================
@@ -763,8 +772,8 @@ fun TuiDropdownMenuItem(
 // =============================================================================
 
 /**
- * Terminal-style popup menu with full ASCII box-drawing frame.
- * No background, no shadow — pure Unicode box art.
+ * Terminal-style popup menu with full ASCII box-drawing frame and smooth entrance.
+ * Animates in from the top-right corner with scale+fade.
  * ┌─ menu ────────────┐
  * │  ▶ + Changes      │
  * │    / Commands      │
@@ -782,20 +791,44 @@ fun TuiTerminalMenu(
     val density = LocalDensity.current
     val offsetXPx = density.run { offset.x.roundToPx() }
     val offsetYPx = density.run { offset.y.roundToPx() }
+    var keepAlive by remember { mutableStateOf(false) }
 
-    if (expanded) {
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            keepAlive = true
+        } else {
+            delay(150)
+            keepAlive = false
+        }
+    }
+
+    if (keepAlive) {
         Popup(
             alignment = Alignment.TopEnd,
             offset = IntOffset(offsetXPx, offsetYPx),
             onDismissRequest = onDismissRequest,
             properties = PopupProperties(focusable = true)
         ) {
-            Column(
-                modifier = Modifier
-                    .widthIn(min = 100.dp, max = 160.dp)
-                    .background(theme.backgroundElement.copy(alpha = 0.95f))
+            AnimatedVisibility(
+                visible = expanded,
+                enter = scaleIn(
+                    initialScale = 0.85f,
+                    transformOrigin = TransformOrigin(1f, 0f),
+                    animationSpec = tween(150, easing = LinearEasing)
+                ) + fadeIn(animationSpec = tween(120)),
+                exit = scaleOut(
+                    targetScale = 0.9f,
+                    transformOrigin = TransformOrigin(1f, 0f),
+                    animationSpec = tween(100)
+                ) + fadeOut(animationSpec = tween(80))
             ) {
-                    // Top border: ┌─ menu ──────────────┐
+                Column(
+                    modifier = Modifier
+                        .widthIn(min = 80.dp, max = 120.dp)
+                        .shadow(12.dp, shape = RectangleShape)
+                        .background(theme.backgroundElement.copy(alpha = 0.97f))
+                ) {
+                    // Top border: ┌─ menu ────────┐
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -828,7 +861,7 @@ fun TuiTerminalMenu(
                         }
                         Text("│", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
                     }
-                    // Bottom border: └────────────────────┘
+                    // Bottom border: └────────────────┘
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -846,6 +879,7 @@ fun TuiTerminalMenu(
             }
         }
     }
+}
 
 
 /**
@@ -874,10 +908,19 @@ fun TuiTerminalMenuItem(
         else -> theme.text
     }
 
+    val bgAlpha by animateFloatAsState(
+        targetValue = if (hovered) 0.10f else 0f,
+        animationSpec = tween(120)
+    )
+    val indicatorAlpha by animateFloatAsState(
+        targetValue = if (hovered) 1f else 0f,
+        animationSpec = tween(100)
+    )
+
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(if (hovered) theme.accent.copy(alpha = 0.08f) else Color.Transparent)
+            .background(if (bgAlpha > 0f) theme.accent.copy(alpha = bgAlpha) else Color.Transparent)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -887,12 +930,12 @@ fun TuiTerminalMenuItem(
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Active indicator ▶ (only shows on hover)
+        // Active indicator ▶ (smooth fade on hover)
         Text(
-            text = if (hovered) "▶" else " ",
+            text = if (indicatorAlpha > 0f) "▶" else " ",
             fontFamily = FontFamily.Monospace,
             fontSize = 9.sp,
-            color = if (hovered) theme.accent else Color.Transparent,
+            color = theme.accent.copy(alpha = indicatorAlpha),
             modifier = Modifier.width(10.dp)
         )
         // Symbol with fixed width for alignment
