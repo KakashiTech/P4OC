@@ -90,6 +90,7 @@ object SessionMapper {
     fun mapStatusToDomain(dto: SessionStatusDto): SessionStatus = when (dto.type) {
         "idle" -> SessionStatus.Idle
         "busy" -> SessionStatus.Busy
+        "working" -> SessionStatus.Busy
         "retry" -> SessionStatus.Retry(dto.attempt ?: 0, dto.message ?: "", dto.next ?: 0L)
         else -> SessionStatus.Idle
     }
@@ -229,7 +230,7 @@ object PartMapper {
             callID = dto.callID ?: "",
             toolName = dto.toolName ?: "",
             state = dto.state?.let { mapToolStateToDomain(it) }
-                ?: ToolState.Pending(buildJsonObject {}, ""),
+                ?: ToolState.Running(buildJsonObject {}, title = null, startedAt = 0L, metadata = null),
             metadata = dto.metadata
         )
         "file" -> Part.File(
@@ -338,7 +339,7 @@ object PartMapper {
                 endedAt = time?.end ?: 0L,
                 metadata = dto.metadata
             )
-            else -> ToolState.Pending(input, dto.raw ?: "")
+            else -> ToolState.Running(input, title = null, startedAt = 0L, metadata = null)
         }
     }
 
@@ -570,23 +571,37 @@ class EventMapper constructor(
         when (dto.type) {
             "message.updated" -> {
                 val wrapper = json.decodeFromJsonElement<MessageEventDto>(dto.properties)
-                // Handle missing info field from server
-                val info = wrapper.info ?: run {
+                // Handle missing info field — server may send fields flat instead of nested
+                val info = wrapper.info ?: try {
+                    json.decodeFromJsonElement<MessageInfoDto>(dto.properties)
+                } catch (_: Exception) {
                     AppLog.w(TAG, "message.updated missing info field, skipping")
                     return null
                 }
                 OpenCodeEvent.MessageUpdated(messageMapper.mapToDomain(info))
             }
+            "message.part.delta" -> {
+                val props = json.decodeFromJsonElement<MessagePartDeltaDto>(dto.properties)
+                OpenCodeEvent.MessagePartDelta(
+                    sessionID = props.sessionID,
+                    messageID = props.messageID,
+                    partID = props.partID,
+                    field = props.field,
+                    delta = props.delta
+                )
+            }
             "message.part.updated" -> {
-                val partDto = json.decodeFromJsonElement<PartUpdateDto>(dto.properties)
-                // Handle missing part field from server
-                val part = partDto.part ?: run {
+                val partUpdate = json.decodeFromJsonElement<PartUpdateDto>(dto.properties)
+                // Handle missing part field — server may send fields flat instead of nested
+                val part = partUpdate.part ?: try {
+                    json.decodeFromJsonElement<PartDto>(dto.properties)
+                } catch (_: Exception) {
                     AppLog.w(TAG, "message.part.updated missing part field, skipping")
                     return null
                 }
                 OpenCodeEvent.MessagePartUpdated(
                     part = PartMapper.mapToDomain(part),
-                    delta = partDto.delta
+                    delta = partUpdate.delta
                 )
             }
             "message.removed" -> {
@@ -612,7 +627,7 @@ class EventMapper constructor(
                     null
                 }
                 if (sessionDto == null || sessionDto.id.isEmpty()) {
-                    AppLog.w(TAG, "session.created with null or empty id, skipping")
+                    AppLog.d(TAG, "session.created with null or empty id, skipping")
                     return null
                 }
                 OpenCodeEvent.SessionCreated(SessionMapper.mapToDomain(sessionDto))
@@ -631,7 +646,7 @@ class EventMapper constructor(
                     return null
                 }
                 if (sessionDto.id.isEmpty()) {
-                    AppLog.w(TAG, "session.updated with empty id, skipping")
+                    AppLog.d(TAG, "session.updated with empty id, skipping")
                     return null
                 }
                 OpenCodeEvent.SessionUpdated(SessionMapper.mapToDomain(sessionDto))
@@ -650,7 +665,7 @@ class EventMapper constructor(
                     return null
                 }
                 if (sessionDto.id.isEmpty()) {
-                    AppLog.w(TAG, "session.deleted with empty id, skipping")
+                    AppLog.d(TAG, "session.deleted with empty id, skipping")
                     return null
                 }
                 OpenCodeEvent.SessionDeleted(SessionMapper.mapToDomain(sessionDto))
@@ -810,6 +825,15 @@ class EventMapper constructor(
 private data class PartUpdateDto(
     val part: PartDto? = null,
     val delta: String? = null
+)
+
+@kotlinx.serialization.Serializable
+private data class MessagePartDeltaDto(
+    @SerialName("sessionID") val sessionID: String,
+    @SerialName("messageID") val messageID: String,
+    @SerialName("partID") val partID: String,
+    val field: String,
+    val delta: String
 )
 
 @kotlinx.serialization.Serializable

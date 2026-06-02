@@ -3,15 +3,18 @@ package dev.blazelight.p4oc.ui.tabs
 
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -23,7 +26,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.ui.theme.Spacing
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -41,8 +44,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavHostController
+import androidx.navigation.compose.ComposeNavigator
+import androidx.navigation.compose.DialogNavigator
 import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
 import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.core.network.ApiResult
 import dev.blazelight.p4oc.core.network.ConnectionManager
@@ -55,6 +59,7 @@ import dev.blazelight.p4oc.core.datastore.ConnectionSettings
 import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.ui.navigation.Screen
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -97,9 +102,10 @@ private fun UnifiedTopBar(
 
     // Auto-scroll to active tab
     LaunchedEffect(activeTabId) {
+        delay(150)
         val activeIndex = tabs.indexOfFirst { it.id == activeTabId }
         if (activeIndex >= 0) {
-            listState.animateScrollToItem(activeIndex)
+            listState.scrollToItem(activeIndex)
         }
     }
 
@@ -439,6 +445,12 @@ fun MainTabScreen(
         }
     }
     
+    // Hide keyboard when switching tabs or entering tab screen
+    LaunchedEffect(activeTabId) {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
+    
     // Build tab titles and icons from current routes (updated inside pager pages).
     // Seed from startRoute so titles are correct even when pages are off-screen.
     val tabTitles = remember { mutableStateMapOf<String, String>() }
@@ -454,14 +466,18 @@ fun MainTabScreen(
     val tabRoutes = remember { mutableStateMapOf<String, String>() }
     val tabPtyIds = remember { mutableStateMapOf<String, String>() }
     // Track navControllers per tab (for external navigation like Settings from TopBar)
-    val tabNavControllers = remember { mutableStateMapOf<String, NavHostController>() }
+    // Plain mutableMapOf (not state-based) — only used for reference storage, not recomposition.
+    // NavController is created once per tab and survives pager page disposal.
+    val tabNavControllers = remember { mutableMapOf<String, NavHostController>() }
+    val tabScrollStates = remember { mutableMapOf<String, LazyListState>() }
+    val context = LocalContext.current
     
     // Collect per-tab session connection states (busy/idle/awaiting)
     tabs.forEach { tab ->
         val tabSessionState by tab.connectionState.collectAsState()
         LaunchedEffect(tabSessionState) {
             if (tabSessionState != null) {
-                tabConnectionStates[tab.id] = tabSessionState!!
+                tabConnectionStates[tab.id] = tabSessionState ?: return@LaunchedEffect
             } else {
                 tabConnectionStates.remove(tab.id)
             }
@@ -494,6 +510,8 @@ fun MainTabScreen(
                 tabTitles.remove(tabId)
                 tabIcons.remove(tabId)
                 tabConnectionStates.remove(tabId)
+                tabNavControllers.remove(tabId)
+                tabScrollStates.remove(tabId)
 
                 tabManager.closeTab(tabId)
             }
@@ -559,13 +577,11 @@ fun MainTabScreen(
             LaunchedEffect(activeTabId, tabs.size) {
                 val index = tabs.indexOfFirst { it.id == activeTabId }
                 if (index >= 0 && pagerState.currentPage != index) {
-                    if (isTabClick) {
-                        // Instant jump — crossfade handles the visual transition
-                        pagerState.scrollToPage(index)
-                    } else {
-                        // Came from swipe settle — already there, no-op
-                        pagerState.scrollToPage(index)
-                    }
+                    delay(16)
+                    pagerState.animateScrollToPage(
+                        page = index,
+                        animationSpec = tween(durationMillis = 200)
+                    )
                     isTabClick = false
                 }
             }
@@ -586,21 +602,20 @@ fun MainTabScreen(
                 state = pagerState,
                 modifier = Modifier.weight(1f),
                 key = { tabs.getOrNull(it)?.id ?: it.toString() },
-                beyondViewportPageCount = 0,
+                beyondViewportPageCount = 1,
                 userScrollEnabled = true
             ) { pageIndex ->
                 tabs.getOrNull(pageIndex)?.let { tab ->
                     saveableStateHolder.SaveableStateProvider(tab.id) {
-                        val navController = rememberNavController()
-                        
-                        // Register navController for external navigation (e.g., Settings button in TopBar)
-                        DisposableEffect(navController) {
-                            tabNavControllers[tab.id] = navController
-                            onDispose {
-                                tabNavControllers.remove(tab.id)
+                        // Use persistent NavController map so it survives pager page disposal.
+                        // This preserves the navigation stack and LazyListState when switching tabs.
+                        val navController = tabNavControllers.getOrPut(tab.id) {
+                            NavHostController(context).also {
+                                it.navigatorProvider.addNavigator(ComposeNavigator())
+                                it.navigatorProvider.addNavigator(DialogNavigator())
                             }
                         }
-                        
+
                         // Track route for title/icon
                         val backStackEntry by navController.currentBackStackEntryAsState()
                         LaunchedEffect(backStackEntry?.destination?.route, tab.sessionTitle) {
@@ -655,6 +670,7 @@ fun MainTabScreen(
                                 }
                             },
                             isActiveTab = isActive,
+                            scrollState = tabScrollStates.getOrPut(tab.id) { LazyListState() },
                             onConnectionStateChanged = { state ->
                                 tab.updateConnectionState(state)
                             },
@@ -680,15 +696,34 @@ private fun BrowserTabIndicator(
 ) {
     val theme = LocalOpenCodeTheme.current
     
+    val borderColor by animateColorAsState(
+        targetValue = if (isActive) theme.accent.copy(alpha = 0.6f) else theme.border.copy(alpha = 0.4f),
+        animationSpec = tween(350),
+        label = "tabBorder"
+    )
+    val bgColor by animateColorAsState(
+        targetValue = if (isActive) theme.backgroundElement.copy(alpha = 0.15f) else theme.backgroundElement.copy(alpha = 0.05f),
+        animationSpec = tween(350),
+        label = "tabBg"
+    )
+    val textColor by animateColorAsState(
+        targetValue = if (isActive) theme.text else theme.textMuted,
+        animationSpec = tween(350),
+        label = "tabText"
+    )
+    val borderWidth by animateDpAsState(
+        targetValue = if (isActive) 1.dp else Spacing.hairline,
+        animationSpec = tween(350),
+        label = "tabBorderWidth"
+    )
+    
     Row(
         modifier = Modifier
             .border(
-                width = if (isActive) 1.dp else Spacing.hairline,
-                color = if (isActive) theme.accent.copy(alpha = 0.6f) else theme.border.copy(alpha = 0.4f)
+                width = borderWidth,
+                color = borderColor
             )
-            .background(
-                color = if (isActive) theme.backgroundElement.copy(alpha = 0.15f) else theme.backgroundElement.copy(alpha = 0.05f)
-            )
+            .background(color = bgColor)
             .clickable(role = Role.Tab, onClick = onClick)
             .padding(horizontal = 6.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -716,7 +751,7 @@ private fun BrowserTabIndicator(
             text = title,
             fontFamily = FontFamily.Monospace,
             style = MaterialTheme.typography.labelSmall,
-            color = if (isActive) theme.text else theme.textMuted,
+            color = textColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )

@@ -57,16 +57,44 @@ class VisualSettingsViewModel constructor(
     val themeMode: StateFlow<String> = _themeMode.asStateFlow()
     
     val availableThemes = listOf(
+        "aura" to "Aura",
+        "ayu" to "Ayu",
+        "carbonfox" to "Carbonfox",
         "catppuccin" to "Catppuccin Mocha",
         "catppuccin-macchiato" to "Catppuccin Macchiato",
         "catppuccin-frappe" to "Catppuccin Frappé",
+        "cobalt2" to "Cobalt2",
+        "cursor" to "Cursor",
+        "deltarune" to "Deltarune",
         "dracula" to "Dracula",
+        "everforest" to "Everforest",
+        "flexoki" to "Flexoki",
+        "github" to "GitHub",
         "gruvbox" to "Gruvbox",
+        "hotdogstand" to "Hot Dog Stand",
+        "kanagawa" to "Kanagawa",
+        "lucent-orng" to "Lucent Orng",
+        "material" to "Material",
+        "matrix" to "Matrix",
+        "mercury" to "Mercury",
+        "monokai" to "Monokai",
+        "mytheme" to "My Theme",
+        "nightowl" to "Night Owl",
         "nord" to "Nord",
+        "one-dark" to "One Dark",
         "opencode" to "OpenCode",
+        "orng" to "Orng",
+        "osaka-jade" to "Osaka Jade",
+        "palenight" to "Palenight",
+        "rosepine" to "Rose Pine",
+        "solarized" to "Solarized",
+        "synthwave84" to "Synthwave '84",
         "tokyonight" to "Tokyo Night",
+        "undertale" to "Undertale",
+        "vercel" to "Vercel",
+        "vesper" to "Vesper",
         "xterm" to "XTerm 256",
-        "hotdogstand" to "Hot Dog Stand"
+        "zenburn" to "Zenburn"
     )
     
     init {

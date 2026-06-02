@@ -45,7 +45,6 @@ import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import androidx.compose.foundation.BorderStroke
 
-@Composable
 fun getToolIcon(toolName: String): ImageVector {
     return when (toolName.lowercase()) {
         "edit", "multiedit", "str_replace", "str_replace_based_edit_tool" -> Icons.Default.Edit
@@ -209,7 +208,6 @@ fun DiffPreview(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RectangleShape)
             .background(theme.background)
     ) {
         hunks.forEach { hunk ->

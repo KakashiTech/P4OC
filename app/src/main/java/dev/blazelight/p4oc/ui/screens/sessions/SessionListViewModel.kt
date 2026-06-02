@@ -21,6 +21,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.serialization.Serializable
 
 
 class SessionListViewModel constructor(
@@ -44,7 +46,11 @@ class SessionListViewModel constructor(
             AppLog.d("SessionListVM", "Cache hit: ${cached.sessions.size} sessions — instant paint")
             _uiState.update { it.copy(sessions = cached.sessions, projects = cached.projects) }
             initialLoadDone = true
-            viewModelScope.launch { loadSessionStatuses() }
+            viewModelScope.launch {
+                // Refresh the cache in background so it's never stale
+                loadSessionsAsync()
+                loadSessionStatuses()
+            }
         } else {
             viewModelScope.launch {
                 loadSessionsAsync()
@@ -74,46 +80,81 @@ class SessionListViewModel constructor(
     private fun loadSessionStatuses() {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: return@launch
-            
-            // Fetch statuses from global scope + each known project directory
             val projects = _uiState.value.projects
-            val directories = listOf<String?>(null) + projects.map { it.worktree }
-            
+
+            val netSemaphore = Semaphore(3)
             val allStatuses = mutableMapOf<String, SessionStatus>()
-            
-            // Limit concurrency to avoid request storms on first load
-            val semaphore = java.util.concurrent.Semaphore(3)
-            val results = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
-            directories.forEach { directory ->
-                results += viewModelScope.async {
-                    semaphore.acquire()
+
+            coroutineScope {
+                val globalDeferred = async {
+                    netSemaphore.acquire()
                     try {
-                        val result = safeApiCall { api.getSessionStatuses(directory) }
-                        when (result) {
-                            is ApiResult.Success -> {
-                                result.data.forEach { (sessionId, dto) ->
-                                    allStatuses[sessionId] = when (dto.type) {
-                                        "busy" -> SessionStatus.Busy
-                                        "idle" -> SessionStatus.Idle
-                                        "retry" -> SessionStatus.Retry(
-                                            attempt = dto.attempt ?: 0,
-                                            message = dto.message ?: "",
-                                            next = dto.next ?: 0L
-                                        )
-                                        else -> SessionStatus.Idle
-                                    }
-                                }
-                            }
-                            is ApiResult.Error -> {}
-                        }
+                        safeApiCall { api.getSessionStatuses(directory = null) }
                     } finally {
-                        semaphore.release()
+                        netSemaphore.release()
+                    }
+                }
+
+                val projectDeferreds = projects.map { project ->
+                    async {
+                        netSemaphore.acquire()
+                        try {
+                            safeApiCall { api.getSessionStatuses(directory = project.worktree) }
+                        } finally {
+                            netSemaphore.release()
+                        }
+                    }
+                }
+
+                val globalResult = globalDeferred.await()
+                if (globalResult is ApiResult.Success) {
+                    globalResult.data.forEach { (sessionId, dto) ->
+                        allStatuses[sessionId] = mapStatusDto(dto)
+                    }
+                }
+
+                projectDeferreds.awaitAll().forEach { result ->
+                    if (result is ApiResult.Success) {
+                        result.data.forEach { (sessionId, dto) ->
+                            allStatuses[sessionId] = mapStatusDto(dto)
+                        }
+                    }
+                }
+
+                // Fetch statuses for custom directory sessions (outside any known project).
+                // The global query only returns statuses for directory=null sessions, and
+                // per-project queries only cover known project worktrees — custom sessions
+                // would otherwise never show their busy/idle indicator.
+                val knownDirs = (setOf(null) + projects.map { it.worktree }).toSet()
+                val customDirs = _uiState.value.sessions
+                    .map { it.session.directory }
+                    .filter { it.isNotBlank() && it !in knownDirs }
+                    .distinct()
+                customDirs.forEach { dir ->
+                    val result = safeApiCall { api.getSessionStatuses(directory = dir) }
+                    if (result is ApiResult.Success) {
+                        result.data.forEach { (sessionId, dto) ->
+                            allStatuses[sessionId] = mapStatusDto(dto)
+                        }
                     }
                 }
             }
-            results.awaitAll()
-            
+
             _uiState.update { it.copy(sessionStatuses = allStatuses) }
+        }
+    }
+
+    private fun mapStatusDto(dto: dev.blazelight.p4oc.data.remote.dto.SessionStatusDto): SessionStatus {
+        return when (dto.type) {
+            "busy" -> SessionStatus.Busy
+            "working" -> SessionStatus.Busy
+            "idle" -> SessionStatus.Idle
+            "retry" -> SessionStatus.Retry(
+                attempt = dto.attempt ?: 0,
+                message = dto.message ?: "",
+                next = dto.next ?: 0L
+            )
+            else -> SessionStatus.Idle
         }
     }
 
@@ -143,41 +184,54 @@ class SessionListViewModel constructor(
                 _uiState.update { it.copy(projects = projects.sortedByDescending { p -> p.worktree }) }
 
                 // Fetch all sessions in parallel: global + each project
+                // Use semaphore to limit concurrent requests — prevents network stack
+                // contention on low-end devices with many projects
+                val netSemaphore = Semaphore(3)
                 val allSessionsWithProjects = coroutineScope {
                     // Global sessions (no directory filter)
                     val globalDeferred = async {
-                        val result = safeApiCall { api.listSessions(directory = null, roots = true, limit = 100) }
-                        when (result) {
-                            is ApiResult.Success -> result.data.map { dto ->
-                                SessionWithProject(
-                                    session = SessionMapper.mapToDomain(dto),
-                                    projectId = null,
-                                    projectName = null
-                                )
+                        netSemaphore.acquire()
+                        try {
+                            val result = safeApiCall { api.listSessions(directory = null, roots = true, limit = 100) }
+                            when (result) {
+                                is ApiResult.Success -> result.data.map { dto ->
+                                    SessionWithProject(
+                                        session = SessionMapper.mapToDomain(dto),
+                                        projectId = null,
+                                        projectName = null
+                                    )
+                                }
+                                is ApiResult.Error -> {
+                                    AppLog.e("SessionListVM", "Failed to load global sessions: ${result.message}")
+                                    emptyList()
+                                }
                             }
-                            is ApiResult.Error -> {
-                                AppLog.e("SessionListVM", "Failed to load global sessions: ${result.message}")
-                                emptyList()
-                            }
+                        } finally {
+                            netSemaphore.release()
                         }
                     }
 
                     // Sessions for each project
                     val projectDeferreds = projects.map { project ->
                         async {
-                            val result = safeApiCall { api.listSessions(directory = project.worktree, roots = true, limit = 100) }
-                            when (result) {
-                                is ApiResult.Success -> result.data.map { dto ->
-                                    SessionWithProject(
-                                        session = SessionMapper.mapToDomain(dto),
-                                        projectId = project.id,
-                                        projectName = project.name
-                                    )
+                            netSemaphore.acquire()
+                            try {
+                                val result = safeApiCall { api.listSessions(directory = project.worktree, roots = true, limit = 100) }
+                                when (result) {
+                                    is ApiResult.Success -> result.data.map { dto ->
+                                        SessionWithProject(
+                                            session = SessionMapper.mapToDomain(dto),
+                                            projectId = project.id,
+                                            projectName = project.name
+                                        )
+                                    }
+                                    is ApiResult.Error -> {
+                                        AppLog.e("SessionListVM", "Failed to load sessions for ${project.name}: ${result.message}")
+                                        emptyList()
+                                    }
                                 }
-                                is ApiResult.Error -> {
-                                    AppLog.e("SessionListVM", "Failed to load sessions for ${project.name}: ${result.message}")
-                                    emptyList()
-                                }
+                            } finally {
+                                netSemaphore.release()
                             }
                         }
                     }
@@ -195,10 +249,43 @@ class SessionListViewModel constructor(
 
                 AppLog.d("SessionListVM", "loadSessions: aggregated ${allSessionsWithProjects.size} total sessions")
 
+                // Preserve sessions created locally that the API didn't return.
+                // This covers two race-prone scenarios:
+                //   1. Custom-directory sessions the server doesn't expose in any list query.
+                //   2. A new session created *after* our API calls returned but before we
+                //      write the state — without this the optimistic add would be overwritten.
+                val currentState = _uiState.value
+                val currentSessionById = currentState.sessions.associateBy { it.session.id }
+                val apiSessionIds = allSessionsWithProjects.map { it.session.id }.toSet()
+                val localOnly = currentSessionById.filterKeys { it !in apiSessionIds }.values
+                // Also check the cache in case the ViewModel was re-created
+                val cached = sessionDataCache.peek()
+                val cachedSessions = cached?.sessions ?: emptyList()
+                val extraCached = cachedSessions.filter { it.session.id !in apiSessionIds && it.session.id !in currentSessionById }
+                AppLog.d("SessionListVM", "loadSessions: currentState has ${currentState.sessions.size} sessions, localOnly=${localOnly.size}, extraCached=${extraCached.size}")
+
+                // Refresh cached-only sessions from the server to pick up title changes
+                // (e.g. sessions renamed before upsertSession was called on rename).
+                val refreshedExtra = extraCached.mapNotNull { swp ->
+                    val dir = swp.session.directory.takeIf { it.isNotBlank() }
+                    val result = safeApiCall { api.getSession(swp.session.id, dir) }
+                    when (result) {
+                        is ApiResult.Success -> {
+                            val fresh = SessionMapper.mapToDomain(result.data)
+                            swp.copy(session = fresh)
+                        }
+                        is ApiResult.Error -> {
+                            AppLog.w("SessionListVM", "failed to refresh session ${swp.session.id}: ${result.message}")
+                            swp // fall back to cached data
+                        }
+                    }
+                }
+
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        sessions = allSessionsWithProjects.sortedByDescending { s -> s.session.updatedAt }
+                        sessions = (localOnly + refreshedExtra + allSessionsWithProjects)
+                            .sortedByDescending { s -> s.session.updatedAt }
                     )
                 }
                 initialLoadDone = true
@@ -217,14 +304,15 @@ class SessionListViewModel constructor(
             AppLog.d("SessionListVM", "createSession called with title=$title, directory=$directory")
 
             val api = connectionManager.getApi() ?: run {
-                _uiState.update { it.copy(isLoading = false, error = "Not connected") }
+                _uiState.update { it.copy(isLoading = false) }
                 return@launch
             }
-            AppLog.d("SessionListVM", "Calling API createSession with directory=$directory")
+            val request = CreateSessionRequest(title = title)
+            AppLog.d("SessionListVM", "Calling API createSession: title=${request.title}, parentID=${request.parentID}, directory=$directory")
             val result = safeApiCall { 
                 api.createSession(
                     directory = directory,
-                    request = CreateSessionRequest(title = title)
+                    request = request
                 )
             }
 
@@ -240,6 +328,9 @@ class SessionListViewModel constructor(
                         projectName = project?.name
                     )
                     
+                    // Keep the cache in sync so ViewModel re-creation doesn't lose it
+                    sessionDataCache.upsertSession(sessionWithProject)
+                    
                     _uiState.update { state ->
                         state.copy(
                             isLoading = false,
@@ -250,6 +341,7 @@ class SessionListViewModel constructor(
                     }
                 }
                 is ApiResult.Error -> {
+                    AppLog.e("SessionListVM", "createSession FAILED for directory=$directory: ${result.message}")
                     _uiState.update { 
                         it.copy(isLoading = false, error = "Failed to create session: ${result.message}") 
                     }
@@ -265,13 +357,22 @@ class SessionListViewModel constructor(
 
             when (result) {
                 is ApiResult.Success -> {
+                    sessionDataCache.removeSession(sessionId)
                     _uiState.update { state ->
                         state.copy(sessions = state.sessions.filter { it.session.id != sessionId })
                     }
                 }
                 is ApiResult.Error -> {
-                    _uiState.update { 
-                        it.copy(error = "Failed to delete session: ${result.message}") 
+                    // Even if the server returns 404 (already deleted), remove locally
+                    if (result.message.contains("404") || result.message.contains("not found")) {
+                        sessionDataCache.removeSession(sessionId)
+                        _uiState.update { state ->
+                            state.copy(sessions = state.sessions.filter { it.session.id != sessionId })
+                        }
+                    } else {
+                        _uiState.update {
+                            it.copy(error = "Failed to delete session: ${result.message}")
+                        }
                     }
                 }
             }
@@ -291,11 +392,18 @@ class SessionListViewModel constructor(
             when (result) {
                 is ApiResult.Success -> {
                     val updated = SessionMapper.mapToDomain(result.data)
+                    var updatedSwp: SessionWithProject? = null
                     _uiState.update { state ->
-                        state.copy(sessions = state.sessions.map { swp ->
-                            if (swp.session.id == sessionId) swp.copy(session = updated) else swp
-                        })
+                        val newSessions = state.sessions.map { swp ->
+                            if (swp.session.id == sessionId) {
+                                val uswp = swp.copy(session = updated)
+                                updatedSwp = uswp
+                                uswp
+                            } else swp
+                        }
+                        state.copy(sessions = newSessions)
                     }
+                    updatedSwp?.let { sessionDataCache.upsertSession(it) }
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(error = "Failed to rename: ${result.message}") }
@@ -384,6 +492,7 @@ data class SessionListUiState(
     val error: String? = null
 )
 
+@Serializable
 data class ProjectInfo(
     val id: String,
     val worktree: String,
@@ -393,6 +502,7 @@ data class ProjectInfo(
 /**
  * Session with optional project metadata for unified sessions view.
  */
+@Serializable
 data class SessionWithProject(
     val session: Session,
     val projectId: String? = null,

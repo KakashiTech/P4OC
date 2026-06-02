@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.mutableFloatStateOf
@@ -45,7 +47,7 @@ import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.TuiCodeFontSize
-import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
+import dev.blazelight.p4oc.ui.components.LocalAnimationsPaused
 
 data class ModelOption(
     val key: String,
@@ -73,13 +75,14 @@ fun ChatInputBar(
     onRemoveAttachment: (String) -> Unit = {},
     commands: List<Command> = emptyList(),
     onCommandSelected: (Command) -> Unit = {},
-    requestFocus: Boolean = false
+    requestFocus: Boolean = false,
+    focusTriggerCount: Int = 0
 ) {
     val theme = LocalOpenCodeTheme.current
     val focusRequester = remember { FocusRequester() }
 
-    LaunchedEffect(requestFocus) {
-        if (requestFocus) {
+    LaunchedEffect(focusTriggerCount) {
+        if (focusTriggerCount > 0 && enabled) {
             try { focusRequester.requestFocus() } catch (_: Exception) {}
         }
     }
@@ -88,22 +91,11 @@ fun ChatInputBar(
     val canSend    = hasContent && enabled && !isLoading && !isBusy
     val canQueue   = hasContent && isBusy && !hasQueuedMessage
     val showSlash  = value.startsWith("/") && !value.contains(" ") && commands.isNotEmpty()
-    val isIdle     = enabled && !isLoading && !isBusy
+    val isIdle = enabled && !isLoading && !isBusy
 
     // ── Status label ────────────────────────────────────────────────────────
-    val statusLabel = when {
-        !enabled                   -> "✗"
-        isLoading                  -> "…"
-        isBusy && hasQueuedMessage -> "⊕"
-        isBusy                     -> "◐"
-        else                       -> ">"
-    }
-    val statusColor = when {
-        !enabled  -> theme.textMuted.copy(alpha = 0.4f)
-        isLoading -> theme.textMuted
-        isBusy    -> theme.warning
-        else      -> theme.accent
-    }
+    val statusLabel = if (isLoading) "…" else ">"
+    val statusColor = if (isLoading) theme.textMuted else theme.accent
 
     // ── Shimmer Animation ─────────────────────────────────────────────────────
     //
@@ -149,12 +141,11 @@ fun ChatInputBar(
         if (!isBusy) { this.value = -1f; return@produceState }
         while (true) {
             val elapsed = System.currentTimeMillis() - shimmerStartTime
-            // nativeCalculateWithRepeat returns [0,1] linear repeat over durationMs
-            val t = NativeAnimationOptimizer.nativeCalculateWithRepeat(
+            val t = NativeAnimationOptimizer.calculateWithRepeat(
                 elapsed, 9000, 0, false
             )
             this.value = t * PERIMETER
-            delay(16L)
+            delay(33L)
         }
     }
 
@@ -195,9 +186,7 @@ fun ChatInputBar(
     fun perimeterBrush(segStart: Float, segEnd: Float, isVertical: Boolean, invertGradient: Boolean = false): Brush {
         if (!isBusy || shimmerPos < 0f) return SolidColor(dimBase)
 
-        // 13 stops: enough resolution so a GLOW_RADIUS of 0.22 units samples
-        // at least 2-3 stops inside the glow even on the shortest segment.
-        val STOPS = 13
+        val STOPS = 12
         val length = run {
             val raw = (segEnd - segStart + PERIMETER) % PERIMETER
             if (raw == 0f) PERIMETER else raw
@@ -270,7 +259,7 @@ fun ChatInputBar(
                     fontSize = 9.sp,
                     style = if (isBusy) {
                         TextStyle(
-                            brush = perimeterBrush(segStart = 4f, segEnd = 4.6f, isVertical = false),
+                            brush = remember(isBusy, shimmerPos) { perimeterBrush(segStart = 4f, segEnd = 4.6f, isVertical = false) },
                             fontFamily = FontFamily.Monospace,
                             fontSize = 9.sp
                         )
@@ -290,7 +279,7 @@ fun ChatInputBar(
                     modifier = Modifier
                         .weight(1f)
                         .height(Sizing.strokeMd)
-                        .background(perimeterBrush(segStart = 4.6f, segEnd = 6f, isVertical = false))
+                        .background(remember(isBusy, shimmerPos) { perimeterBrush(segStart = 4.6f, segEnd = 6f, isVertical = false) })
                 )
                 // ┐ corner at perimeter pos 6
                 Text(
@@ -404,27 +393,26 @@ fun ChatInputBar(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     style = TextStyle(
-                        brush = perimeterBrush(segStart = 2f, segEnd = 4f, isVertical = true, invertGradient = true),
+                        brush = remember(isBusy, shimmerPos) { perimeterBrush(segStart = 2f, segEnd = 4f, isVertical = true, invertGradient = true) },
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp
                     )
                 )
 
-                // Attach — ◈ diamond, no brackets
-                Text(
-                    text = "◈",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (enabled) theme.accent else theme.textMuted.copy(alpha = 0.35f),
+                // Attach — paperclip icon
+                Icon(
+                    imageVector = Icons.Default.AttachFile,
+                    contentDescription = "Attach file",
+                    tint = if (enabled) theme.accent else theme.textMuted.copy(alpha = 0.35f),
                     modifier = Modifier
                         .then(
-                            if (enabled && !isLoading)
+                            if (enabled)
                                 Modifier.clickable(role = Role.Button) { onAttachClick() }
                             else Modifier
                         )
                         .testTag("attach_button")
                         .padding(horizontal = Spacing.xs)
+                        .size(16.dp)
                 )
 
                 // ▏ vertical bar — vertical gradient when idle, plain when busy
@@ -505,35 +493,22 @@ fun ChatInputBar(
                     color = theme.border.copy(alpha = 0.3f)
                 )
 
-                // Action — ↑ / ⊕ / ✕  no brackets
-                val isCancelState = isBusy && onCancelQueue != null
-                val actionGlyph = when {
-                    isLoading     -> null
-                    isCancelState -> "✕"
-                    canQueue      -> "⊕"
-                    else          -> "↑"
-                }
+                // Action — ↑ or ⊕
+                val actionGlyph = if (canQueue) "⊕" else "↑"
                 val actionColor = when {
-                    canSend       -> theme.accent
-                    canQueue      -> theme.warning
-                    isCancelState -> theme.error.copy(alpha = 0.8f)
-                    else          -> theme.textMuted.copy(alpha = 0.28f)
+                    canSend  -> theme.accent
+                    canQueue -> theme.warning
+                    else     -> theme.textMuted.copy(alpha = 0.28f)
                 }
                 Box(
                     modifier = Modifier
                         .then(
                             when {
-                                isCancelState -> Modifier.clickable(role = Role.Button) {
-                                    onCancelQueue?.invoke()
-                                    try { focusRequester.requestFocus() } catch (_: Exception) {}
-                                }.testTag("cancel_button")
-                                canSend -> Modifier.clickable(role = Role.Button) {
+                                canSend  -> Modifier.clickable(role = Role.Button) {
                                     onSend()
-                                    try { focusRequester.requestFocus() } catch (_: Exception) {}
                                 }.testTag("send_button")
                                 canQueue -> Modifier.clickable(role = Role.Button) {
                                     onQueueMessage()
-                                    try { focusRequester.requestFocus() } catch (_: Exception) {}
                                 }.testTag("chat_queue_button")
                                 else -> Modifier
                             }
@@ -541,17 +516,13 @@ fun ChatInputBar(
                         .padding(horizontal = Spacing.xs),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isLoading) {
-                        TuiLoadingIndicator()
-                    } else {
-                        Text(
-                            text = actionGlyph ?: "·",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = actionColor
-                        )
-                    }
+                    Text(
+                        text = actionGlyph,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = actionColor
+                    )
                 }
 
                 // Right wall ┤: perimeter 6→8(=0) (top→bottom, clockwise).
@@ -561,7 +532,7 @@ fun ChatInputBar(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
                     style = TextStyle(
-                        brush = perimeterBrush(segStart = 6f, segEnd = 8f, isVertical = true),
+                        brush = remember(isBusy, shimmerPos) { perimeterBrush(segStart = 6f, segEnd = 8f, isVertical = true) },
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp
                     )
@@ -593,7 +564,7 @@ fun ChatInputBar(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 9.sp,
                     style = TextStyle(
-                        brush = perimeterBrush(segStart = 2f, segEnd = 2.2f, isVertical = false),
+                        brush = remember(isBusy, shimmerPos) { perimeterBrush(segStart = 2f, segEnd = 2.2f, isVertical = false) },
                         fontFamily = FontFamily.Monospace,
                         fontSize = 9.sp
                     )
@@ -618,7 +589,7 @@ fun ChatInputBar(
                         .height(Sizing.strokeMd)
                         .padding(horizontal = Spacing.xxs)
                         .background(
-                            perimeterBrush(segStart = 2.2f, segEnd = 8f, isVertical = false, invertGradient = true)
+                            remember(isBusy, shimmerPos) { perimeterBrush(segStart = 2.2f, segEnd = 8f, isVertical = false, invertGradient = true) }
                         )
                 )
                 // ┘ corner at perimeter pos 0

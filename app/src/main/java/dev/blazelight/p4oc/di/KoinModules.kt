@@ -71,7 +71,7 @@ val networkModule = module {
     single { MdnsDiscoveryManager(androidContext()) }
     factory { PtyWebSocketClient(get()) }
     single { ConnectionManager(androidContext(), get(), get(), get()) }
-    single { SessionDataCache(get()) }
+    single { SessionDataCache(get(), androidContext()) }
 
 }
 

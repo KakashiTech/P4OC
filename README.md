@@ -1,18 +1,19 @@
 # P4OC (Pocket for OpenCode)
 
-[![GitHub Release](https://img.shields.io/github/v/release/theblazehen/P4OC?style=flat-square)](https://github.com/theblazehen/P4OC/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/theblazehen/P4OC/build.yml?style=flat-square)](https://github.com/theblazehen/P4OC/actions)
-[![License](https://img.shields.io/github/license/theblazehen/P4OC?style=flat-square)](LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/KakashiTech/P4OC?style=flat-square)](https://github.com/KakashiTech/P4OC/releases)
+[![License](https://img.shields.io/github/license/KakashiTech/P4OC?style=flat-square)](LICENSE)
 
 <a href="https://play.google.com/store/apps/details?id=dev.blazelight.p4oc">
   <img src="https://raw.githubusercontent.com/pioug/google-play-badges/main/svg/en.svg" alt="Get it on Google Play" height="80">
 </a>
 
-An Android client for [OpenCode](https://github.com/sst/opencode), the terminal-based AI coding assistant. You point it at a running OpenCode server and talk to it from your phone.
+> **P4OC is an Android client for [OpenCode](https://github.com/anomalyco/opencode) — the terminal-based AI coding assistant.** It is **not** part of OpenCode itself, nor is it affiliated with the OpenCode team. It's a third-party client that speaks the OpenCode protocol, nothing more.
 
-> **Note:** P4OC is a community project and is not built by or affiliated with the OpenCode team.
+This project is a **fork** of the original [P4OC by theblazehen](https://github.com/theblazehen/P4OC). All credit for the original work goes to them — this fork just adds a few tweaks on top.
 
-The whole thing is built around a terminal UI aesthetic. No stock Material3 cards or rounded corners. Everything is flat, monospaced where it matters, and styled to look like it belongs in a terminal.
+Point it at a running server, and your phone becomes a pocket-sized AI pair programmer. Built with love by nerds for nerds.
+
+The whole thing wears its terminal heritage like a badge of honor. No rounded corners. No stock Material3 cards. Every pixel is flat, monospaced where it counts, and styled like it escaped from a TUI. The app ships with **38 hand-picked color themes** synced directly from OpenCode's own CLI — because your AI should look good while it writes code for you.
 
 ## Quick Start
 
@@ -20,26 +21,26 @@ The whole thing is built around a terminal UI aesthetic. No stock Material3 card
    ```bash
    opencode serve --hostname 0.0.0.0 --port 4096
    ```
-   To require authentication, set `OPENCODE_SERVER_PASSWORD` before starting the server.
+   Set `OPENCODE_SERVER_PASSWORD` for authentication.
 
-2. Install P4OC from [Google Play](https://play.google.com/store/apps/details?id=dev.blazelight.p4oc) or [GitHub Releases](https://github.com/theblazehen/P4OC/releases)
+2. Install P4OC from [Google Play](https://play.google.com/store/apps/details?id=dev.blazelight.p4oc) or [GitHub Releases](https://github.com/KakashiTech/P4OC/releases)
 
-3. Enter your server URL (e.g. `http://192.168.1.100:4096`) and start chatting
+3. Point it at your server, pick a theme, and start hacking
 
 ## What it does
 
-You connect to an OpenCode server instance by entering its URL. From there you can:
+You connect to an OpenCode server, and the phone becomes a full remote control for your AI coding assistant:
 
-- Chat with the AI assistant, with streaming responses via SSE
-- Manage sessions — create, rename, share, summarize, view diffs, revert changes
-- Browse project files with symbol search and syntax highlighting
-- View file diffs from AI edits with additions/deletions
-- Use an embedded terminal (Termux-based)
-- Open sub-agent sessions in their own tabs
-- Configure providers, models, agents, and skills
-- Switch between 9 bundled color themes (catppuccin, dracula, nord, tokyonight, gruvbox, and others)
+- **Chat with streaming SSE** — see the AI think in real time
+- **Session management** — create, rename, share, summarize, diff, revert
+- **File browser** — browse project files with symbol search and syntax highlighting
+- **Diff viewer** — watch the AI's edits with clean add/delete highlighting
+- **Embedded terminal** — Termux-powered shell in your pocket
+- **Sub-agent tabs** — open child sessions in their own tabs like a browser
+- **Provider config** — wire up your own models, agents, and skills
+- **38 color themes** — catppuccin (3 variants), dracula, gruvbox, nord, tokyonight, rosepine, kanagawa, and 30 more from OpenCode's CLI
 
-The release APK is around 2.9 MB.
+The release APK clocks in around 2.9 MB. No bloatware. No tracking. Just a sharp tool.
 
 ## Screenshots
 
@@ -52,7 +53,7 @@ The release APK is around 2.9 MB.
 ## Requirements
 
 - Android 8.0+ (API 26)
-- A running [OpenCode](https://github.com/sst/opencode) server instance to connect to
+- A running [OpenCode](https://github.com/anomalyco/opencode) server
 
 ## Building
 
@@ -83,29 +84,30 @@ Then:
 
 ## How it works
 
-The app connects to an OpenCode server over HTTP. It uses Retrofit for REST calls and [LaunchDarkly's EventSource](https://github.com/launchdarkly/okhttp-eventsource) for SSE streaming. Messages come in as server-sent events, which the app parses and renders in real time.
+The app connects to an OpenCode server over HTTP. Retrofit handles REST, and LaunchDarkly's EventSource library streams SSE in real time. Messages arrive as server-sent events — the app parses, renders, and scrolls as they come in.
 
-The architecture is MVVM with clean architecture layers:
+Architecture is MVVM with clean-agnostic layers:
 
 ```
 app/src/main/java/dev/blazelight/p4oc/
-├── core/        # Network layer, DataStore, connection management
-├── data/        # DTOs, mappers, repository implementations
-├── di/          # Koin dependency injection modules
-├── domain/      # Models, repository interfaces
-├── terminal/    # Termux terminal emulator integration
+├── core/        # Network, DataStore, connection management
+├── data/        # DTOs, mappers, repositories
+├── di/          # Koin DI modules
+├── domain/      # Domain models, repository interfaces
+├── terminal/    # Termux terminal emulator
 └── ui/
     ├── components/  # Shared TUI components, markdown renderer, code blocks
     ├── navigation/  # NavGraph, route definitions
     ├── screens/     # Chat, sessions, projects, settings, terminal, files, diff
-    └── theme/       # Theme system (SemanticColors, Spacing, Sizing, Typography, Motion)
+    └── theme/       # Custom theme system with 38 OpenCode themes
 ```
 
 ## Theme system
 
-The app uses a custom theme system instead of Material3's built-in theming. There are about 50 semantic color tokens (`LocalOpenCodeTheme.current`), plus `Spacing.*`, `Sizing.*`, `TuiShapes` (all 0dp corners), and `Motion.*` tokens. Themes are loaded from JSON files that follow OpenCode's theme format.
+The app uses a custom theme system — no Material3 theming involved. There are ~50 semantic color tokens (`LocalOpenCodeTheme.current`), plus `Spacing.*`, `Sizing.*`, `TuiShapes` (all 0dp corners), and `Motion.*` tokens. Themes load from JSON files that follow OpenCode's native theme format.
 
-Bundled themes: catppuccin, catppuccin-frappe, catppuccin-macchiato, dracula, gruvbox, nord, opencode, tokyonight, xterm.
+All 38 bundled themes are synced directly from OpenCode's CLI source:
+aura, ayu, carbonfox, catppuccin (×4), cobalt2, cursor, deltarune, dracula, everforest, flexoki, github, gruvbox, hotdogstand, kanagawa, lucent-orng, material, matrix, mercury, monokai, mytheme, nightowl, nord, one-dark, opencode, orng, osaka-jade, palenight, rosepine, solarized, synthwave84, tokyonight, undertale, vercel, vesper, xterm, zenburn
 
 ## Tech stack
 

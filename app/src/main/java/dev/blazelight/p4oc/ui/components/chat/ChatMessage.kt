@@ -5,10 +5,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -25,6 +26,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.R
@@ -32,9 +34,15 @@ import dev.blazelight.p4oc.domain.model.*
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
+import androidx.compose.runtime.compositionLocalOf
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolGroupWidget
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
+import kotlinx.coroutines.delay
+
+// CompositionLocal to communicate thinking-phase state from ChatScreen
+// down to TextPart without threading parameters through every layer.
+val LocalIsThinkingPhase = compositionLocalOf { false }
 
 // ── Cached shapes — file-level singletons, zero allocation during scroll ──────
 private val pillShape       = RoundedCornerShape(20.dp)
@@ -128,19 +136,20 @@ internal fun ReasoningGroupView(items: List<Part.Reasoning>) {
                 .clickable(role = Role.Button) { expanded = !expanded }
                 .padding(vertical = Spacing.xxs)
         )
+        // Using simple Column + verticalScroll instead of nested LazyColumn:
+        // nested vertically-scrollable LazyColumns cause excessive measure/layout passes
+        // and break virtualization. A regular Column with 260dp cap is cheaper for
+        // the typical 3-15 reasoning items.
         if (expanded) {
-            LazyColumn(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 260.dp)
+                    .verticalScroll(rememberScrollState())
                     .padding(start = Spacing.sm),
-                contentPadding = PaddingValues(0.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                items(
-                    items = items,
-                    key = { it.id }
-                ) { r ->
+                items.forEach { r ->
                     ReasoningPart(r)
                 }
             }
@@ -200,17 +209,13 @@ private fun UserMessage(messageWithParts: MessageWithParts, modifier: Modifier =
         if (shouldVirtualizeUser) {
             Box(modifier = Modifier.weight(1f)) {
                 val lines = remember(text) { text.split('\n') }
-                LazyColumn(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 360.dp),
-                    contentPadding = PaddingValues(0.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState())
                 ) {
-                    items(
-                        items = lines,
-                        key = { it.hashCode() }
-                    ) { line ->
+                    lines.forEach { line ->
                         Text(
                             text = line,
                             fontFamily = FontFamily.Monospace,
@@ -423,24 +428,7 @@ private fun TextPart(part: Part.Text, enableVirtualization: Boolean = true) {
     val clipboardManager = LocalClipboardManager.current
     val haptic = LocalHapticFeedback.current
     val theme = LocalOpenCodeTheme.current
-    var expanded by remember(part.id) { mutableStateOf(false) }
-
-    val isLarge by remember(part.text, part.isStreaming) {
-        mutableStateOf(!part.isStreaming && (part.text.length > 2000 || part.text.count { it == '\n' } > 60))
-    }
-    val isVeryLarge by remember(part.text, part.isStreaming) {
-        mutableStateOf(!part.isStreaming && (part.text.length > 6000 || part.text.count { it == '\n' } > 200))
-    }
-    var renderAsMarkdown by remember(part.id) { mutableStateOf(false) }
-    val shouldVirtualizeMarkdown by remember(part.text, part.isStreaming) {
-        mutableStateOf(!part.isStreaming && (part.text.length > 1200 || part.text.count { it == '\n' } > 40))
-    }
-    val previewText by remember(part.text) {
-        mutableStateOf(
-            if (part.text.length <= 2000) part.text
-            else part.text.take(2000)
-        )
-    }
+    val isThinkingPhase = LocalIsThinkingPhase.current
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -459,90 +447,26 @@ private fun TextPart(part: Part.Text, enableVirtualization: Boolean = true) {
                     onLongClickLabel = "Copy text"
                 )
         ) {
-            if (isLarge && !expanded) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    StreamingMarkdown(
-                        text = previewText,
-                        isStreaming = false,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "… more ▸",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = theme.accent,
-                        modifier = Modifier
-                            .padding(top = 2.dp)
-                            .clickable(role = Role.Button) { expanded = true }
-                    )
-                }
-            } else if (enableVirtualization && expanded && isVeryLarge && !renderAsMarkdown) {
-                // Virtualized plain-text view for extremely large content to avoid heavy
-                // paragraph shaping/painting stalls when entering the viewport.
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    // Header toggle to render full Markdown on demand
-                    Text(
-                        text = "Render markdown ▸",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = theme.accent,
-                        modifier = Modifier
-                            .padding(bottom = Spacing.xxs)
-                            .clickable(role = Role.Button) { renderAsMarkdown = true }
-                    )
-                    val lines = remember(part.id, part.text) { part.text.split('\n') }
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 360.dp),
-                        contentPadding = PaddingValues(0.dp),
-                        verticalArrangement = Arrangement.spacedBy(0.dp)
-                    ) {
-                        items(
-                            items = lines,
-                            key = { it.hashCode() }
-                        ) { line ->
-                            Text(
-                                text = line,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 13.sp,
-                                color = theme.text,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+            // Hide streaming text during the thinking phase — only show the
+            // loading indicator. Once thinking ends, text renders normally.
+            if (!isThinkingPhase || !part.isStreaming) {
+                if (part.text.length > 2000 && !part.isStreaming) {
+                    val chunks = remember(part.id, part.text) { chunkMarkdown(part.text, 1400) }
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        chunks.forEach { chunk ->
+                            StreamingMarkdown(text = chunk, modifier = Modifier.fillMaxWidth(), isStreaming = false)
                         }
                     }
+                } else {
+                    StreamingMarkdown(text = part.text, modifier = Modifier.fillMaxWidth(), isStreaming = part.isStreaming)
                 }
-            } else if (enableVirtualization && shouldVirtualizeMarkdown) {
-                val chunks = remember(part.id, part.text) { chunkMarkdown(part.text, 1400) }
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 360.dp),
-                    contentPadding = PaddingValues(0.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
-                ) {
-                    items(items = chunks, key = { chunk -> chunk.hashCode() }) { chunk ->
-                        StreamingMarkdown(
-                            text = chunk,
-                            isStreaming = false,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            } else {
-                StreamingMarkdown(
-                    text = part.text,
-                    isStreaming = part.isStreaming,
-                    modifier = Modifier.fillMaxWidth()
-                )
             }
-        }
-        if (part.isStreaming) {
-            // Keep indicator small and low-cost; could be a thin bar shimmer in future
-            TuiLoadingIndicator()
-        }
+            if (part.isStreaming && isThinkingPhase) {
+                TuiLoadingIndicator()
+            }
     }
+}
+
 }
 
 // ── THOUGHT — single-pass flat row, zero IntrinsicSize overhead ───────────────
@@ -560,9 +484,23 @@ private fun ReasoningPart(part: Part.Reasoning) {
 
     val isThinking = part.time?.end == null
 
+    // Client-side thinking phase: show loading even when server sends
+    // complete reasoning in one chunk (OpenCode streaming bug #27549).
+    // Keys on text.length to re-arm the 80ms buffer every time a new
+    // text chunk arrives after isThinking becomes false.
+    var thinkingPhase by remember(part.id) { mutableStateOf(true) }
+    LaunchedEffect(part.id, isThinking, part.text.length) {
+        thinkingPhase = true
+        if (!isThinking && part.text.isNotEmpty()) {
+            delay(80)
+            thinkingPhase = false
+        }
+    }
+
     // All colors in remember — avoid .copy() allocation on every recompose
     val thoughtColor    = remember(theme.textMuted) { theme.textMuted.copy(alpha = 0.45f) }
-    val thoughtColorDim = remember(theme.textMuted) { theme.textMuted.copy(alpha = 0.25f) }
+    val thoughtDim      = remember(theme.textMuted) { theme.textMuted.copy(alpha = 0.25f) }
+    val thoughtGray     = remember { androidx.compose.ui.graphics.Color(0xFF888888).copy(alpha = 0.50f) }
 
     val durationLabel = remember(part.time) {
         part.time?.let { t ->
@@ -576,17 +514,17 @@ private fun ReasoningPart(part: Part.Reasoning) {
     }
 
     // Single Text node — no Row/Spacer/weight → single layout pass, fixed height
-    val headerText = remember(isThinking, durationLabel, expanded, part.text.isNotEmpty()) {
+    val showLoading = thinkingPhase || isThinking
+    val headerText = remember(showLoading, durationLabel, expanded, part.text.isNotEmpty()) {
         buildString {
-            append(if (isThinking) "· thinking…" else "· thought")
-            if (!isThinking && durationLabel != null) append("  [$durationLabel]")
+            append(if (showLoading) "· thinking…" else "· thought")
+            if (!showLoading && durationLabel != null) append("  [$durationLabel]")
             if (part.text.isNotEmpty()) append(if (expanded) "  ▾" else "  ▸")
         }
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        // If actively thinking show the spinner inline, otherwise pure Text header
-        if (isThinking) {
+        if (showLoading) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -594,20 +532,37 @@ private fun ReasoningPart(part: Part.Reasoning) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
             ) {
-                TuiLoadingIndicator()
                 Text(
-                    text = "thinking…",
+                    text = headerText,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    color = thoughtColor
+                    color = thoughtColor,
+                    modifier = Modifier.weight(1f)
                 )
+            }
+            if (part.text.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = Spacing.sm)
+                ) {
+                    Text(
+                        text = part.text,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        lineHeight = 13.sp,
+                        color = thoughtGray,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         } else {
             Text(
                 text = headerText,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
-                color = thoughtColorDim,
+                color = thoughtDim,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(role = Role.Button) { expanded = !expanded }
@@ -615,7 +570,8 @@ private fun ReasoningPart(part: Part.Reasoning) {
             )
         }
 
-        if (expanded && part.text.isNotEmpty()) {
+        // Only show reasoning content when NOT actively thinking
+        if (!showLoading && expanded && part.text.isNotEmpty()) {
             var prevText by remember(part.id) { mutableStateOf("") }
             val parasState = remember(part.id) { mutableStateListOf<String>() }
             LaunchedEffect(part.text) {
@@ -642,23 +598,19 @@ private fun ReasoningPart(part: Part.Reasoning) {
                 }
                 prevText = new
             }
-            LazyColumn(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 220.dp)
-                    .padding(start = Spacing.sm, top = 2.dp, bottom = 2.dp),
-                contentPadding = PaddingValues(0.dp),
-                verticalArrangement = Arrangement.spacedBy(0.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = Spacing.sm, top = 2.dp, bottom = 2.dp)
             ) {
-                items(
-                    items = parasState,
-                    key = { it.hashCode() }
-                ) { para ->
+                parasState.forEach { para ->
                     Text(
                         text = para,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = thoughtColorDim,
+                        color = thoughtGray,
                         modifier = Modifier
                             .fillMaxWidth()
                             .combinedClickable(

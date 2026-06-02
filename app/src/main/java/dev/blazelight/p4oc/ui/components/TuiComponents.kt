@@ -14,7 +14,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
-import androidx.compose.animation.core.RepeatMode
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.animation.core.withInfiniteAnimationFrameMillis
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -33,13 +39,19 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.Spacing
+
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import dev.blazelight.p4oc.core.performance.rememberOptimizedLoadingRotation
 
 // =============================================================================
@@ -751,8 +763,12 @@ fun TuiDropdownMenuItem(
 // =============================================================================
 
 /**
- * Terminal-style menu with ASCII box-drawing border.
- * No rounded corners, no background — just clean ASCII lines.
+ * Terminal-style popup menu with full ASCII box-drawing frame.
+ * No background, no shadow — pure Unicode box art.
+ * ┌─ menu ────────────┐
+ * │  ▶ + Changes      │
+ * │    / Commands      │
+ * └────────────────────┘
  */
 @Composable
 fun TuiTerminalMenu(
@@ -763,58 +779,82 @@ fun TuiTerminalMenu(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val theme = LocalOpenCodeTheme.current
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismissRequest,
-        modifier = modifier
-            .widthIn(min = 140.dp, max = 220.dp),
-        shape = RectangleShape,
-        containerColor = theme.background,
-        shadowElevation = 0.dp,
-        tonalElevation = 0.dp,
-        offset = offset,
-        content = {
-            // Top border: ┌────┐
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Text("┌", fontFamily = FontFamily.Monospace, color = theme.border)
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(1.dp)
-                        .background(theme.border)
-                )
-                Text("┐", fontFamily = FontFamily.Monospace, color = theme.border)
-            }
-            // Content with side borders
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Text("│", fontFamily = FontFamily.Monospace, color = theme.border)
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .background(theme.background)
-                ) {
-                    content()
+    val density = LocalDensity.current
+    val offsetXPx = density.run { offset.x.roundToPx() }
+    val offsetYPx = density.run { offset.y.roundToPx() }
+
+    if (expanded) {
+        Popup(
+            alignment = Alignment.TopEnd,
+            offset = IntOffset(offsetXPx, offsetYPx),
+            onDismissRequest = onDismissRequest,
+            properties = PopupProperties(focusable = true)
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(min = 100.dp, max = 160.dp)
+                    .background(theme.backgroundElement.copy(alpha = 0.95f))
+            ) {
+                    // Top border: ┌─ menu ──────────────┐
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("┌", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                        Box(
+                            modifier = Modifier
+                                .width(4.dp)
+                                .height(1.dp)
+                                .background(theme.border)
+                        )
+                        Text("─", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.border)
+                        Text("menu", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.textMuted)
+                        Text("─", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.border)
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(1.dp)
+                                .background(theme.border)
+                        )
+                        Text("┐", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                    }
+                    // Content with side borders
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Text("│", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                        Column(
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            content()
+                        }
+                        Text("│", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                    }
+                    // Bottom border: └────────────────────┘
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("└", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(1.dp)
+                                .background(theme.border)
+                        )
+                        Text("┘", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                    }
                 }
-                Text("│", fontFamily = FontFamily.Monospace, color = theme.border)
-            }
-            // Bottom border: └────┘
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Text("└", fontFamily = FontFamily.Monospace, color = theme.border)
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(1.dp)
-                        .background(theme.border)
-                )
-                Text("┘", fontFamily = FontFamily.Monospace, color = theme.border)
             }
         }
-    )
-}
+    }
+
 
 /**
- * Terminal-style menu item with ASCII symbol prefix.
- * No icons — just short text with ASCII symbols.
+ * Terminal-style menu item with fixed-width symbol column.
+ * Shows ▶ indicator on hover/active for keyboard navigation feel.
+ * ┌────────────────┐
+ * │ ▶ ± Changes    │
+ * │   / Commands    │
+ * └────────────────┘
  */
 @Composable
 fun TuiTerminalMenuItem(
@@ -826,32 +866,51 @@ fun TuiTerminalMenuItem(
     isDestructive: Boolean = false
 ) {
     val theme = LocalOpenCodeTheme.current
+    var hovered by remember { mutableStateOf(false) }
+
     val textColor = when {
         !enabled -> theme.textMuted
         isDestructive -> theme.error
         else -> theme.text
     }
-    val bgColor = if (enabled) theme.background else Color.Transparent
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(bgColor)
-            .clickable(enabled = enabled, onClick = onClick)
+            .background(if (hovered) theme.accent.copy(alpha = 0.08f) else Color.Transparent)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                enabled = enabled,
+                onClick = onClick
+            )
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Active indicator ▶ (only shows on hover)
+        Text(
+            text = if (hovered) "▶" else " ",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 9.sp,
+            color = if (hovered) theme.accent else Color.Transparent,
+            modifier = Modifier.width(10.dp)
+        )
+        // Symbol with fixed width for alignment
         Text(
             text = symbol,
             fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
             color = if (isDestructive) theme.error else theme.textMuted,
-            modifier = Modifier.padding(end = Spacing.sm)
+            modifier = Modifier.width(16.dp)
         )
+        // Label
         Text(
             text = text,
             fontFamily = FontFamily.Monospace,
-            style = MaterialTheme.typography.bodySmall,
-            color = textColor
+            fontSize = 10.sp,
+            color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -892,29 +951,49 @@ fun TuiLoadingIndicator(
     text: String? = null
 ) {
     val theme = LocalOpenCodeTheme.current
-    val animationsPaused = LocalAnimationsPaused.current
-    
+    val dots = remember {
+        // Each frame: [dot1, dot2, dot3, dot4, dot5, dot6]
+        // Clockwise rotation: 1→4→5→6→3→2→1, 1 dot changes per frame
+        listOf(
+            booleanArrayOf(true,  false, false, true,  true,  false), // ⠙ = 1,4,5
+            booleanArrayOf(false, false, false, true,  true,  true),  // ⠸ = 4,5,6
+            booleanArrayOf(false, false, true,  false, true,  true),  // ⠴ = 3,5,6
+            booleanArrayOf(false, true,  true,  false, false, true),  // ⠦ = 2,3,6
+            booleanArrayOf(true,  true,  true,  false, false, false), // ⠇ = 1,2,3
+            booleanArrayOf(true,  true,  false, true,  false, false), // ⠋ = 1,2,4
+        )
+    }
+    var frame by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            withInfiniteAnimationFrameMillis { ms ->
+                frame = ((ms / 111).toInt()) % dots.size
+            }
+        }
+    }
     Row(
         modifier = modifier, // NO PADDING - crucial for button alignment
         horizontalArrangement = Arrangement.spacedBy(Spacing.inlineSpacing),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (animationsPaused) {
-            androidx.compose.material3.Surface(
-                modifier = Modifier.size(Sizing.iconSm),
-                color = theme.accent,
-                shape = androidx.compose.foundation.shape.CircleShape
-            ) {}
-        } else {
-            CircularProgressIndicator(
-                modifier = Modifier.size(Sizing.iconMd),
-                strokeWidth = Sizing.strokeThin,
-                color = theme.accent,
-                trackColor = theme.backgroundElement,
-                strokeCap = StrokeCap.Round
-            )
+        val active = dots[frame]
+        Canvas(modifier = Modifier.size(16.dp)) {
+            val dotR = size.minDimension / 9f
+            val spacing = size.minDimension / 4f
+            val sx = (size.width - spacing * 2f) / 2f
+            val sy = (size.height - spacing * 3f) / 2f
+            for (i in 0..5) {
+                if (active[i]) {
+                    val col = if (i < 3) 0 else 1
+                    val row = i % 3
+                    drawCircle(
+                        color = theme.accent,
+                        radius = dotR,
+                        center = Offset(sx + spacing * col, sy + spacing * row)
+                    )
+                }
+            }
         }
-        
         text?.let {
             Text(
                 text = it,

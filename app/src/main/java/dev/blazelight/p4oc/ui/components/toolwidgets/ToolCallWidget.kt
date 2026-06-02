@@ -13,7 +13,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.blazelight.p4oc.domain.model.Part
@@ -26,84 +25,70 @@ import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/**
- * Main wrapper component for tool call widgets.
- * Handles state cycling between Oneline, Compact, and Expanded views.
- * 
- * HITL tools (like question) always display expanded and don't cycle.
- */
 @Composable
 fun ToolCallWidget(
     tool: Part.Tool,
     defaultState: ToolWidgetState,
     onToolApprove: (String) -> Unit,
     onToolDeny: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
-    val theme = LocalOpenCodeTheme.current
-    
-    // HITL tools (pending state) always show expanded
     val isHitl = tool.state is ToolState.Pending
     val effectiveDefault = if (isHitl) ToolWidgetState.EXPANDED else defaultState
-    
+
     var currentState by remember(tool.callID) { mutableStateOf(effectiveDefault) }
-    
-    // Update state if tool becomes pending (HITL)
+
     LaunchedEffect(isHitl) {
         if (isHitl && coroutineContext.isActive) {
             currentState = ToolWidgetState.EXPANDED
         }
     }
-    
-    val canCycle = !isHitl // HITL tools don't cycle
-    
+
+    val canCycle = !isHitl
+
     when (currentState) {
         ToolWidgetState.ONELINE -> ToolCallOneline(
             tool = tool,
             onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
-            modifier = modifier.fillMaxWidth()
+            modifier = modifier.fillMaxWidth(),
         )
         ToolWidgetState.COMPACT -> ToolCallCompact(
             tool = tool,
             onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
-            modifier = modifier.fillMaxWidth()
+            modifier = modifier.fillMaxWidth(),
         )
         ToolWidgetState.EXPANDED -> ToolCallExpanded(
             tool = tool,
             onClick = if (canCycle) {{ currentState = currentState.next() }} else null,
             onToolApprove = onToolApprove,
             onToolDeny = onToolDeny,
-            modifier = modifier.fillMaxWidth()
+            modifier = modifier.fillMaxWidth(),
         )
     }
 }
 
-/**
- * Oneline view: flat terminal log line
- * Format: ✓ bash  |  ◐ Read Theme.kt
- */
 @Composable
 fun ToolCallOneline(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
     val (icon, color) = getToolStateIcon(tool.state, theme)
-    val description = getToolCompactDescription(tool)
+    val description = remember(tool) { getToolCompactDescription(tool) }
 
     Row(
         modifier = modifier
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
             .padding(vertical = 1.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = "$icon ",
             fontFamily = FontFamily.Monospace,
             fontSize = TuiCodeFontSize.lg,
-            color = color
+            color = color,
         )
         Text(
             text = description,
@@ -112,7 +97,7 @@ fun ToolCallOneline(
             color = theme.textMuted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
         )
         if (tool.state is ToolState.Running) {
             TuiLoadingIndicator()
@@ -120,74 +105,57 @@ fun ToolCallOneline(
     }
 }
 
-/**
- * Compact view: terminal log line with left color bar
- * Matches AssistantMessage visual language
- */
 @Composable
 fun ToolCallCompact(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
     val (icon, color) = getToolStateIcon(tool.state, theme)
-    val description = getToolCompactDescription(tool)
+    val description = remember(tool) { getToolCompactDescription(tool) }
+    val diffStats = remember(tool) { getDiffStats(tool) }
+    val cardBg = theme.backgroundPanel.copy(alpha = 0.25f)
 
-    Box(
+    Row(
         modifier = modifier
+            .fillMaxWidth()
+            .background(cardBg)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier)
-            .padding(vertical = 2.dp)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Left state color bar
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .width(2.dp)
-                .matchParentSize()
-                .background(color.copy(alpha = 0.55f))
+        Text(
+            text = icon,
+            fontFamily = FontFamily.Monospace,
+            fontSize = TuiCodeFontSize.lg,
+            color = color,
         )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 10.dp, end = 4.dp, top = 3.dp, bottom = 3.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = icon,
-                fontFamily = FontFamily.Monospace,
-                fontSize = TuiCodeFontSize.lg,
-                color = color
-            )
-            Text(
-                text = description,
-                fontFamily = FontFamily.Monospace,
-                fontSize = TuiCodeFontSize.xl,
-                color = theme.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            if (tool.state is ToolState.Running) {
-                TuiLoadingIndicator()
-            }
-            getDiffStats(tool)?.let { (added, removed) ->
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("+$added", fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.lg, color = theme.success)
-                    Text("-$removed", fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.lg, color = theme.error)
-                }
+        Text(
+            text = description,
+            fontFamily = FontFamily.Monospace,
+            fontSize = TuiCodeFontSize.xl,
+            color = theme.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (tool.state is ToolState.Running) {
+            TuiLoadingIndicator()
+        }
+        if (diffStats != null) {
+            val (added, removed) = diffStats
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("+$added", fontFamily = FontFamily.Monospace,
+                    fontSize = TuiCodeFontSize.lg, color = theme.success)
+                Text("-$removed", fontFamily = FontFamily.Monospace,
+                    fontSize = TuiCodeFontSize.lg, color = theme.error)
             }
         }
     }
 }
 
-/**
- * Expanded view: full details with tool-specific UI
- * Delegates to specialized widgets based on tool type
- */
 @Composable
 fun ToolCallExpanded(
     tool: Part.Tool,
@@ -195,97 +163,94 @@ fun ToolCallExpanded(
     onToolApprove: (String) -> Unit,
     onToolDeny: (String) -> Unit,
     onOpenSubSession: ((String) -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     when (tool.toolName.lowercase()) {
         "bash", "execute", "shell" -> BashWidgetExpanded(
-            tool = tool,
-            onClick = onClick,
-            onToolApprove = onToolApprove,
-            onToolDeny = onToolDeny,
-            modifier = modifier
+            tool = tool, onClick = onClick,
+            onToolApprove = onToolApprove, onToolDeny = onToolDeny,
+            modifier = modifier,
         )
         "read", "read_file", "serena_read_file" -> ReadWidgetExpanded(
-            tool = tool,
-            onClick = onClick,
-            modifier = modifier
+            tool = tool, onClick = onClick, modifier = modifier,
+        )
+        "grep", "search", "serena_search_for_pattern" -> GrepWidgetExpanded(
+            tool = tool, onClick = onClick, modifier = modifier,
         )
         "edit", "write", "morph_edit_file", "serena_replace_content", "serena_create_text_file" -> EditWidgetExpanded(
-            tool = tool,
-            onClick = onClick,
-            modifier = modifier
+            tool = tool, onClick = onClick, modifier = modifier,
+        )
+        "todowrite", "todoread", "todo_write", "todo_read" -> TodoWriteWidgetExpanded(
+            tool = tool, onClick = onClick, modifier = modifier,
+        )
+        "skill", "slashcommand" -> SkillWidgetExpanded(
+            tool = tool, onClick = onClick, modifier = modifier,
+        )
+        "glob", "find", "serena_find_file" -> GlobWidgetExpanded(
+            tool = tool, onClick = onClick, modifier = modifier,
         )
         "task" -> TaskWidgetExpanded(
-            tool = tool,
-            onClick = onClick,
-            onToolApprove = onToolApprove,
-            onToolDeny = onToolDeny,
-            onOpenSubSession = onOpenSubSession,
-            modifier = modifier
+            tool = tool, onClick = onClick,
+            onToolApprove = onToolApprove, onToolDeny = onToolDeny,
+            onOpenSubSession = onOpenSubSession, modifier = modifier,
         )
         else -> DefaultWidgetExpanded(
-            tool = tool,
-            onClick = onClick,
-            onToolApprove = onToolApprove,
-            onToolDeny = onToolDeny,
-            modifier = modifier
+            tool = tool, onClick = onClick,
+            onToolApprove = onToolApprove, onToolDeny = onToolDeny,
+            modifier = modifier,
         )
     }
 }
 
-// ============== Helper Functions ==============
-
-@Composable
-private fun getToolStateIcon(state: ToolState, theme: dev.blazelight.p4oc.ui.theme.opencode.OpenCodeTheme): Pair<String, androidx.compose.ui.graphics.Color> {
-    return when (state) {
-        is ToolState.Running -> "◐" to theme.warning
-        is ToolState.Pending -> "○" to theme.secondary
-        is ToolState.Error -> "✗" to theme.error
-        is ToolState.Completed -> "✓" to theme.success
-    }
-}
-
-/**
- * Get compact description for a tool based on its type and input
- */
 private fun getToolCompactDescription(tool: Part.Tool): String {
     val input = tool.state.input
     val name = tool.toolName.lowercase()
-    
+
     return when {
         name in listOf("bash", "execute", "shell") -> {
             extractParam(input, "command")?.take(60) ?: tool.toolName
         }
         name in listOf("read", "read_file", "serena_read_file") -> {
-            val path = extractParam(input, "filePath") 
+            val path = extractParam(input, "filePath")
                 ?: extractParam(input, "path")
                 ?: extractParam(input, "relative_path")
-            val fileName = path?.substringAfterLast("/") ?: "file"
-            val lines = extractParam(input, "limit")?.toIntOrNull()
-            if (lines != null) "Read $fileName ($lines lines)" else "Read $fileName"
+            val clean = if (path != null) {
+                val idx = path.indexOf("/P4OC/")
+                if (idx >= 0) path.substring(idx + 1) else path.substringAfterLast("/")
+            } else "file"
+            "Read  $clean"
         }
         name in listOf("edit", "write", "morph_edit_file", "serena_replace_content", "serena_create_text_file") -> {
-            val path = extractParam(input, "filePath") 
+            val path = extractParam(input, "filePath")
                 ?: extractParam(input, "path")
                 ?: extractParam(input, "relative_path")
             val fileName = path?.substringAfterLast("/") ?: "file"
             "Modified $fileName"
         }
+        name in listOf("skill", "slashcommand") -> {
+            val skillName = extractParam(input, "name") ?: extractParam(input, "command")
+            skillName?.let { "Skill \"$it\"" } ?: tool.toolName
+        }
         name in listOf("glob", "find", "serena_find_file") -> {
             val pattern = extractParam(input, "pattern") ?: extractParam(input, "file_mask")
-            pattern?.let { "Glob $it" } ?: tool.toolName
+            pattern?.let { "Glob \"$it\"" } ?: tool.toolName
         }
         name in listOf("grep", "search", "serena_search_for_pattern") -> {
             val pattern = extractParam(input, "pattern") ?: extractParam(input, "substring_pattern")
-            pattern?.take(40)?.let { "Search: $it" } ?: tool.toolName
+            val filePath = extractParam(input, "filePath") ?: extractParam(input, "path") ?: extractParam(input, "relative_path")
+            val clean = if (filePath != null) {
+                val idx = filePath.indexOf("/P4OC/")
+                if (idx >= 0) filePath.substring(idx + 1) else filePath.substringAfterLast("/")
+            } else ""
+            if (pattern != null && clean.isNotEmpty()) "Grep \"$pattern\"  in  $clean"
+            else if (pattern != null) "Grep \"$pattern\""
+            else "Grep  $clean"
         }
+        name in listOf("todowrite", "todoread", "todo_write", "todo_read") -> "todos"
         else -> tool.toolName
     }
 }
 
-/**
- * Extract a parameter value from JsonObject
- */
 private fun extractParam(input: JsonObject, paramName: String): String? {
     return try {
         input[paramName]?.jsonPrimitive?.content
@@ -294,9 +259,6 @@ private fun extractParam(input: JsonObject, paramName: String): String? {
     }
 }
 
-/**
- * Get diff stats (added, removed lines) for edit tools
- */
 private fun getDiffStats(tool: Part.Tool): Pair<Int, Int>? {
     val metadata = when (val state = tool.state) {
         is ToolState.Completed -> state.metadata
@@ -304,7 +266,7 @@ private fun getDiffStats(tool: Part.Tool): Pair<Int, Int>? {
         is ToolState.Error -> state.metadata
         else -> null
     } ?: return null
-    
+
     return try {
         val added = metadata["linesAdded"]?.jsonPrimitive?.content?.toIntOrNull() ?: return null
         val removed = metadata["linesRemoved"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0

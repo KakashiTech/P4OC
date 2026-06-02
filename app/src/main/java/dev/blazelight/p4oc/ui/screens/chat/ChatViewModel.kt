@@ -12,6 +12,7 @@ import dev.blazelight.p4oc.core.network.safeApiCall
 import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.data.remote.dto.ExecuteCommandRequest
 import dev.blazelight.p4oc.data.remote.dto.ForkSessionRequest
+import dev.blazelight.p4oc.data.remote.dto.InitSessionRequest
 import dev.blazelight.p4oc.data.remote.dto.PartInputDto
 import dev.blazelight.p4oc.data.remote.dto.PermissionResponseRequest
 import dev.blazelight.p4oc.data.remote.dto.QuestionReplyRequest
@@ -26,12 +27,14 @@ import dev.blazelight.p4oc.domain.model.SessionConnectionState as TabConnectionS
 import dev.blazelight.p4oc.ui.components.chat.AbortSummary
 import dev.blazelight.p4oc.ui.components.chat.InterruptedTool
 import dev.blazelight.p4oc.ui.components.chat.SelectedFile
+import dev.blazelight.p4oc.ui.components.ContextUsage
 import dev.blazelight.p4oc.ui.navigation.Screen
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import java.util.concurrent.CopyOnWriteArraySet
 
@@ -54,6 +57,11 @@ class ChatViewModel constructor(
 
     // Child session IDs (subagent sessions whose parentID == this sessionId)
     private val childSessionIds = CopyOnWriteArraySet<String>()
+
+    // Saved scroll position — persists across ChatScreen dispose/recreate
+    // (ViewModel survives NavHost backstack navigation to Settings and back)
+    var savedScrollIndex: Int = 0
+    var savedScrollOffset: Int = 0
 
     private fun isOwnedSession(eventSessionId: String): Boolean =
         eventSessionId == sessionId || eventSessionId in childSessionIds
@@ -81,6 +89,60 @@ class ChatViewModel constructor(
     val lastChangedIds: StateFlow<Set<String>> = messageStore.lastChangedIds
 
     val connectionState: StateFlow<ConnectionState> = connectionManager.connectionState
+
+    // Granular derived flows — each emits only when its specific field changes.
+    // ChatScreen reads these instead of the monolithic uiState to avoid
+    // recomposing the entire screen when unrelated fields (e.g. inputText) change.
+    val isBusy: StateFlow<Boolean> = _uiState.map { it.isBusy }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val isLoading: StateFlow<Boolean> = _uiState.map { it.isLoading }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val isSending: StateFlow<Boolean> = _uiState.map { it.isSending }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val abortSummary: StateFlow<AbortSummary?> = _uiState.map { it.abortSummary }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val errorMsg: StateFlow<String?> = _uiState.map { it.error }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val session: StateFlow<Session?> = _uiState.map { it.session }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val todos: StateFlow<List<Todo>> = _uiState.map { it.todos }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val commands: StateFlow<List<Command>> = _uiState.map { it.commands }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val inputText: StateFlow<String> = _uiState.map { it.inputText }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val queuedMessage: StateFlow<QueuedMessage?> = _uiState.map { it.queuedMessage }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val isLoadingCommands: StateFlow<Boolean> = _uiState.map { it.isLoadingCommands }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val isLoadingTodos: StateFlow<Boolean> = _uiState.map { it.isLoadingTodos }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val contextUsage: StateFlow<ContextUsage?> = combine(
+        messageStore.messages,
+        modelAgentManager.selectedModel,
+        modelAgentManager.availableModels
+    ) { messages, selected, available ->
+        if (selected == null) return@combine null
+        val pair = available.firstOrNull { (provId, model) ->
+            provId == selected.providerID && model.id == selected.modelID
+        } ?: return@combine null
+        val maxTokens = pair.second.limit?.context ?: pair.second.contextLength ?: return@combine null
+        var totalInput = 0; var totalOutput = 0; var totalCached = 0
+        for (mwp in messages) {
+            val t = (mwp.message as? Message.Assistant)?.tokens ?: continue
+            totalInput += t.input
+            totalOutput += t.output
+            totalCached += t.cacheRead
+        }
+        ContextUsage(
+            usedTokens = totalInput + totalOutput,
+            maxTokens = maxTokens,
+            inputTokens = totalInput,
+            outputTokens = totalOutput,
+            cachedTokens = totalCached
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _branchName = MutableStateFlow<String?>(null)
     val branchName: StateFlow<String?> = _branchName.asStateFlow()
@@ -112,6 +174,13 @@ class ChatViewModel constructor(
 
     val visualSettings = settingsDataStore.visualSettings
         .stateIn(viewModelScope, SharingStarted.Eagerly, dev.blazelight.p4oc.core.datastore.VisualSettings())
+
+    val reasoningEffort = settingsDataStore.reasoningEffort
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "auto")
+
+    fun updateReasoningEffort(effort: String) {
+        viewModelScope.launch { settingsDataStore.updateReasoningEffort(effort) }
+    }
 
     private companion object {
         const val TAG = "ChatViewModel"
@@ -175,6 +244,15 @@ class ChatViewModel constructor(
     private fun getDirectory(): String? =
         sessionDirectory ?: _uiState.value.session?.directory ?: directoryManager.getDirectory()
 
+    /** Returns the file browser root for this session — falls back to `"."` when
+     *  the session directory is outside any known project (server can't list files there). */
+    fun getFilePickerStartDirectory(): String {
+        val dir = getDirectory()
+        if (dir == null || dir.isBlank()) return "."
+        val defaultDir = directoryManager.getDirectory()
+        return if (dir == defaultDir) dir else "."
+    }
+
     private fun loadSession() {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: run {
@@ -191,6 +269,7 @@ class ChatViewModel constructor(
                     }
                     // Reload VCS now that we have the canonical session directory
                     loadVcsInfo()
+                    loadTodos()
                 }
                 is ApiResult.Error -> {
                     _uiState.update { it.copy(error = "Failed to load session") }
@@ -210,17 +289,30 @@ class ChatViewModel constructor(
             }
 
             val directory = getDirectory()
-            val result = safeApiCall { api.getMessages(sessionId, limit = null, directory = directory) }
+            val result = safeApiCall { api.getMessages(sessionId, limit = 25, directory = directory) }
 
             when (result) {
                 is ApiResult.Success -> {
-                    AppLog.d(TAG, "Loaded ${result.data.size} messages")
-                    // Map DTOs to domain models off the main thread to avoid jank on first paint
+                    AppLog.d(TAG, "Loaded ${result.data.size} messages (initial batch)")
                     val mapped = withContext(Dispatchers.Default) {
                         result.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
                     }
                     messageStore.loadInitial(mapped)
                     _uiState.update { it.copy(isLoading = false) }
+
+                    // Background: fetch remaining messages for pagination
+                    if (result.data.size == 25) {
+                        launch {
+                            val fullResult = safeApiCall { api.getMessages(sessionId, limit = null, directory = directory) }
+                            if (fullResult is ApiResult.Success && fullResult.data.size > 25) {
+                                val fullMapped = withContext(Dispatchers.Default) {
+                                    fullResult.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }
+                                }
+                                messageStore.loadRemaining(fullMapped)
+                                AppLog.d(TAG, "Background: loaded ${fullResult.data.size} total messages for pagination")
+                            }
+                        }
+                    }
                 }
                 is ApiResult.Error -> {
                     AppLog.e(TAG, "Failed to load messages: ${result.message}", result.throwable)
@@ -243,6 +335,53 @@ class ChatViewModel constructor(
         }
     }
 
+    /**
+     * Initializes the session on the server via POST /session/{id}/init.
+     * Without this call the server queues but never processes messages.
+     */
+    /**
+     * Tracks whether initSession has been called for this session.
+     * Reset on disconnect/error to allow re-init after server restart.
+     */
+    private var sessionInitialized = false
+
+    /**
+     * Initializes the session on the server via POST /session/{id}/init.
+     * The server will not process messages on uninitialized sessions.
+     * Returns true if init succeeded or was already done, false if it failed.
+     * When false the caller should still try sendMessageAsync — the server
+     * may have a default model and the retry will happen on the next call.
+     */
+    /** When set, message and part events for this ID are suppressed (init welcome message). */
+    private var suppressedInitMsgId: String? = null
+    /** Watch for the first assistant message emitted after initSession. */
+    private var watchForInitMsg = false
+
+    private suspend fun initializeSession(): Boolean {
+        if (sessionInitialized) return true
+        val api = connectionManager.getApi() ?: return false
+
+        val lastMsgId = messageStore.messages.value.lastOrNull()?.message?.id
+        val request = InitSessionRequest(
+            messageID = lastMsgId ?: ""
+        )
+        val directory = getDirectory()
+        AppLog.w(TAG, "initSession: calling (msgId=${lastMsgId ?: "none"})")
+        val result = safeApiCall { api.initSession(sessionId, request, directory) }
+        return when (result) {
+            is ApiResult.Success -> {
+                AppLog.w(TAG, "initSession: ok")
+                sessionInitialized = true
+                watchForInitMsg = true
+                true
+            }
+            is ApiResult.Error -> {
+                AppLog.w(TAG, "initSession: failed: ${result.message}")
+                false
+            }
+        }
+    }
+
     // --- SSE event routing ---
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -258,6 +397,16 @@ class ChatViewModel constructor(
                 }
                 .collect { event ->
                     AppLog.d(TAG, "observeEvents: Received ${event::class.simpleName}")
+                    // Log key events at warning level for release builds
+                    when (event) {
+                        is OpenCodeEvent.Connected -> AppLog.w(TAG, "SSE: Connected")
+                        is OpenCodeEvent.Disconnected -> AppLog.w(TAG, "SSE: Disconnected")
+                        is OpenCodeEvent.MessageUpdated -> AppLog.w(TAG, "SSE: MessageUpdated id=${event.message.id} role=${event.message::class.simpleName}")
+                        is OpenCodeEvent.SessionStatusChanged -> AppLog.w(TAG, "SSE: SessionStatusChanged busy=${event.status is SessionStatus.Busy}")
+                        is OpenCodeEvent.SessionIdle -> AppLog.w(TAG, "SSE: SessionIdle")
+                        is OpenCodeEvent.SessionError -> AppLog.w(TAG, "SSE: SessionError")
+                        else -> {}
+                    }
                     handleEvent(event)
                 }
         }
@@ -267,14 +416,40 @@ class ChatViewModel constructor(
         when (event) {
             is OpenCodeEvent.MessageUpdated -> {
                 if (event.message.sessionID == sessionId) {
-                    messageStore.upsertMessage(event.message)
+                    if (watchForInitMsg && event.message is Message.Assistant) {
+                        suppressedInitMsgId = event.message.id
+                        watchForInitMsg = false
+                        AppLog.w(TAG, "Suppressed init welcome message id=${event.message.id}")
+                    } else if (suppressedInitMsgId != event.message.id) {
+                        messageStore.upsertMessage(event.message)
+                    }
                 }
             }
             is OpenCodeEvent.MessagePartUpdated -> {
+                if (suppressedInitMsgId == event.part.messageID) return@handleEvent
                 if (event.part.sessionID == sessionId) {
-                    // Route through buffer — upsertPart was bypassing coalescing entirely,
-                    // causing one full recomposition per SSE token (30-50/sec during streaming).
                     messageStore.upsertPartBuffered(event.part, event.delta)
+                }
+            }
+            is OpenCodeEvent.MessagePartDelta -> {
+                if (suppressedInitMsgId == event.messageID) return@handleEvent
+                if (event.sessionID == sessionId) {
+                    when (event.field) {
+                        "text" -> {
+                            val part = Part.Text(
+                                id = event.partID, sessionID = event.sessionID,
+                                messageID = event.messageID, text = "", isStreaming = true
+                            )
+                            messageStore.upsertPartBuffered(part, event.delta)
+                        }
+                        "reasoning" -> {
+                            val part = Part.Reasoning(
+                                id = event.partID, sessionID = event.sessionID,
+                                messageID = event.messageID, text = ""
+                            )
+                            messageStore.upsertPartBuffered(part, event.delta)
+                        }
+                    }
                 }
             }
             is OpenCodeEvent.MessageRemoved -> {
@@ -328,6 +503,7 @@ class ChatViewModel constructor(
             is OpenCodeEvent.SessionError -> {
                 if (event.sessionID == sessionId) {
                     AppLog.e(TAG, "Session error: ${event.error?.message}")
+                    sessionInitialized = false
                     _uiState.update {
                         it.copy(
                             isBusy = false,
@@ -351,9 +527,93 @@ class ChatViewModel constructor(
                 }
             }
             is OpenCodeEvent.PermissionReplied -> {
-                if (isOwnedSession(event.sessionID)) {
+                if (isOwnedSession(event.requestID)) {
                     dialogManager.clearPermissionByRequestId(event.requestID)
                 }
+            }
+            is OpenCodeEvent.Connected -> {
+                viewModelScope.launch {
+                    val api = connectionManager.getApi() ?: return@launch
+                    try {
+                        val statuses = api.getSessionStatuses()
+                        val myStatus = statuses[sessionId]
+                        val statusLabel = myStatus?.type ?: "unknown"
+                        AppLog.d(TAG, "SSE reconnected, session status: $statusLabel")
+                        val busy = myStatus?.type == "busy" || myStatus?.type == "retry"
+                        _uiState.update { it.copy(isBusy = busy, isSending = if (!busy) false else it.isSending) }
+                        if (!busy) sendQueuedMessageIfAny()
+
+                        // Re-discover pending questions that may have been missed during disconnect
+                        val pendingQuestions = api.getPendingQuestions()
+                        for (q in pendingQuestions) {
+                            if (q.sessionID == sessionId) {
+                                dialogManager.enqueueQuestion(
+                                    QuestionRequest(
+                                        id = q.id, sessionID = q.sessionID,
+                                        questions = q.questions.map { qq ->
+                                            Question(
+                                                header = qq.header, question = qq.question,
+                                                options = qq.options.map { o -> QuestionOption(label = o.label, description = o.description) },
+                                                multiple = qq.multiple, custom = qq.custom
+                                            )
+                                        },
+                                        tool = q.tool?.let { QuestionToolRef(messageID = it.messageID, callID = it.callID) }
+                                    )
+                                )
+                            }
+                        }
+
+                        // Re-discover pending permissions that may have been missed
+                        val pendingPermissions = api.getPendingPermissions()
+                        for (p in pendingPermissions) {
+                            if (p.sessionID == sessionId) {
+                                dialogManager.enqueuePermission(
+                                    Permission(
+                                        id = p.id, type = p.permission,
+                                        patterns = p.patterns, sessionID = p.sessionID,
+                                        messageID = p.tool?.messageID ?: "",
+                                        callID = p.tool?.callID, title = "",
+                                        metadata = p.metadata, always = p.always
+                                    )
+                                )
+                            }
+                        }
+                    } catch (_: Exception) {
+                        AppLog.w(TAG, "Failed to reload session after SSE reconnect")
+                    }
+                }
+            }
+            is OpenCodeEvent.Disconnected -> {
+                _uiState.update { it.copy(isBusy = false, isSending = false) }
+            }
+            is OpenCodeEvent.SessionDeleted -> {
+                if (event.session.id == sessionId) {
+                    _uiState.update { it.copy(isBusy = false, isSending = false, error = "Session deleted") }
+                }
+            }
+            is OpenCodeEvent.SessionDiff -> {
+                if (event.sessionID == sessionId && event.diffs.isNotEmpty()) {
+                    AppLog.d(TAG, "Session diff: ${event.diffs.size} files changed")
+                }
+            }
+            is OpenCodeEvent.SessionCompacted -> {
+                if (event.sessionID == sessionId) {
+                    AppLog.d(TAG, "Session compacted")
+                }
+            }
+            is OpenCodeEvent.CommandExecuted -> {
+                if (event.sessionID == sessionId) {
+                    AppLog.d(TAG, "Command executed: ${event.name}")
+                }
+            }
+            is OpenCodeEvent.FileEdited -> {
+                AppLog.d(TAG, "File edited: ${event.file}")
+            }
+            is OpenCodeEvent.InstallationUpdateAvailable -> {
+                _uiState.update { it.copy(updateVersion = event.version) }
+            }
+            is OpenCodeEvent.Error -> {
+                AppLog.e(TAG, "SSE error: ${event.throwable.message}")
             }
             else -> {}
         }
@@ -378,19 +638,27 @@ class ChatViewModel constructor(
                 return@launch
             }
 
+            initializeSession()
+
             val parts = buildPartInputs(text, attachedFiles)
+            val reasoningEffort = settingsDataStore.reasoningEffort.first()
+            val reasoning = dev.blazelight.p4oc.data.remote.dto.ReasoningConfigDto(effort = reasoningEffort)
             val request = SendMessageRequest(
                 parts = parts,
                 agent = selectedAgent,
-                model = selectedModel
+                model = selectedModel,
+                reasoning = reasoning
             )
 
+            AppLog.w(TAG, "sendMessage: calling sendMessageAsync")
             val result = safeApiCall { api.sendMessageAsync(sessionId, request, getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
-                    AppLog.d(TAG, "sendMessage: Async call succeeded, waiting for SSE events")
+                    AppLog.w(TAG, "sendMessage: ok, waiting for SSE")
+                    _uiState.update { it.copy(isSending = false) }
                 }
                 is ApiResult.Error -> {
+                    AppLog.w(TAG, "sendMessage: failed: ${result.message}")
                     _uiState.update {
                         it.copy(
                             isSending = false,
@@ -446,19 +714,27 @@ class ChatViewModel constructor(
                 return@launch
             }
 
+            initializeSession()
+
             val parts = buildPartInputs(queued.text, queued.attachedFiles)
+            val reasoningEffort = settingsDataStore.reasoningEffort.first()
+            val reasoning = dev.blazelight.p4oc.data.remote.dto.ReasoningConfigDto(effort = reasoningEffort)
             val request = SendMessageRequest(
                 parts = parts,
                 agent = queued.agent,
-                model = queued.model
+                model = queued.model,
+                reasoning = reasoning
             )
 
+            AppLog.w(TAG, "sendQueuedMessageIfAny: calling sendMessageAsync")
             val result = safeApiCall { api.sendMessageAsync(sessionId, request, getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
-                    AppLog.d(TAG, "sendQueuedMessageIfAny: Queued message sent successfully")
+                    AppLog.w(TAG, "sendQueuedMessageIfAny: ok, waiting for SSE")
+                    _uiState.update { it.copy(isSending = false) }
                 }
                 is ApiResult.Error -> {
+                    AppLog.w(TAG, "sendQueuedMessageIfAny: failed: ${result.message}")
                     _uiState.update {
                         it.copy(
                             isSending = false,
@@ -492,9 +768,10 @@ class ChatViewModel constructor(
     fun respondToPermission(permissionId: String, response: String) {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: return@launch
+            val resolvedId = dialogManager.resolvePermissionId(permissionId)
             val request = PermissionResponseRequest(reply = response)
-            safeApiCall { api.respondToPermission(permissionId, request, getDirectory()) }
-            dialogManager.clearPermission(permissionId)
+            safeApiCall { api.respondToPermission(resolvedId, request, getDirectory()) }
+            dialogManager.clearPermission(resolvedId)
         }
     }
 
@@ -743,7 +1020,8 @@ data class ChatUiState(
     val todos: List<Todo> = emptyList(),
     val isLoadingTodos: Boolean = false,
     val queuedMessage: QueuedMessage? = null,
-    val abortSummary: AbortSummary? = null
+    val abortSummary: AbortSummary? = null,
+    val updateVersion: String? = null
 )
 
 data class QueuedMessage(

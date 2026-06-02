@@ -1,0 +1,14 @@
+Ldev/blazelight/p4oc/MainActivity;
+Ldev/blazelight/p4oc/PocketCodeApp;
+Ldev/blazelight/p4oc/di/KoinModules;
+Ldev/blazelight/p4oc/core/network/ConnectionManager;
+Ldev/blazelight/p4oc/ui/screens/sessions/SessionListScreenKt;
+Ldev/blazelight/p4oc/ui/screens/chat/ChatScreenKt;
+Ldev/blazelight/p4oc/ui/tabs/TabManager;
+Ldev/blazelight/p4oc/core/datastore/SettingsDataStore;
+Lkotlinx/coroutines/CoroutineScope;
+Lokhttp3/OkHttpClient;
+Landroidx/compose/runtime/Composer;
+Landroidx/compose/foundation/lazy/LazyColumn;
+Landroidx/navigation/NavHost;
+Landroidx/lifecycle/ViewModel;

@@ -1,57 +1,72 @@
 package dev.blazelight.p4oc.core.performance
 
-/**
- * NativeScrollOptimizer — JNI wrapper for native spline fling physics.
- *
- * Mirrors Android's internal OverScroller spline decay in C++.
- * Used to pre-compute fling targets and smooth the scroll predictor
- * without any JVM allocation on each touch event frame.
- *
- * Benefits:
- *  - VelocityTracker.addSample():   ~4ns  (ring-buffer write, no alloc)
- *  - computeVelocity():             ~8ns  (least-squares, integer-only inner loop)
- *  - flingFrame():                  ~6ns  (cubic evaluation, no GC)
- *  vs Kotlin compose equivalents:  ~200-500ns each (JVM dispatch + boxing)
- */
 object NativeScrollOptimizer {
 
-    init {
-        System.loadLibrary("p4oc_scroll")
+    @Volatile private var loadAttempted = false
+    @Volatile private var nativeAvailable = false
+
+    @Synchronized fun ensureLoaded(): Boolean {
+        if (loadAttempted) return nativeAvailable
+        loadAttempted = true
+        return try {
+            System.loadLibrary("p4oc_scroll")
+            nativeAvailable = true
+            true
+        } catch (_: Throwable) {
+            nativeAvailable = false
+            false
+        }
     }
 
-    fun create(): Long = nativeCreate()
-    fun destroy(handle: Long) = nativeDestroy(handle)
+    // ── Handle lifecycle ─────────────────────────────────────────────────────
+
+    private const val INVALID_HANDLE = 0L
+
+    fun create(): Long {
+        if (ensureLoaded()) return nativeCreate()
+        return INVALID_HANDLE
+    }
+
+    fun destroy(handle: Long) {
+        if (nativeAvailable && handle != INVALID_HANDLE) nativeDestroy(handle)
+    }
 
     // ── Touch velocity tracking ───────────────────────────────────────────────
 
-    /** Record a touch event. timeNs = SystemClock.elapsedRealtimeNanos() */
-    fun addSample(handle: Long, timeNs: Long, positionPx: Float) =
-        nativeAddSample(handle, timeNs, positionPx)
+    fun addSample(handle: Long, timeNs: Long, positionPx: Float) {
+        if (nativeAvailable && handle != INVALID_HANDLE) { nativeAddSample(handle, timeNs, positionPx); return }
+        // no-op fallback — velocity tracking not available
+    }
 
-    /** Compute velocity in px/s via least-squares regression over last 8 samples */
-    fun computeVelocity(handle: Long): Float = nativeComputeVelocity(handle)
+    fun computeVelocity(handle: Long): Float {
+        if (nativeAvailable && handle != INVALID_HANDLE) return nativeComputeVelocity(handle)
+        return 0f
+    }
 
-    fun resetTracker(handle: Long) = nativeResetTracker(handle)
+    fun resetTracker(handle: Long) {
+        if (nativeAvailable && handle != INVALID_HANDLE) { nativeResetTracker(handle); return }
+    }
 
     // ── Spline fling ─────────────────────────────────────────────────────────
 
-    /**
-     * Start a fling with the given velocity.
-     * [friction] = physicalCoeff * screenDensity * ViewConfiguration.scrollFriction
-     * Typical value: ~5.8f (density=2.0 * coeff=2.9)
-     */
-    fun startFling(handle: Long, velocityPxS: Float, friction: Float = 5.8f) =
-        nativeStartFling(handle, velocityPxS, friction)
+    fun startFling(handle: Long, velocityPxS: Float, friction: Float = 5.8f) {
+        if (nativeAvailable && handle != INVALID_HANDLE) { nativeStartFling(handle, velocityPxS, friction); return }
+    }
 
-    /**
-     * Query fling state at [elapsedS] seconds after startFling().
-     * Returns [positionOffset, currentVelocity, isRunning(1f/0f)]
-     */
-    fun flingFrame(handle: Long, elapsedS: Float): FloatArray =
-        nativeFlingFrame(handle, elapsedS)
+    fun flingFrame(handle: Long, elapsedS: Float): FloatArray {
+        if (nativeAvailable && handle != INVALID_HANDLE) return nativeFlingFrame(handle, elapsedS)
+        return floatArrayOf(0f, 0f, 0f)
+    }
 
-    fun flingDuration(handle: Long): Float = nativeFlingDuration(handle)
-    fun flingDistance(handle: Long): Float = nativeFlingDistance(handle)
+    fun flingDuration(handle: Long): Float {
+        if (nativeAvailable && handle != INVALID_HANDLE) return nativeFlingDuration(handle)
+        return 0f
+    }
+
+    fun flingDistance(handle: Long): Float {
+        if (nativeAvailable && handle != INVALID_HANDLE) return nativeFlingDistance(handle)
+        return 0f
+    }
 
     // ── JNI ──────────────────────────────────────────────────────────────────
 

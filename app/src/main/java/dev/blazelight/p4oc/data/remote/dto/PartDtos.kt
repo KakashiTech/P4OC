@@ -86,7 +86,14 @@ data class SendMessageRequest(
     val noReply: Boolean? = null,
     val system: String? = null,
     val tools: JsonObject? = null,
+    val reasoning: ReasoningConfigDto? = null,
     val parts: List<PartInputDto>
+)
+
+@Serializable
+data class ReasoningConfigDto(
+    val effort: String,
+    val summary: String? = null
 )
 
 @Serializable

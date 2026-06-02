@@ -72,7 +72,8 @@ fun ModelAgentSelectorBar(
     favoriteModels: Set<ModelInput> = emptySet(),
     recentModels: List<ModelInput> = emptyList(),
     onToggleFavorite: (ModelInput) -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    trailingContent: @Composable () -> Unit = {}
 ) {
     val theme = LocalOpenCodeTheme.current
     var showModelPicker by remember { mutableStateOf(false) }
@@ -180,6 +181,7 @@ fun ModelAgentSelectorBar(
                 )
             }
         }
+        trailingContent()
     }
 
     if (showModelPicker) {

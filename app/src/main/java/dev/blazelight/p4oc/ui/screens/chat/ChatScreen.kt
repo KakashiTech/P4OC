@@ -10,11 +10,13 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import dev.blazelight.p4oc.ui.components.chat.SkillPickerBottomSheet
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,8 +35,10 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.*
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
@@ -43,6 +47,9 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import android.app.Activity
+import android.view.WindowManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -59,9 +66,16 @@ import dev.blazelight.p4oc.domain.model.SessionConnectionState
 import dev.blazelight.p4oc.domain.model.Agent
 import dev.blazelight.p4oc.domain.model.Model
 import dev.blazelight.p4oc.core.datastore.VisualSettings
-import dev.blazelight.p4oc.ui.screens.chat.ChatUiState
+import dev.blazelight.p4oc.domain.model.Session
+import dev.blazelight.p4oc.domain.model.PermissionResponse
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.sample
 import dev.blazelight.p4oc.ui.components.chat.AbortSummaryCard
+import dev.blazelight.p4oc.ui.components.chat.LocalIsThinkingPhase
 import dev.blazelight.p4oc.ui.components.chat.ChatInputBar
 import dev.blazelight.p4oc.ui.components.chat.FilePickerDialog
 import dev.blazelight.p4oc.ui.components.chat.JumpToBottomButton
@@ -73,6 +87,7 @@ import dev.blazelight.p4oc.ui.components.todo.TodoTrackerSheet
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
 import dev.blazelight.p4oc.ui.components.TuiTerminalMenu
 import dev.blazelight.p4oc.ui.components.TuiTerminalMenuItem
+import dev.blazelight.p4oc.ui.components.ContextUsage
 import dev.blazelight.p4oc.ui.components.TuiTopBar
 import dev.blazelight.p4oc.ui.components.TuiConfirmDialog
 import dev.blazelight.p4oc.ui.components.TuiLoadingScreen
@@ -81,12 +96,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.components.LocalAnimationsPaused
+
+private val ASSISTANT_TYPES = setOf("text", "reasoning", "tools", "file", "patch", "reasoning_group")
 
 // Data classes for optimized state management (currently not used but kept for future optimization)
 data class CombinedChatState(
@@ -116,26 +139,41 @@ fun ChatScreen(
     onOpenSubSession: ((String) -> Unit)? = null,
     onSessionLoaded: ((sessionId: String, sessionTitle: String) -> Unit)? = null,
     onConnectionStateChanged: ((SessionConnectionState?) -> Unit)? = null,
-    isActiveTab: Boolean = true
+    isActiveTab: Boolean = true,
+    scrollState: LazyListState? = null,
 ) {
-    // Optimized state collection - reduce recompositions by grouping related states
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val messages by viewModel.messages.collectAsStateWithLifecycle()
-    // Stable Long version key — increments on every mutation, never loses equality
-    // on list copy(). Use this as remember() key instead of the messages list reference.
-    val messagesVersion by viewModel.messagesVersion.collectAsStateWithLifecycle()
+    // Granular flows — each emits only when its specific field changes.
+    // Keeps ChatScreen recomposition scoped to what actually changed.
+    val messages = viewModel.messages.collectAsStateWithLifecycle()
+    val messagesVersion = viewModel.messagesVersion.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val branchName by viewModel.branchName.collectAsStateWithLifecycle()
     val sessionConnectionState by viewModel.sessionConnectionState.collectAsStateWithLifecycle()
     val visualSettings by viewModel.visualSettings.collectAsStateWithLifecycle()
+    val session by viewModel.session.collectAsStateWithLifecycle()
+    val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val abortSummary by viewModel.abortSummary.collectAsStateWithLifecycle()
+    val errorMsg by viewModel.errorMsg.collectAsStateWithLifecycle()
+    val todos by viewModel.todos.collectAsStateWithLifecycle()
+    val contextUsage by viewModel.contextUsage.collectAsStateWithLifecycle()
 
-    // isLoading se obtiene de uiState
+    val screenContext = LocalContext.current
+    DisposableEffect(isBusy) {
+        val window = (screenContext as? Activity)?.window
+        if (isBusy) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
-    // Dialog states - collected separately to avoid unnecessary recompositions
     val pendingQuestion by viewModel.dialogManager.pendingQuestion.collectAsStateWithLifecycle()
     val pendingPermissionsByCallId by viewModel.dialogManager.pendingPermissionsByCallId.collectAsStateWithLifecycle()
-    
-    // Model/Agent states - collect only what's needed
+    val reasoningEffort by viewModel.reasoningEffort.collectAsStateWithLifecycle()
     val availableAgents by viewModel.modelAgentManager.availableAgents.collectAsStateWithLifecycle()
     val selectedAgent by viewModel.modelAgentManager.selectedAgent.collectAsStateWithLifecycle()
     val availableModels by viewModel.modelAgentManager.availableModels.collectAsStateWithLifecycle()
@@ -146,129 +184,81 @@ fun ChatScreen(
     val pickerFiles by viewModel.filePickerManager.pickerFiles.collectAsStateWithLifecycle()
     val pickerCurrentPath by viewModel.filePickerManager.pickerCurrentPath.collectAsStateWithLifecycle()
     val isPickerLoading by viewModel.filePickerManager.isPickerLoading.collectAsStateWithLifecycle()
-    
-    // Notify parent when session is loaded
-    LaunchedEffect(uiState.session) {
-        uiState.session?.let { session ->
-            onSessionLoaded?.invoke(session.id, session.title)
-        }
+
+    LaunchedEffect(session) {
+        session?.let { onSessionLoaded?.invoke(it.id, it.title) }
     }
-    
-    // Propagate connection state changes to parent (for tab indicator)
     LaunchedEffect(sessionConnectionState) {
         onConnectionStateChanged?.invoke(sessionConnectionState)
     }
-    
-    // Mark as read when tab becomes active
     LaunchedEffect(isActiveTab) {
-        if (isActiveTab) {
-            viewModel.markAsRead()
-        }
+        if (isActiveTab) viewModel.markAsRead()
     }
-    
-    // Convert setting string to ToolWidgetState
+
     val defaultToolWidgetState = remember(visualSettings.toolWidgetDefaultState) {
         ToolWidgetState.fromString(visualSettings.toolWidgetDefaultState)
     }
-
-    // isThinking: pure derivedStateOf — no messages reference key, tracks internally.
-    val isThinking by remember {
-        derivedStateOf {
-            messages.lastOrNull()?.parts?.any { it is Part.Reasoning && it.time?.end == null } == true
-        }
-    }
-
-    val listState = rememberLazyListState()
+    val listState = scrollState ?: rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
-
-    val nativeScrollHandle = remember { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.create() }
-    DisposableEffect(Unit) { onDispose { dev.blazelight.p4oc.core.performance.NativeScrollOptimizer.destroy(nativeScrollHandle) } }
-    // NativeFlingBehavior drives every fling frame through the C++ SplineFling engine.
-    // Friction tuned to 52% of Android default — iOS-length glide, no JVM alloc per frame.
-    val smoothFling = dev.blazelight.p4oc.core.performance.rememberNativeFlingBehavior(nativeScrollHandle)
-
-    val isAtBottom by remember {
-        derivedStateOf {
-            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 120
-        }
-    }
-    var userScrolledAway by remember { mutableStateOf(false) }
-    var hasNewContentWhileAway by remember { mutableStateOf(false) }
-
-    // Observer 1: scroll physics only — reads NO messages state, zero allocation per frame.
-    // Throttles SSE flushes and tracks user-scrolled-away purely from list scroll state.
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress to isAtBottom }
-            .collect { (scrolling, atBottom) ->
-                viewModel.messageStore.setFlushDelayWhileScrolling(scrolling)
-                if (scrolling && !atBottom) userScrolledAway = true
-                if (atBottom && !scrolling && userScrolledAway) {
-                    userScrolledAway = false
-                    hasNewContentWhileAway = false
-                }
-            }
-    }
-
-    // Observer 2: auto-scroll on new messages — completely separate from scroll observer.
-    // Uses animateScrollToItem for a smooth glide instead of a teleport.
-    // Debounced: only scrolls after 80ms of no new versions to avoid fighting rapid SSE tokens.
-    LaunchedEffect(messagesVersion) {
-        val count = messages.size
-        if (count == 0) return@LaunchedEffect
-        if (!userScrolledAway && !listState.isScrollInProgress) {
-            kotlinx.coroutines.delay(80)
-            if (!listState.isScrollInProgress) {
-                listState.animateScrollToItem(0)
-            }
-        } else if (userScrolledAway) {
-            hasNewContentWhileAway = true
-        }
-    }
-
-    // Scroll to bottom once when session first loads
-    LaunchedEffect(uiState.session?.id) {
-        if (messages.isNotEmpty()) listState.scrollToItem(0)
-    }
-
+    val smoothFling = dev.blazelight.p4oc.core.performance.rememberSmoothFlingBehavior()
+    val isAtBottom = remember { derivedStateOf { listState.firstVisibleItemIndex == 0 } }
+    val userScrolledAway = remember { mutableStateOf(false) }
+    val hasNewContentWhileAway = remember { mutableStateOf(false) }
+    var focusTriggerCount by remember { mutableIntStateOf(0) }
     var showCommandPalette by remember { mutableStateOf(false) }
     var showTodoTracker by remember { mutableStateOf(false) }
     var showFilePicker by remember { mutableStateOf(false) }
     var showRevertDialog by remember { mutableStateOf<String?>(null) }
     var showSkillPicker by remember { mutableStateOf(false) }
 
-    val lastChangedIds by viewModel.lastChangedIds.collectAsStateWithLifecycle()
-
-    // Delta-diff flatItems: on each version bump try patchFlatItems() first (O(changed)).
-    // Falls back to full buildFlatItems() only when structure changes (new msg / loadMore).
-    // Uses mutableStateOf directly - the state read inside remember doesn't trigger recomposition.
-    val prevFlatItemsRef = remember { mutableStateOf<List<FlatChatItem>>(emptyList()) }
-    val flatItems = remember(messagesVersion) {
-        // Read the ref value without triggering recomposition observation
-        val prevList = prevFlatItemsRef.value
-        val patched = patchFlatItems(prevList, messages, lastChangedIds)
-        if (patched != null) {
-            AppLog.d("ChatScreen", "flatItems patched: old=${prevList.size} new=${patched.size} changed=${lastChangedIds.size}")
-        } else {
-            AppLog.d("ChatScreen", "flatItems rebuild: messages=${messages.size}")
+    val isThinking by remember {
+        derivedStateOf {
+            messages.value.lastOrNull()?.parts?.any { it is Part.Reasoning && it.time?.end == null } == true
         }
-        val result = patched ?: buildFlatItems(groupMessagesIntoBlocks(messages))
-        prevFlatItemsRef.value = result
-        result
     }
 
-    // Pagination keyed on version too.
-    val hasMoreMessages   = remember(messagesVersion) { viewModel.hasMoreMessages() }
-    val totalMessageCount = remember(messagesVersion) { viewModel.getTotalMessageCount() }
-    val visibleMessageCount = messages.size
+    val thinkingMessageIds by remember {
+        derivedStateOf {
+            messages.value
+                .filter { it.parts.any { p -> p is Part.Reasoning && p.time?.end == null } }
+                .map { it.message.id }
+                .toSet()
+        }
+    }
 
-    // isBusy / isLoading isolated — consumers only recompose on boolean flip.
-    val isBusy    by remember { derivedStateOf { uiState.isBusy } }
-    val isLoading by remember { derivedStateOf { uiState.isLoading } }
+    val flatItems = FlatItemsProvider(
+        viewModel = viewModel,
+        messages = messages,
+        messagesVersion = messagesVersion,
+        listState = listState,
+    )
 
-    // Stable lambdas — ViewModel reference is constant for session lifetime.
-    val onToolApprove = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "once") } }
-    val onToolDeny    = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "reject") } }
-    val onToolAlways  = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, "always") } }
+    ScrollObservers(
+        viewModel = viewModel,
+        messages = messages,
+        messagesVersion = messagesVersion,
+        listState = listState,
+        isAtBottom = isAtBottom,
+        session = session,
+        userScrolledAway = userScrolledAway,
+        hasNewContentWhileAway = hasNewContentWhileAway,
+        flatItems = flatItems,
+        onScrollToBottom = {},
+    )
+
+    val hasMoreMessages by remember {
+        derivedStateOf { messagesVersion.value; viewModel.hasMoreMessages() }
+    }
+    val totalMessageCount by remember {
+        derivedStateOf { messagesVersion.value; viewModel.getTotalMessageCount() }
+    }
+    val visibleMessageCount by remember {
+        derivedStateOf { messages.value.size }
+    }
+
+    val onToolApprove = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, PermissionResponse.ONCE.value) } }
+    val onToolDeny    = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, PermissionResponse.REJECT.value) } }
+    val onToolAlways  = remember(viewModel) { { id: String -> viewModel.respondToPermission(id, PermissionResponse.ALWAYS.value) } }
     val onRevert      = remember<(String) -> Unit> { { id -> showRevertDialog = id } }
     val onFork        = remember(viewModel, onOpenSubSession) {
         { messageId: String ->
@@ -281,7 +271,6 @@ fun ChatScreen(
 
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
-
     BackHandler {
         focusManager.clearFocus()
         keyboardController?.hide()
@@ -289,13 +278,11 @@ fun ChatScreen(
     }
 
     Scaffold(
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        contentWindowInsets = WindowInsets(0),
         topBar = {
-            // Session title from loaded session
-            val displayTitle = uiState.session?.title ?: "Chat"
             ChatTopBar(
                 modifier = Modifier,
-                title = displayTitle,
+                title = session?.title ?: "Chat",
                 connectionState = connectionState,
                 onBack = onNavigateBack,
                 onTerminal = onOpenTerminal,
@@ -305,40 +292,53 @@ fun ChatScreen(
                     showCommandPalette = true
                 },
                 onViewChanges = {
-                    uiState.session?.id?.let { onViewSessionDiff?.invoke(it) }
+                    session?.id?.let { onViewSessionDiff?.invoke(it) }
                 },
                 onAbort = viewModel::abortSession,
-                isBusy = uiState.isBusy,
+                isBusy = isBusy,
                 branchName = branchName,
-                todoCount = uiState.todos.count { it.status == "in_progress" || it.status == "pending" },
-                inProgressCount = uiState.todos.count { it.status == "in_progress" },
+                todoCount = todos.count { it.status == "in_progress" || it.status == "pending" },
+                inProgressCount = todos.count { it.status == "in_progress" },
                 onTodos = {
                     viewModel.loadTodos()
                     showTodoTracker = true
                 },
                 onSkills = {
                     showSkillPicker = true
-                }
+                },
+                contextUsage = contextUsage
             )
         },
         bottomBar = {
-            // Sub-agent sessions are read-only — hide input bar and model selector
-            val isSubAgent = uiState.session?.parentID != null
+            val isSubAgent = session?.parentID != null
             if (!isSubAgent) {
+                val inputText by viewModel.inputText.collectAsStateWithLifecycle()
+                val isSending by viewModel.isSending.collectAsStateWithLifecycle()
+                val queuedMessage by viewModel.queuedMessage.collectAsStateWithLifecycle()
+                val commands by viewModel.commands.collectAsStateWithLifecycle()
                 Column(
                     modifier = Modifier
-                        .navigationBarsPadding()
                         .imePadding()
+                        .navigationBarsPadding()
                         .background(LocalOpenCodeTheme.current.backgroundElement)
                 ) {
-                    var localInput by remember { mutableStateOf(uiState.inputText) }
-                    LaunchedEffect(uiState.inputText) {
-                        if (uiState.inputText != localInput) localInput = uiState.inputText
+                    var localInput by remember { mutableStateOf(inputText) }
+                    LaunchedEffect(inputText) {
+                        if (inputText != localInput) localInput = inputText
                     }
                     ChatInputBar(
                         value = localInput,
+                        focusTriggerCount = focusTriggerCount,
                         isThinking = isThinking,
                         modelSelector = {
+                            val t = LocalOpenCodeTheme.current
+                            val next = when (reasoningEffort) {
+                                "auto" -> "low"
+                                "low" -> "medium"
+                                "medium" -> "high"
+                                "high" -> "max"
+                                else -> "auto"
+                            }
                             ModelAgentSelectorBar(
                                 availableAgents = availableAgents,
                                 selectedAgent = selectedAgent,
@@ -348,13 +348,30 @@ fun ChatScreen(
                                 onModelSelected = viewModel.modelAgentManager::selectModel,
                                 favoriteModels = favoriteModels,
                                 recentModels = recentModels,
-                                onToggleFavorite = viewModel.modelAgentManager::toggleFavoriteModel
+                                onToggleFavorite = viewModel.modelAgentManager::toggleFavoriteModel,
+                                trailingContent = {
+                                    Text(
+                                        text = reasoningEffort,
+                                        modifier = Modifier
+                                            .clickable(role = Role.Button) { viewModel.updateReasoningEffort(next) }
+                                            .padding(horizontal = 4.dp),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = when (reasoningEffort) {
+                                            "low" -> t.success
+                                            "medium" -> t.warning
+                                            "high" -> t.warning.copy(alpha = 0.8f, red = 1f, green = 0.5f, blue = 0f)
+                                            "max" -> t.error
+                                            else -> t.textMuted
+                                        }
+                                    )
+                                }
                             )
                         },
                         agentSelector = { },
                         onValueChange = { text ->
                             localInput = text
-                            if (text.startsWith("/") && uiState.commands.isEmpty()) {
+                            if (text.startsWith("/") && commands.isEmpty()) {
                                 viewModel.loadCommands()
                             }
                         },
@@ -362,25 +379,27 @@ fun ChatScreen(
                             viewModel.updateInput(localInput)
                             viewModel.sendMessage()
                             localInput = ""
+                            focusTriggerCount++
                         },
-                        isLoading = uiState.isSending,
+                        isLoading = isSending,
                         enabled = connectionState is ConnectionState.Connected,
-                        isBusy = uiState.isBusy,
-                        hasQueuedMessage = uiState.queuedMessage != null,
+                        isBusy = isBusy,
+                        hasQueuedMessage = queuedMessage != null,
                         onQueueMessage = {
                             viewModel.updateInput(localInput)
                             viewModel.queueMessage()
                             localInput = ""
+                            focusTriggerCount++
                         },
                         onCancelQueue = { /* TODO: Implementar cancelacion de mensaje encolado */ },
-                        queuedMessagePreview = uiState.queuedMessage?.text,
+                        queuedMessagePreview = queuedMessage?.text,
                         attachedFiles = attachedFiles,
                         onAttachClick = {
-                            viewModel.filePickerManager.loadPickerFiles()
+                            viewModel.filePickerManager.loadPickerFiles(viewModel.getFilePickerStartDirectory())
                             showFilePicker = true
                         },
                         onRemoveAttachment = viewModel.filePickerManager::detachFile,
-                        commands = uiState.commands,
+                        commands = commands,
                         onCommandSelected = { },
                         requestFocus = isActiveTab
                     )
@@ -394,8 +413,7 @@ fun ChatScreen(
                     .fillMaxSize()
                     .padding(padding)
             ) {
-            // Revert active banner — isolated, only reads uiState.session.revert
-            val revert = uiState.session?.revert
+            val revert = session?.revert
             if (revert != null) {
                 RevertActiveBanner(
                     onUnrevert = viewModel::unrevertSession,
@@ -405,37 +423,40 @@ fun ChatScreen(
 
             // Main message list — isolated composable, no uiState/connectionState reads.
             // Only recomposes when flatItems, pendingQuestion, abortSummary, or pagination change.
-            ChatMessageList(
-                listState = listState,
-                flingBehavior = smoothFling,
-                flatItems = flatItems,
-                pendingQuestion = pendingQuestion,
-                abortSummary = uiState.abortSummary,
-                hasMoreMessages = hasMoreMessages,
-                visibleMessageCount = visibleMessageCount,
-                totalMessageCount = totalMessageCount,
-                onLoadMore = { viewModel.loadOlderMessages() },
-                onDismissQuestion = viewModel::dismissQuestion,
-                onRespondQuestion = { id, r -> viewModel.respondToQuestion(id, r) },
-                onToolApprove = onToolApprove,
-                onToolDeny = onToolDeny,
-                onToolAlways = onToolAlways,
-                onOpenSubSession = onOpenSubSession,
-                defaultToolWidgetState = defaultToolWidgetState,
-                pendingPermissionsByCallId = pendingPermissionsByCallId,
-                onRevert = onRevert,
-                onFork = onFork,
-                showEmpty = messages.isEmpty() && !isBusy && !isLoading,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 12.dp)
-            )
+            CompositionLocalProvider(LocalIsThinkingPhase provides (isBusy && isThinking)) {
+                ChatMessageList(
+                    listState = listState,
+                    flingBehavior = smoothFling,
+                    flatItems = flatItems,
+                    pendingQuestion = pendingQuestion,
+                    abortSummary = abortSummary,
+                    hasMoreMessages = hasMoreMessages,
+                    visibleMessageCount = visibleMessageCount,
+                    totalMessageCount = totalMessageCount,
+                    onLoadMore = { viewModel.loadOlderMessages() },
+                    onDismissQuestion = viewModel::dismissQuestion,
+                    onRespondQuestion = { id, r -> viewModel.respondToQuestion(id, r) },
+                    onToolApprove = onToolApprove,
+                    onToolDeny = onToolDeny,
+                    onToolAlways = onToolAlways,
+                    onOpenSubSession = onOpenSubSession,
+                    defaultToolWidgetState = defaultToolWidgetState,
+                    pendingPermissionsByCallId = pendingPermissionsByCallId,
+                    onRevert = onRevert,
+                    onFork = onFork,
+                    thinkingMessageIds = thinkingMessageIds,
+                    showEmpty = messages.value.isEmpty() && !isBusy && !isLoading,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = Spacing.lg)
+                )
+            }
 
             if (isLoading) {
                 TuiLoadingScreen(modifier = Modifier.align(Alignment.Center))
             }
 
-            uiState.error?.let { error ->
+            errorMsg?.let { error ->
                 TuiSnackbar(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -451,13 +472,16 @@ fun ChatScreen(
             }
 
             JumpToBottomButton(
-                visible = userScrolledAway && isBusy,
-                hasNewContent = hasNewContentWhileAway,
+                visible = userScrolledAway.value,
+                hasNewContent = hasNewContentWhileAway.value,
                 onClick = {
                     coroutineScope.launch {
-                        userScrolledAway = false
-                        hasNewContentWhileAway = false
-                        listState.scrollToItem(0)
+                        userScrolledAway.value = false
+                        hasNewContentWhileAway.value = false
+                        val idx = flatItems.indexOfFirst {
+                            it !is FlatChatItem.AssistantBarStart && it !is FlatChatItem.AssistantBarEnd
+                        }
+                        listState.animateScrollToItem(if (idx < 0) 0 else idx)
                     }
                 },
                 modifier = Modifier
@@ -469,9 +493,11 @@ fun ChatScreen(
     }
 
     if (showCommandPalette) {
+        val commands by viewModel.commands.collectAsStateWithLifecycle()
+        val isLoadingCommands by viewModel.isLoadingCommands.collectAsStateWithLifecycle()
         CommandPalette(
-            commands = uiState.commands,
-            isLoading = uiState.isLoadingCommands,
+            commands = commands,
+            isLoading = isLoadingCommands,
             onCommandSelected = { command, args ->
                 viewModel.executeCommand(command.name, args)
             },
@@ -480,9 +506,10 @@ fun ChatScreen(
     }
 
     if (showTodoTracker) {
+        val isLoadingTodos by viewModel.isLoadingTodos.collectAsStateWithLifecycle()
         TodoTrackerSheet(
-            todos = uiState.todos,
-            isLoading = uiState.isLoadingTodos,
+            todos = todos,
+            isLoading = isLoadingTodos,
             onDismiss = { showTodoTracker = false },
             onRefresh = { viewModel.loadTodos() }
         )
@@ -540,16 +567,152 @@ fun ChatScreen(
         )
     }
 
-    // === SKELETON REMOVED ===
-    // Removed skeleton to prevent background placeholders during loading
-    // Messages will appear directly without placeholder backgrounds
 }
 
-// INSTANT PAINT Skeleton removed - no longer needed
-// Messages appear directly without placeholder backgrounds
+private fun firstContentIndex(items: List<FlatChatItem>): Int {
+    val idx = items.indexOfFirst {
+        it !is FlatChatItem.AssistantBarStart && it !is FlatChatItem.AssistantBarEnd
+    }
+    return if (idx < 0) 0 else idx
+}
 
-// LoadingSkeleton removed - no longer needed
-// Messages appear directly without placeholder backgrounds
+@OptIn(FlowPreview::class)
+@Composable
+private fun ScrollObservers(
+    viewModel: ChatViewModel,
+    messages: State<List<MessageWithParts>>,
+    messagesVersion: State<Long>,
+    listState: LazyListState,
+    isAtBottom: State<Boolean>,
+    session: Session?,
+    userScrolledAway: MutableState<Boolean>,
+    hasNewContentWhileAway: MutableState<Boolean>,
+    flatItems: List<FlatChatItem>,
+    onScrollToBottom: () -> Unit = {},
+) {
+    var isAutoScrolling by remember { mutableStateOf(false) }
+
+    // Keep flatItems in compose state so LaunchedEffect closures see the latest reference
+    var currentFlatItems by remember { mutableStateOf(flatItems) }
+    currentFlatItems = flatItems
+
+    suspend fun scrollToBottom() {
+        val items = currentFlatItems
+        if (items.isEmpty()) return
+        val idx = items.indexOfFirst {
+            it !is FlatChatItem.AssistantBarStart && it !is FlatChatItem.AssistantBarEnd
+        }
+        listState.scrollToItem(if (idx < 0) 0 else idx)
+    }
+
+    var prevFlatItemsSize by remember { mutableStateOf(flatItems.size) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { messagesVersion.value to currentFlatItems.size }
+            .collect { (version, size) ->
+                if (size > prevFlatItemsSize && !userScrolledAway.value && !listState.isScrollInProgress) {
+                    prevFlatItemsSize = size
+                    isAutoScrolling = true
+                    try {
+                        scrollToBottom()
+                    } finally {
+                        isAutoScrolling = false
+                    }
+                }
+                if (size < prevFlatItemsSize) {
+                    prevFlatItemsSize = size
+                }
+            }
+    }
+
+    LaunchedEffect(Unit) {
+        snapshotFlow {
+            Pair(listState.isScrollInProgress, isAtBottom.value)
+        }.collect { (scrolling, atBottom) ->
+            viewModel.messageStore.setFlushDelayWhileScrolling(scrolling)
+            if (!atBottom && scrolling && !userScrolledAway.value && !isAutoScrolling) {
+                userScrolledAway.value = true
+            }
+            val wasAway = userScrolledAway.value
+            if (atBottom && !scrolling && wasAway) {
+                userScrolledAway.value = false
+                hasNewContentWhileAway.value = false
+                onScrollToBottom()
+            }
+        }
+    }
+
+    LaunchedEffect(session?.id) {
+        if (messages.value.isNotEmpty() &&
+            listState.firstVisibleItemIndex == 0 &&
+            listState.firstVisibleItemScrollOffset == 0
+        ) {
+            isAutoScrolling = true
+            try {
+                scrollToBottom()
+            } finally {
+                isAutoScrolling = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        snapshotFlow { messagesVersion.value }
+            .sample(80)
+            .collect { version ->
+                if (!userScrolledAway.value && isAtBottom.value && !listState.isScrollInProgress) {
+                    isAutoScrolling = true
+                    try {
+                        scrollToBottom()
+                    } finally {
+                        isAutoScrolling = false
+                    }
+                } else if (userScrolledAway.value) {
+                    hasNewContentWhileAway.value = true
+                }
+            }
+    }
+}
+
+@OptIn(FlowPreview::class)
+@Composable
+private fun FlatItemsProvider(
+    viewModel: ChatViewModel,
+    messages: State<List<MessageWithParts>>,
+    messagesVersion: State<Long>,
+    listState: LazyListState,
+): List<FlatChatItem> {
+    val lastChangedIds = viewModel.lastChangedIds.collectAsStateWithLifecycle()
+
+    class Ref<T>(var value: T)
+    val prevFlatItemsRef = remember { Ref<List<FlatChatItem>>(emptyList()) }
+
+    val compute: () -> List<FlatChatItem> = {
+        val currentMessages = messages.value
+        val currentChangedIds = lastChangedIds.value
+        val prevList = prevFlatItemsRef.value
+        val patched = patchFlatItems(prevList, currentMessages, currentChangedIds)
+        if (patched != null) {
+            AppLog.d("ChatScreen", "flatItems patched: old=${prevList.size} new=${patched.size} changed=${currentChangedIds.size}")
+        } else {
+            AppLog.d("ChatScreen", "flatItems rebuild: messages=${currentMessages.size}")
+        }
+        val result = patched ?: buildFlatItems(groupMessagesIntoBlocks(currentMessages))
+        if (result !== prevList) {
+            prevFlatItemsRef.value = result
+        }
+        result
+    }
+
+    val flatItems by produceState(initialValue = compute(), key1 = Unit) {
+        value = compute()
+        snapshotFlow { messagesVersion.value }
+            .drop(1)
+            .debounce(33)
+            .collectLatest { value = compute() }
+    }
+
+    return flatItems
+}
 
 @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -569,22 +732,20 @@ private fun ChatTopBar(
     todoCount: Int = 0,
     inProgressCount: Int = 0,
     onTodos: () -> Unit = {},
-    onSkills: () -> Unit = {}
+    onSkills: () -> Unit = {},
+    contextUsage: ContextUsage? = null
 ) {
-    // Unified Chat TopBar - coherent with MainTabScreen style
     val theme = LocalOpenCodeTheme.current
     var showOverflow by remember { mutableStateOf(false) }
-    
-    // NOTE: glow animation is isolated in ConnectionGlowDot below — do NOT inline it here.
-    // An inline rememberInfiniteTransition recomposes the entire ChatTopBar on every frame.
 
-    Column(
+        Column(
         modifier = modifier
             .fillMaxWidth()
             .background(theme.background)
-            .padding(horizontal = 12.dp, vertical = 0.dp) // No vertical padding for connector contact
+            .consumeWindowInsets(WindowInsets.statusBars)
+            .padding(horizontal = 12.dp, vertical = 0.dp)
     ) {
-        // Top connector - direct connection from MainTabScreen
+        // Top connector line
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -596,10 +757,10 @@ private fun ChatTopBar(
                     .background(theme.border.copy(alpha = 0.3f))
             )
             Text(
-                text = "├", // Changed from ┌ to ├ for direct connection
+                text = "├",
                 fontFamily = FontFamily.Monospace,
                 style = MaterialTheme.typography.bodySmall,
-                color = theme.accent.copy(alpha = 0.7f) // Matches MainTabScreen connector
+                color = theme.accent.copy(alpha = 0.7f)
             )
             Box(
                 modifier = Modifier
@@ -629,199 +790,20 @@ private fun ChatTopBar(
             )
         }
 
-        // Segmented terminal layout - 3 connected sections
+        // Main content row
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(24.dp) // More compact height
-                .background(theme.background),
+                .height(24.dp)
+                .background(theme.background)
+                .offset(x = (-8).dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Section 1: Back button segment - ASCII style
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 6.dp, vertical = 0.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Text(
-                    text = "[",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = theme.textMuted.copy(alpha = 0.6f),
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "←",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp,
-                    color = theme.accent.copy(alpha = 0.8f),
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .clickable(role = Role.Button, onClick = onBack)
-                        .padding(horizontal = 4.dp, vertical = 0.dp)
-                )
-                Text(
-                    text = "]",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = theme.textMuted.copy(alpha = 0.6f),
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            // ASCII connector 1
-            Text(
-                text = "┼",
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodySmall,
-                color = theme.accent.copy(alpha = 0.7f)
-            )
-
-            // Center section with proper weight distribution
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                // Section 2: Compact status indicators (truly centered)
-                Row(
-                    modifier = Modifier
-                        .wrapContentWidth()
-                        .border(1.dp, theme.border.copy(alpha = 0.4f))
-                        .background(theme.backgroundElement.copy(alpha = 0.08f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    // Compact status display
-                    Text(
-                        text = if (isBusy) "⚙" else "✦",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isBusy) theme.warning.copy(alpha = 0.9f) else theme.success.copy(alpha = 0.9f)
-                    )
-                    
-                    Text(
-                        text = if (isBusy) "run" else "idle",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isBusy) theme.warning.copy(alpha = 0.9f) else theme.success.copy(alpha = 0.9f),
-                        modifier = Modifier.padding(horizontal = 2.dp)
-                    )
-
-                    branchName?.let {
-                        Text(
-                            text = "·",
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.border.copy(alpha = 0.5f)
-                        )
-                        Text(
-                            text = it.take(6),
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.success.copy(alpha = 0.8f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    Text(
-                        text = "·",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = theme.border.copy(alpha = 0.5f)
-                    )
-                    Text(
-                        text = "●",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (connectionState is ConnectionState.Connected) theme.success else theme.warning.copy(alpha = 0.6f)
-                    )
-                }
-            }
-
-            // ASCII connector 2
-            Text(
-                text = "┼",
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodySmall,
-                color = theme.accent.copy(alpha = 0.7f)
-            )
-
-            // Section 3: Controls segment
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 6.dp, vertical = 0.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                if (isBusy) {
-                    var clickCount by remember { mutableIntStateOf(0) }
-                    val scope = rememberCoroutineScope()
-                    
-                    Text(
-                        text = "■",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = theme.error.copy(alpha = if (clickCount > 0) 1.0f else 0.8f),
-                        modifier = Modifier
-                            .clickable(role = Role.Button, onClick = {
-                                clickCount++
-                                if (clickCount == 1) {
-                                    // Reset after 2 seconds if no second click
-                                    scope.launch {
-                                        delay(2000)
-                                        if (clickCount == 1) clickCount = 0
-                                    }
-                                } else if (clickCount >= 2) {
-                                    onAbort()
-                                    clickCount = 0
-                                }
-                            })
-                            .padding(4.dp)
-                    )
-                }
-
-                if (todoCount > 0) {
+                    // Back button [←]
                     Row(
-                        modifier = Modifier
-                            .clickable(role = Role.Button, onClick = onTodos)
-                            .padding(2.dp),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "[",
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.textMuted.copy(alpha = 0.6f)
-                        )
-                        if (inProgressCount > 0) {
-                            TodoLiveDot(activeCount = inProgressCount)
-                        } else {
-                            Text(
-                                text = "$todoCount",
-                                fontFamily = FontFamily.Monospace,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = theme.accent.copy(alpha = 0.8f)
-                            )
-                        }
-                        Text(
-                            text = "]",
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.textMuted.copy(alpha = 0.6f)
-                        )
-                    }
-                }
-
-                // ASCII menu button with special brackets - wrapped in Box for menu positioning
-                Box {
-                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 0.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable(role = Role.Button, onClick = { showOverflow = true })
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
                         Text(
                             text = "[",
@@ -831,12 +813,14 @@ private fun ChatTopBar(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "☰",
+                            text = "←",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 14.sp,
                             color = theme.accent.copy(alpha = 0.8f),
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.dp)
+                            modifier = Modifier
+                                .clickable(role = Role.Button, onClick = onBack)
+                                .padding(horizontal = 4.dp, vertical = 0.dp)
                         )
                         Text(
                             text = "]",
@@ -847,43 +831,210 @@ private fun ChatTopBar(
                         )
                     }
 
-                    // Terminal-style ASCII menu positioned below the button
-                    TuiTerminalMenu(
-                        expanded = showOverflow,
-                        onDismissRequest = { showOverflow = false },
-                        modifier = Modifier.align(Alignment.TopEnd),
-                        offset = DpOffset(8.dp, 22.dp)
+                    // ┼ connector
+                    Text(
+                        text = "┼",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = theme.accent.copy(alpha = 0.7f)
+                    )
+
+                    // Token count (left)
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TuiTerminalMenuItem(
-                            text = "Changes",
-                            symbol = "±",
-                            onClick = { showOverflow = false; onViewChanges() }
-                        )
-                        TuiTerminalMenuItem(
-                            text = "Commands",
-                            symbol = "/",
-                            onClick = { showOverflow = false; onCommands() }
-                        )
-                        TuiTerminalMenuItem(
-                            text = "Terminal",
-                            symbol = ">_",
-                            onClick = { showOverflow = false; onTerminal() }
-                        )
-                        TuiTerminalMenuItem(
-                            text = "Files",
-                            symbol = "#",
-                            onClick = { showOverflow = false; onFiles() }
-                        )
-                        TuiTerminalMenuItem(
-                            text = "Skills",
-                            symbol = ">",
-                            onClick = { showOverflow = false; onSkills() }
-                        )
+                        contextUsage?.let { usage ->
+                            val usedFormatted = formatTokenCount(usage.usedTokens)
+                            val pct = if (usage.maxTokens > 0) (usage.usedTokens.toFloat() / usage.maxTokens * 100).toInt() else 0
+                            val baseAlpha = 0.4f
+                            val tokenColor = when {
+                                pct >= 95 -> theme.error.copy(alpha = baseAlpha + 0.3f)
+                                pct >= 85 -> theme.warning.copy(alpha = baseAlpha + 0.2f)
+                                pct >= 70 -> theme.warning.copy(alpha = baseAlpha)
+                                else -> theme.textMuted.copy(alpha = baseAlpha)
+                            }
+                            Text(
+                                text = usedFormatted,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 9.sp,
+                                color = tokenColor,
+                                modifier = Modifier.padding(start = 4.dp, end = 4.dp)
+                            )
+                        }
+
+                        // Honeycomb animation (center, weight 1f)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(16.dp)
+                        .offset(x = (-4).dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                            HoneycombAnimation(isBusy = isBusy)
+                        }
+
+                        // Context percent + abort + todo (right)
+                        contextUsage?.let { usage ->
+                            if (usage.maxTokens > 0) {
+                                val pct = ((usage.usedTokens.toFloat() / usage.maxTokens) * 100).toInt()
+                                val baseAlpha = 0.4f
+                                val pctColor = when {
+                                    pct >= 95 -> theme.error.copy(alpha = baseAlpha + 0.3f)
+                                    pct >= 85 -> theme.warning.copy(alpha = baseAlpha + 0.2f)
+                                    pct >= 70 -> theme.warning.copy(alpha = baseAlpha)
+                                    else -> theme.textMuted.copy(alpha = baseAlpha)
+                                }
+                                Text(
+                                    text = "${pct}%",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 9.sp,
+                                    color = pctColor,
+                                    modifier = Modifier.padding(horizontal = 2.dp)
+                                )
+                            }
+                        }
+
+                        if (isBusy) {
+                            var clickCount by remember { mutableIntStateOf(0) }
+                            val scope = rememberCoroutineScope()
+                            Text(
+                                text = "■",
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = theme.error.copy(alpha = if (clickCount > 0) 1.0f else 0.8f),
+                                modifier = Modifier
+                                    .clickable(role = Role.Button, onClick = {
+                                        clickCount++
+                                        if (clickCount == 1) {
+                                            scope.launch {
+                                                delay(2000)
+                                                if (clickCount == 1) clickCount = 0
+                                            }
+                                        } else if (clickCount >= 2) {
+                                            onAbort()
+                                            clickCount = 0
+                                        }
+                                    })
+                                    .padding(horizontal = 2.dp)
+                            )
+                        }
+
+                        if (todoCount > 0) {
+                            Row(
+                                modifier = Modifier
+                                    .clickable(role = Role.Button, onClick = onTodos)
+                                    .padding(horizontal = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "[",
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = theme.textMuted.copy(alpha = 0.6f)
+                                )
+                                if (inProgressCount > 0) {
+                                    TodoLiveDot(activeCount = inProgressCount)
+                                } else {
+                                    Text(
+                                        text = "$todoCount",
+                                        fontFamily = FontFamily.Monospace,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = theme.accent.copy(alpha = 0.8f)
+                                    )
+                                }
+                                Text(
+                                    text = "]",
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = theme.textMuted.copy(alpha = 0.6f)
+                                )
+                            }
+                        }
                     }
+
+                    // ┼ connector
+                    Text(
+                        text = "┼",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = theme.accent.copy(alpha = 0.7f)
+                    )
+
+                // Overflow menu [⋮]
+            Box(
+                modifier = Modifier.offset(x = 4.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clickable(role = Role.Button, onClick = { showOverflow = true })
+                ) {
+                    Text(
+                        text = "[",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = theme.textMuted.copy(alpha = 0.6f),
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "⋮",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        color = theme.accent.copy(alpha = 0.8f),
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.dp)
+                    )
+                    Text(
+                        text = "]",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = theme.textMuted.copy(alpha = 0.6f),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                TuiTerminalMenu(
+                    expanded = showOverflow,
+                    onDismissRequest = { showOverflow = false },
+                    modifier = Modifier.align(Alignment.TopEnd),
+                    offset = DpOffset(8.dp, 22.dp)
+                ) {
+                    TuiTerminalMenuItem(
+                        text = "Changes",
+                        symbol = "±",
+                        onClick = { showOverflow = false; onViewChanges() }
+                    )
+                    TuiTerminalMenuItem(
+                        text = "Commands",
+                        symbol = "/",
+                        onClick = { showOverflow = false; onCommands() }
+                    )
+                    TuiTerminalMenuItem(
+                        text = "Terminal",
+                        symbol = ">_",
+                        onClick = { showOverflow = false; onTerminal() }
+                    )
+                    TuiTerminalMenuItem(
+                        text = "Files",
+                        symbol = "#",
+                        onClick = { showOverflow = false; onFiles() }
+                    )
+                    TuiTerminalMenuItem(
+                        text = "Skills",
+                        symbol = ">",
+                        onClick = { showOverflow = false; onSkills() }
+                    )
                 }
             }
         }
     }
+}
+
+private fun formatTokenCount(n: Int): String = when {
+    n < 1000 -> "$n"
+    n < 1_000_000 -> "${n / 1000}K"
+    else -> "${n / 1_000_000}M"
 }
 
 @Composable
@@ -1040,6 +1191,7 @@ private fun ChatMessageList(
     pendingPermissionsByCallId: Map<String, dev.blazelight.p4oc.domain.model.Permission>,
     onRevert: (String) -> Unit,
     onFork: (String) -> Unit,
+    thinkingMessageIds: Set<String> = emptySet(),
     showEmpty: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -1049,9 +1201,13 @@ private fun ChatMessageList(
         }
         return
     }
+    val itemKey: (Int, FlatChatItem) -> Any = remember { { _, item -> item.key } }
+    val itemContentType: (Int, FlatChatItem) -> Any = remember { { _, item -> item.contentType } }
+    val accentBarColor = LocalOpenCodeTheme.current.accent.copy(alpha = 0.85f)
     LazyColumn(
         state = listState,
-        modifier = modifier.testTag("message_list"),
+        modifier = modifier
+            .testTag("message_list"),
         reverseLayout = true,
         flingBehavior = flingBehavior,
         contentPadding = PaddingValues(vertical = 2.dp),
@@ -1076,44 +1232,43 @@ private fun ChatMessageList(
         }
         itemsIndexed(
             items = flatItems,
-            key = { _, item ->
-                when (item) {
-                    is FlatChatItem.UserPart          -> "u_${item.messageWithParts.message.id}"
-                    is FlatChatItem.AssistantBarStart -> "abs_${item.messageId}"
-                    is FlatChatItem.AssistantBarEnd   -> "abe_${item.messageId}"
-                    is FlatChatItem.TextPart          -> "txt_${item.msgId}_${item.part.id}"
-                    is FlatChatItem.ReasoningPart     -> "rea_${item.msgId}_${item.part.id}"
-                    is FlatChatItem.ReasoningGroup    -> "rg_${item.msgId}_${item.groupIndex}"
-                    is FlatChatItem.ToolBatch         -> "tb_${item.msgId}_${item.batchIndex}"
-                    is FlatChatItem.FilePart          -> "fp_${item.msgId}_${item.part.id}"
-                    is FlatChatItem.PatchPart         -> "pp_${item.msgId}_${item.part.id}"
-                }
-            },
-            contentType = { _, item ->
-                when (item) {
-                    is FlatChatItem.UserPart          -> "user"
-                    is FlatChatItem.AssistantBarStart -> "bar_start"
-                    is FlatChatItem.AssistantBarEnd   -> "bar_end"
-                    is FlatChatItem.TextPart          -> "text"
-                    is FlatChatItem.ReasoningPart     -> "reasoning"
-                    is FlatChatItem.ReasoningGroup    -> "reasoning_group"
-                    is FlatChatItem.ToolBatch         -> "tools"
-                    is FlatChatItem.FilePart          -> "file"
-                    is FlatChatItem.PatchPart         -> "patch"
+            key = itemKey,
+            contentType = itemContentType
+        ) { _, item ->
+            val itemIsThinking = when (item) {
+                is FlatChatItem.TextPart -> item.msgId in thinkingMessageIds
+                else -> false
+            }
+            val hasAccent = item.contentType in ASSISTANT_TYPES
+            val isStreaming = when (item) {
+                is FlatChatItem.TextPart -> item.part.isStreaming
+                is FlatChatItem.ReasoningPart -> item.part.time?.end == null
+                else -> false
+            }
+            val itemModifier = remember(accentBarColor, hasAccent) {
+                if (hasAccent) Modifier.drawBehind {
+                    drawRect(
+                        color = accentBarColor,
+                        topLeft = Offset.Zero,
+                        size = Size(3.dp.toPx(), size.height)
+                    )
+                } else Modifier
+            }
+            CompositionLocalProvider(LocalIsThinkingPhase provides itemIsThinking) {
+                Box(modifier = itemModifier) {
+                    FlatChatItemView(
+                        item = item,
+                        onToolApprove = onToolApprove,
+                        onToolDeny = onToolDeny,
+                        onToolAlways = onToolAlways,
+                        onOpenSubSession = onOpenSubSession,
+                        defaultToolWidgetState = defaultToolWidgetState,
+                        pendingPermissionsByCallId = pendingPermissionsByCallId,
+                        onRevert = onRevert,
+                        onFork = onFork
+                    )
                 }
             }
-        ) { _, item ->
-            FlatChatItemView(
-                item = item,
-                onToolApprove = onToolApprove,
-                onToolDeny = onToolDeny,
-                onToolAlways = onToolAlways,
-                onOpenSubSession = onOpenSubSession,
-                defaultToolWidgetState = defaultToolWidgetState,
-                pendingPermissionsByCallId = pendingPermissionsByCallId,
-                onRevert = onRevert,
-                onFork = onFork
-            )
         }
         if (hasMoreMessages && visibleMessageCount < totalMessageCount) {
             item(key = "load_more_messages", contentType = "load_more") {
@@ -1194,6 +1349,88 @@ private fun RevertActiveBanner(
                 fontWeight = FontWeight.Medium,
                 color = theme.warning
             )
+        }
+    }
+}
+
+@Composable
+private fun HoneycombAnimation(
+    isBusy: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val theme = LocalOpenCodeTheme.current
+    val transition = rememberInfiniteTransition(label = "hexWave")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "hexPhase"
+    )
+
+    Box(modifier = modifier) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.align(Alignment.Center)
+        ) {
+            for (i in 0..2) {
+                if (isBusy) {
+                    val t = ((phase + i.toFloat() / 3f) % 1f)
+                    val glow = (sin(t * 2f * PI.toFloat()) + 1f) / 2f
+                    HexIcon(
+                        glow = glow,
+                        accent = theme.accent,
+                        size = 10.dp
+                    )
+                } else {
+                    HexIcon(
+                        glow = 0f,
+                        accent = theme.textMuted,
+                        size = 10.dp
+                    )
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = !isBusy,
+            enter = fadeIn(animationSpec = tween(300)),
+            exit = fadeOut(animationSpec = tween(300)),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            Text(
+                text = "IDLE",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 7.sp,
+                color = theme.textMuted.copy(alpha = 0.25f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun HexIcon(glow: Float, accent: Color, size: Dp) {
+    Canvas(modifier = Modifier.size(size)) {
+        val r = size.toPx() / 2f
+        val path = Path().apply {
+            var first = true
+            for (j in 0..5) {
+                val angle = j * 60.0 - 30.0
+                val rad = angle * PI / 180.0
+                val px = r + r * cos(rad).toFloat()
+                val py = r + r * sin(rad).toFloat()
+                if (first) { moveTo(px, py); first = false } else lineTo(px, py)
+            }
+            close()
+        }
+        if (glow > 0f) {
+            drawPath(path, color = accent.copy(alpha = glow * 0.25f), style = Fill)
+            drawPath(path, color = accent.copy(alpha = 0.15f + glow * 0.6f), style = Stroke(width = 1.5f))
+        } else {
+            drawPath(path, color = accent.copy(alpha = 0.2f), style = Stroke(width = 1f))
         }
     }
 }

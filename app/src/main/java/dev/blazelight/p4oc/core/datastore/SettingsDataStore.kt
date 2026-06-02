@@ -75,6 +75,9 @@ class SettingsDataStore constructor(
         // Project directory persistence
         private val KEY_PROJECT_WORKTREE = stringPreferencesKey("project_worktree")
 
+        // Reasoning effort
+        private val KEY_REASONING_EFFORT = stringPreferencesKey("reasoning_effort")
+
         const val DEFAULT_LOCAL_URL = "http://localhost:4096"
         const val THEME_SYSTEM = "system"
         const val THEME_LIGHT = "light"
@@ -482,6 +485,18 @@ class SettingsDataStore constructor(
             } else {
                 prefs.remove(KEY_PROJECT_WORKTREE)
             }
+        }
+    }
+
+    // ── Reasoning effort ──
+
+    val reasoningEffort: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_REASONING_EFFORT] ?: "auto"
+    }
+
+    suspend fun updateReasoningEffort(effort: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_REASONING_EFFORT] = effort
         }
     }
 

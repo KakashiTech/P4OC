@@ -1,5 +1,6 @@
 package dev.blazelight.p4oc.data.remote.dto
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -95,6 +96,6 @@ data class RevertSessionRequest(
 @Serializable
 data class InitSessionRequest(
     @SerialName("messageID") val messageID: String,
-    @SerialName("providerID") val providerID: String,
-    @SerialName("modelID") val modelID: String
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("providerID") val providerID: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("modelID") val modelID: String? = null
 )

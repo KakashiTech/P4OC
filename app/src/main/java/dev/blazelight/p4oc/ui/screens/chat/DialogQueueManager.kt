@@ -168,6 +168,19 @@ class DialogQueueManager(
         }
     }
 
+    /**
+     * Resolve a permission ID from either a permission.id or a tool callID.
+     * Tool widgets pass callID (wrong), inline prompts pass perm.id (correct).
+     * This bridges the two paths.
+     */
+    fun resolvePermissionId(idOrCallId: String): String {
+        val map = _pendingPermissionsByCallId.value
+        // If it's already a permission ID, return as-is
+        if (map.values.any { it.id == idOrCallId }) return idOrCallId
+        // Otherwise try to look up by callID
+        return map[idOrCallId]?.id ?: idOrCallId
+    }
+
     fun clearQuestion() {
         _pendingQuestion.value = null
         savedStateHandle.remove<String>(KEY_PENDING_QUESTION)

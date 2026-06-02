@@ -1,6 +1,7 @@
 package dev.blazelight.p4oc.core.network
 
 import dev.blazelight.p4oc.core.log.AppLog
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -43,7 +44,10 @@ class PtyWebSocketClient constructor(
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private val _output = MutableSharedFlow<String>(extraBufferCapacity = 1000)
+    private val _output = MutableSharedFlow<String>(
+        extraBufferCapacity = 256,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
     val output: SharedFlow<String> = _output.asSharedFlow()
 
     // Native output buffer and reconnection manager
