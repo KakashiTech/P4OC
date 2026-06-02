@@ -1,5 +1,6 @@
 package dev.blazelight.p4oc.core.network
 
+import android.content.Context
 import dev.blazelight.p4oc.core.log.AppLog
 import dev.blazelight.p4oc.data.remote.mapper.SessionMapper
 import dev.blazelight.p4oc.ui.screens.sessions.ProjectInfo
@@ -10,11 +11,18 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.io.File
 
 private const val TAG = "SessionDataCache"
+private const val CACHE_FILE_NAME = "session_cache.json"
 
 /**
- * Branch-prediction cache for sessions data.
+ * Branch-prediction cache for sessions data + disk persistence.
  *
  * When a connection succeeds (ServerViewModel), this singleton pre-fetches
  * the full sessions + projects payload in the background — before the user
@@ -23,16 +31,31 @@ private const val TAG = "SessionDataCache"
  * SessionListViewModel.init consumes the cached result instantly (0ms wait),
  * then refreshes in the background to pick up any delta since the prefetch.
  *
+ * Orphan sessions (custom-directory, outside any known project) are persisted
+ * to disk so they survive app restart even though the server never returns
+ * them in any list query.
+ *
  * This is the data-layer equivalent of CPU branch prediction:
  * "After connecting, the user will almost certainly open SessionListScreen next."
  */
-class SessionDataCache(private val connectionManager: ConnectionManager) {
+class SessionDataCache(
+    private val connectionManager: ConnectionManager,
+    context: Context
+) {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
+    private val cacheFile = File(context.filesDir, CACHE_FILE_NAME)
+    private val persistMutex = Mutex()
 
     @Volatile
     private var cachedResult: CachedSessions? = null
 
+    init {
+        restoreFromDisk()
+    }
+
+    @Serializable
     data class CachedSessions(
         val sessions: List<SessionWithProject>,
         val projects: List<ProjectInfo>,
@@ -46,6 +69,8 @@ class SessionDataCache(private val connectionManager: ConnectionManager) {
             val cached = cachedResult ?: return false
             val currentUrl = connectionManager.currentBaseUrl ?: return false
             return cached.serverBaseUrl == currentUrl &&
+                   cached.sessions.isNotEmpty() &&
+                   cached.projects.isNotEmpty() &&
                    System.currentTimeMillis() - cached.fetchedAtMs < 30_000L
         }
 
@@ -80,6 +105,7 @@ class SessionDataCache(private val connectionManager: ConnectionManager) {
             try {
                 val result = fetchSessions(targetUrl)
                 cachedResult = result
+                persistToDisk(result)
                 AppLog.d(TAG, "prewarm: cached ${result.sessions.size} sessions, ${result.projects.size} projects")
             } catch (e: Exception) {
                 AppLog.w(TAG, "prewarm: prefetch failed — will load on demand", e)
@@ -90,6 +116,85 @@ class SessionDataCache(private val connectionManager: ConnectionManager) {
     /** Invalidate on disconnect so stale data is never shown after reconnect. */
     fun invalidate() {
         cachedResult = null
+        scope.launch { persistToDisk(null) }
+    }
+
+    /**
+     * Insert or update a session in the cache so a newly-created session survives
+     * ViewModel re-creation (e.g. tab restore) before the next full fetch.
+     *
+     * When initialising from scratch (no prior cache), uses `fetchedAtMs = 0L`
+     * so [hasFreshData] returns false — preventing the ViewModel from skipping
+     * the full fetch and showing only this single session.
+     */
+    fun upsertSession(session: SessionWithProject) {
+        val current = cachedResult
+        val updatedSessions = if (current != null) {
+            val existing = current.sessions.indexOfFirst { it.session.id == session.session.id }
+            if (existing >= 0) {
+                current.sessions.toMutableList().apply { set(existing, session) }
+            } else {
+                listOf(session) + current.sessions
+            }
+        } else {
+            listOf(session)
+        }
+        cachedResult = CachedSessions(
+            sessions = updatedSessions,
+            projects = current?.projects ?: emptyList(),
+            fetchedAtMs = current?.fetchedAtMs ?: 0L,
+            serverBaseUrl = connectionManager.currentBaseUrl ?: ""
+        )
+        AppLog.d(TAG, "upsertSession: id=${session.session.id}, title=${session.session.title}, " +
+            "cache was ${if (current != null) "present (${current.sessions.size} sessions)" else "null"}")
+        scope.launch { persistToDisk(cachedResult) }
+    }
+
+    /** Remove a session from the cache so deleted sessions don't reappear via staleFallback. */
+    fun removeSession(sessionId: String) {
+        val current = cachedResult ?: return
+        val filtered = current.sessions.filter { it.session.id != sessionId }
+        if (filtered.size == current.sessions.size) return
+        cachedResult = CachedSessions(
+            sessions = filtered,
+            projects = current.projects,
+            fetchedAtMs = current.fetchedAtMs,
+            serverBaseUrl = current.serverBaseUrl
+        )
+        AppLog.d(TAG, "removeSession: id=$sessionId, remaining=${filtered.size}")
+        scope.launch { persistToDisk(cachedResult) }
+    }
+
+    // -----------------------------------------------------------------------
+    // Disk persistence
+    // -----------------------------------------------------------------------
+
+    private fun restoreFromDisk() {
+        if (!cacheFile.exists()) return
+        try {
+            val text = cacheFile.readText()
+            val restored = json.decodeFromString<CachedSessions>(text)
+            cachedResult = restored
+            AppLog.d(TAG, "restored ${restored.sessions.size} sessions, ${restored.projects.size} projects from disk")
+        } catch (e: Exception) {
+            AppLog.w(TAG, "failed to restore cache from disk", e)
+            cacheFile.delete()
+        }
+    }
+
+    private suspend fun persistToDisk(data: CachedSessions?) = persistMutex.withLock {
+        try {
+            if (data == null) {
+                if (cacheFile.exists()) cacheFile.delete()
+                AppLog.d(TAG, "persist: cleared disk cache")
+            } else {
+                val text = json.encodeToString(data)
+                cacheFile.writeText(text)
+                AppLog.d(TAG, "persist: wrote ${data.sessions.size} sessions to disk")
+            }
+        } catch (e: Exception) {
+            AppLog.w(TAG, "failed to persist cache to disk", e)
+        }
     }
 
     private suspend fun fetchSessions(serverBaseUrl: String): CachedSessions = coroutineScope {
@@ -138,8 +243,15 @@ class SessionDataCache(private val connectionManager: ConnectionManager) {
         val projectIds = projectSessions.map { it.session.id }.toSet()
         val uniqueGlobal = globalSessions.filter { it.session.id !in projectIds }
 
+        // Keep custom-directory sessions (projectId==null) that the server never
+        // returns in list queries — they're outside any known project worktree.
+        val previousIds = (uniqueGlobal + projectSessions).map { it.session.id }.toSet()
+        val staleFallback = cachedResult?.sessions?.filter { swp ->
+            swp.projectId == null && swp.session.id !in previousIds
+        } ?: emptyList()
+
         CachedSessions(
-            sessions = (uniqueGlobal + projectSessions).sortedByDescending { it.session.updatedAt },
+            sessions = (uniqueGlobal + staleFallback + projectSessions).sortedByDescending { it.session.updatedAt },
             projects = projects.sortedByDescending { it.worktree },
             serverBaseUrl = serverBaseUrl
         )

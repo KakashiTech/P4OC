@@ -395,7 +395,7 @@ fun ChatScreen(
                         queuedMessagePreview = queuedMessage?.text,
                         attachedFiles = attachedFiles,
                         onAttachClick = {
-                            viewModel.filePickerManager.loadPickerFiles()
+                            viewModel.filePickerManager.loadPickerFiles(viewModel.getFilePickerStartDirectory())
                             showFilePicker = true
                         },
                         onRemoveAttachment = viewModel.filePickerManager::detachFile,
@@ -478,7 +478,10 @@ fun ChatScreen(
                     coroutineScope.launch {
                         userScrolledAway.value = false
                         hasNewContentWhileAway.value = false
-                        listState.animateScrollToItem(firstContentIndex(flatItems))
+                        val idx = flatItems.indexOfFirst {
+                            it !is FlatChatItem.AssistantBarStart && it !is FlatChatItem.AssistantBarEnd
+                        }
+                        listState.animateScrollToItem(if (idx < 0) 0 else idx)
                     }
                 },
                 modifier = Modifier
@@ -589,15 +592,28 @@ private fun ScrollObservers(
 ) {
     var isAutoScrolling by remember { mutableStateOf(false) }
 
+    // Keep flatItems in compose state so LaunchedEffect closures see the latest reference
+    var currentFlatItems by remember { mutableStateOf(flatItems) }
+    currentFlatItems = flatItems
+
+    suspend fun scrollToBottom() {
+        val items = currentFlatItems
+        if (items.isEmpty()) return
+        val idx = items.indexOfFirst {
+            it !is FlatChatItem.AssistantBarStart && it !is FlatChatItem.AssistantBarEnd
+        }
+        listState.scrollToItem(if (idx < 0) 0 else idx)
+    }
+
     var prevFlatItemsSize by remember { mutableStateOf(flatItems.size) }
     LaunchedEffect(Unit) {
-        snapshotFlow { messagesVersion.value to flatItems.size }
+        snapshotFlow { messagesVersion.value to currentFlatItems.size }
             .collect { (version, size) ->
                 if (size > prevFlatItemsSize && !userScrolledAway.value && !listState.isScrollInProgress) {
                     prevFlatItemsSize = size
                     isAutoScrolling = true
                     try {
-                        listState.scrollToItem(firstContentIndex(flatItems))
+                        scrollToBottom()
                     } finally {
                         isAutoScrolling = false
                     }
@@ -632,7 +648,7 @@ private fun ScrollObservers(
         ) {
             isAutoScrolling = true
             try {
-                listState.scrollToItem(firstContentIndex(flatItems))
+                scrollToBottom()
             } finally {
                 isAutoScrolling = false
             }
@@ -646,7 +662,7 @@ private fun ScrollObservers(
                 if (!userScrolledAway.value && isAtBottom.value && !listState.isScrollInProgress) {
                     isAutoScrolling = true
                     try {
-                        listState.scrollToItem(firstContentIndex(flatItems))
+                        scrollToBottom()
                     } finally {
                         isAutoScrolling = false
                     }

@@ -61,12 +61,17 @@ class VisualSettingsViewModel constructor(
         "catppuccin-macchiato" to "Catppuccin Macchiato",
         "catppuccin-frappe" to "Catppuccin Frappé",
         "dracula" to "Dracula",
+        "everforest" to "Everforest",
         "gruvbox" to "Gruvbox",
+        "kanagawa" to "Kanagawa",
         "nord" to "Nord",
+        "one-dark" to "One Dark",
         "opencode" to "OpenCode",
         "tokyonight" to "Tokyo Night",
         "xterm" to "XTerm 256",
-        "hotdogstand" to "Hot Dog Stand"
+        "ayu" to "Ayu",
+        "hotdogstand" to "Hot Dog Stand",
+        "matrix" to "Matrix"
     )
     
     init {

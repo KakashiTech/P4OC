@@ -91,7 +91,7 @@ interface OpenCodeApi {
         @Path("id") id: String,
         @Body request: InitSessionRequest,
         @Query("directory") directory: String? = null
-    ): Boolean
+    ): Unit
 
     @POST("session/{id}/share")
     suspend fun shareSession(

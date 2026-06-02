@@ -12,6 +12,7 @@ import dev.blazelight.p4oc.core.network.safeApiCall
 import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.data.remote.dto.ExecuteCommandRequest
 import dev.blazelight.p4oc.data.remote.dto.ForkSessionRequest
+import dev.blazelight.p4oc.data.remote.dto.InitSessionRequest
 import dev.blazelight.p4oc.data.remote.dto.PartInputDto
 import dev.blazelight.p4oc.data.remote.dto.PermissionResponseRequest
 import dev.blazelight.p4oc.data.remote.dto.QuestionReplyRequest
@@ -33,6 +34,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import java.util.concurrent.CopyOnWriteArraySet
 
@@ -242,6 +244,15 @@ class ChatViewModel constructor(
     private fun getDirectory(): String? =
         sessionDirectory ?: _uiState.value.session?.directory ?: directoryManager.getDirectory()
 
+    /** Returns the file browser root for this session — falls back to `"."` when
+     *  the session directory is outside any known project (server can't list files there). */
+    fun getFilePickerStartDirectory(): String {
+        val dir = getDirectory()
+        if (dir == null || dir.isBlank()) return "."
+        val defaultDir = directoryManager.getDirectory()
+        return if (dir == defaultDir) dir else "."
+    }
+
     private fun loadSession() {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: run {
@@ -324,6 +335,53 @@ class ChatViewModel constructor(
         }
     }
 
+    /**
+     * Initializes the session on the server via POST /session/{id}/init.
+     * Without this call the server queues but never processes messages.
+     */
+    /**
+     * Tracks whether initSession has been called for this session.
+     * Reset on disconnect/error to allow re-init after server restart.
+     */
+    private var sessionInitialized = false
+
+    /**
+     * Initializes the session on the server via POST /session/{id}/init.
+     * The server will not process messages on uninitialized sessions.
+     * Returns true if init succeeded or was already done, false if it failed.
+     * When false the caller should still try sendMessageAsync — the server
+     * may have a default model and the retry will happen on the next call.
+     */
+    /** When set, message and part events for this ID are suppressed (init welcome message). */
+    private var suppressedInitMsgId: String? = null
+    /** Watch for the first assistant message emitted after initSession. */
+    private var watchForInitMsg = false
+
+    private suspend fun initializeSession(): Boolean {
+        if (sessionInitialized) return true
+        val api = connectionManager.getApi() ?: return false
+
+        val lastMsgId = messageStore.messages.value.lastOrNull()?.message?.id
+        val request = InitSessionRequest(
+            messageID = lastMsgId ?: ""
+        )
+        val directory = getDirectory()
+        AppLog.w(TAG, "initSession: calling (msgId=${lastMsgId ?: "none"})")
+        val result = safeApiCall { api.initSession(sessionId, request, directory) }
+        return when (result) {
+            is ApiResult.Success -> {
+                AppLog.w(TAG, "initSession: ok")
+                sessionInitialized = true
+                watchForInitMsg = true
+                true
+            }
+            is ApiResult.Error -> {
+                AppLog.w(TAG, "initSession: failed: ${result.message}")
+                false
+            }
+        }
+    }
+
     // --- SSE event routing ---
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -339,6 +397,16 @@ class ChatViewModel constructor(
                 }
                 .collect { event ->
                     AppLog.d(TAG, "observeEvents: Received ${event::class.simpleName}")
+                    // Log key events at warning level for release builds
+                    when (event) {
+                        is OpenCodeEvent.Connected -> AppLog.w(TAG, "SSE: Connected")
+                        is OpenCodeEvent.Disconnected -> AppLog.w(TAG, "SSE: Disconnected")
+                        is OpenCodeEvent.MessageUpdated -> AppLog.w(TAG, "SSE: MessageUpdated id=${event.message.id} role=${event.message::class.simpleName}")
+                        is OpenCodeEvent.SessionStatusChanged -> AppLog.w(TAG, "SSE: SessionStatusChanged busy=${event.status is SessionStatus.Busy}")
+                        is OpenCodeEvent.SessionIdle -> AppLog.w(TAG, "SSE: SessionIdle")
+                        is OpenCodeEvent.SessionError -> AppLog.w(TAG, "SSE: SessionError")
+                        else -> {}
+                    }
                     handleEvent(event)
                 }
         }
@@ -348,16 +416,23 @@ class ChatViewModel constructor(
         when (event) {
             is OpenCodeEvent.MessageUpdated -> {
                 if (event.message.sessionID == sessionId) {
-                    messageStore.upsertMessage(event.message)
+                    if (watchForInitMsg && event.message is Message.Assistant) {
+                        suppressedInitMsgId = event.message.id
+                        watchForInitMsg = false
+                        AppLog.w(TAG, "Suppressed init welcome message id=${event.message.id}")
+                    } else if (suppressedInitMsgId != event.message.id) {
+                        messageStore.upsertMessage(event.message)
+                    }
                 }
             }
             is OpenCodeEvent.MessagePartUpdated -> {
+                if (suppressedInitMsgId == event.part.messageID) return@handleEvent
                 if (event.part.sessionID == sessionId) {
-                    // Full part update (from text-end / tool-end lifecycle) — replaces part state
                     messageStore.upsertPartBuffered(event.part, event.delta)
                 }
             }
             is OpenCodeEvent.MessagePartDelta -> {
+                if (suppressedInitMsgId == event.messageID) return@handleEvent
                 if (event.sessionID == sessionId) {
                     when (event.field) {
                         "text" -> {
@@ -428,6 +503,7 @@ class ChatViewModel constructor(
             is OpenCodeEvent.SessionError -> {
                 if (event.sessionID == sessionId) {
                     AppLog.e(TAG, "Session error: ${event.error?.message}")
+                    sessionInitialized = false
                     _uiState.update {
                         it.copy(
                             isBusy = false,
@@ -464,7 +540,7 @@ class ChatViewModel constructor(
                         val statusLabel = myStatus?.type ?: "unknown"
                         AppLog.d(TAG, "SSE reconnected, session status: $statusLabel")
                         val busy = myStatus?.type == "busy" || myStatus?.type == "retry"
-                        _uiState.update { it.copy(isBusy = busy) }
+                        _uiState.update { it.copy(isBusy = busy, isSending = if (!busy) false else it.isSending) }
                         if (!busy) sendQueuedMessageIfAny()
 
                         // Re-discover pending questions that may have been missed during disconnect
@@ -562,6 +638,8 @@ class ChatViewModel constructor(
                 return@launch
             }
 
+            initializeSession()
+
             val parts = buildPartInputs(text, attachedFiles)
             val reasoningEffort = settingsDataStore.reasoningEffort.first()
             val reasoning = dev.blazelight.p4oc.data.remote.dto.ReasoningConfigDto(effort = reasoningEffort)
@@ -572,12 +650,15 @@ class ChatViewModel constructor(
                 reasoning = reasoning
             )
 
+            AppLog.w(TAG, "sendMessage: calling sendMessageAsync")
             val result = safeApiCall { api.sendMessageAsync(sessionId, request, getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
-                    AppLog.d(TAG, "sendMessage: Async call succeeded, waiting for SSE events")
+                    AppLog.w(TAG, "sendMessage: ok, waiting for SSE")
+                    _uiState.update { it.copy(isSending = false) }
                 }
                 is ApiResult.Error -> {
+                    AppLog.w(TAG, "sendMessage: failed: ${result.message}")
                     _uiState.update {
                         it.copy(
                             isSending = false,
@@ -633,6 +714,8 @@ class ChatViewModel constructor(
                 return@launch
             }
 
+            initializeSession()
+
             val parts = buildPartInputs(queued.text, queued.attachedFiles)
             val reasoningEffort = settingsDataStore.reasoningEffort.first()
             val reasoning = dev.blazelight.p4oc.data.remote.dto.ReasoningConfigDto(effort = reasoningEffort)
@@ -643,12 +726,15 @@ class ChatViewModel constructor(
                 reasoning = reasoning
             )
 
+            AppLog.w(TAG, "sendQueuedMessageIfAny: calling sendMessageAsync")
             val result = safeApiCall { api.sendMessageAsync(sessionId, request, getDirectory()) }
             when (result) {
                 is ApiResult.Success -> {
-                    AppLog.d(TAG, "sendQueuedMessageIfAny: Queued message sent successfully")
+                    AppLog.w(TAG, "sendQueuedMessageIfAny: ok, waiting for SSE")
+                    _uiState.update { it.copy(isSending = false) }
                 }
                 is ApiResult.Error -> {
+                    AppLog.w(TAG, "sendQueuedMessageIfAny: failed: ${result.message}")
                     _uiState.update {
                         it.copy(
                             isSending = false,

@@ -406,7 +406,7 @@ fun ChatInputBar(
                     tint = if (enabled) theme.accent else theme.textMuted.copy(alpha = 0.35f),
                     modifier = Modifier
                         .then(
-                            if (enabled && !isLoading)
+                            if (enabled)
                                 Modifier.clickable(role = Role.Button) { onAttachClick() }
                             else Modifier
                         )

@@ -115,7 +115,7 @@ fun SessionListScreen(
     
     val displayedSessions = remember(uiState.sessions, filterProjectId) {
         if (filterProjectId != null) {
-            uiState.sessions.filter { it.projectId == filterProjectId }
+            uiState.sessions.filter { it.projectId == filterProjectId || it.projectId == null }
         } else {
             uiState.sessions
         }
@@ -359,14 +359,19 @@ private fun buildSessionTree(sessions: List<SessionWithProject>): List<SessionNo
     val childrenByParent = sessions
         .mapNotNull { swp -> swp.session.parentID?.let { parentId -> parentId to swp } }
         .groupBy({ it.first }, { it.second })
-    
+
+    val childIds = childrenByParent.values.flatten().map { it.session.id }.toSet()
+
     fun buildNode(sessionWithProject: SessionWithProject): SessionNode {
         val children = childrenByParent[sessionWithProject.session.id]?.map { buildNode(it) } ?: emptyList()
         return SessionNode(sessionWithProject, children)
     }
-    
+
+    // Show root sessions AND any session the server might have given a parentID
+    // that has no actual parent in the list (e.g. fresh sessions in custom directories
+    // where the server assigns a synthetic parentID).
     return sessions
-        .filter { it.session.parentID == null }
+        .filter { it.session.parentID == null || it.session.id !in childIds }
         .map { buildNode(it) }
 }
 
