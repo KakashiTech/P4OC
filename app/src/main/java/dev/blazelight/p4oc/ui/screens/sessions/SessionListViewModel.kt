@@ -183,7 +183,7 @@ class SessionListViewModel constructor(
                 // Update projects in state
                 _uiState.update { it.copy(projects = projects.sortedByDescending { p -> p.worktree }) }
 
-                // Fetch all sessions in parallel: global + each project
+                // Fetch all sessions in parallel: global + each project + known extra dirs
                 // Use semaphore to limit concurrent requests — prevents network stack
                 // contention on low-end devices with many projects
                 val netSemaphore = Semaphore(3)
@@ -211,6 +211,8 @@ class SessionListViewModel constructor(
                         }
                     }
 
+                    val projectWorktrees = projects.map { it.worktree }.toSet()
+
                     // Sessions for each project
                     val projectDeferreds = projects.map { project ->
                         async {
@@ -236,15 +238,46 @@ class SessionListViewModel constructor(
                         }
                     }
 
+                    // Also query known directories from cache that aren't project worktrees.
+                    // Finds sessions in directories discovered during previous connections.
+                    val cached = sessionDataCache.peek()
+                    val extraDirs = (cached?.knownDirectories ?: emptySet()) - projectWorktrees - setOf("")
+                    val extraDeferreds = extraDirs.map { dir ->
+                        async {
+                            netSemaphore.acquire()
+                            try {
+                                val result = safeApiCall { api.listSessions(directory = dir, roots = true, limit = 100) }
+                                when (result) {
+                                    is ApiResult.Success -> result.data.map { dto ->
+                                        SessionWithProject(
+                                            session = SessionMapper.mapToDomain(dto),
+                                            projectId = null,
+                                            projectName = null
+                                        )
+                                    }
+                                    is ApiResult.Error -> {
+                                        AppLog.w("SessionListVM", "Failed to load sessions for extra dir $dir: ${result.message}")
+                                        emptyList()
+                                    }
+                                }
+                            } finally {
+                                netSemaphore.release()
+                            }
+                        }
+                    }
+
                     // Await all and merge
                     val globalSessions = globalDeferred.await()
                     val projectSessions = projectDeferreds.awaitAll().flatten()
+                    val extraSessions = extraDeferreds.awaitAll().flatten()
                     
-                    // Deduplicate: project sessions take priority over global (in case of overlap)
+                    // Deduplicate: project sessions take priority over global
                     val projectSessionIds = projectSessions.map { it.session.id }.toSet()
-                    val uniqueGlobalSessions = globalSessions.filter { it.session.id !in projectSessionIds }
+                    val extraSessionIds = extraSessions.map { it.session.id }.toSet()
+                    val uniqueGlobalSessions = globalSessions.filter { it.session.id !in projectSessionIds && it.session.id !in extraSessionIds }
+                    val uniqueExtraSessions = extraSessions.filter { it.session.id !in projectSessionIds }
                     
-                    uniqueGlobalSessions + projectSessions
+                    uniqueGlobalSessions + uniqueExtraSessions + projectSessions
                 }
 
                 AppLog.d("SessionListVM", "loadSessions: aggregated ${allSessionsWithProjects.size} total sessions")
@@ -289,6 +322,19 @@ class SessionListViewModel constructor(
                     )
                 }
                 initialLoadDone = true
+
+                // After successful load, update the cache's knownDirectories with
+                // every session directory + project worktree seen, so future loads
+                // will discover sessions in these directories even if the project
+                // list changes or doesn't include them.
+                val allDirs = (projects.map { it.worktree } + allSessionsWithProjects.map { it.session.directory })
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                val mergedDirs = (cached?.knownDirectories ?: emptySet()) + allDirs.toSet()
+                val currentCache = sessionDataCache.peek()
+                if (currentCache != null && mergedDirs != currentCache.knownDirectories) {
+                    sessionDataCache.updateKnownDirectories(mergedDirs)
+                }
             } catch (e: Exception) {
                 AppLog.e("SessionListVM", "loadSessions error", e)
                 _uiState.update {

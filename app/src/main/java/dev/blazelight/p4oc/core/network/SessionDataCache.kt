@@ -68,6 +68,7 @@ class SessionDataCache(
     data class CachedSessions(
         val sessions: List<SessionWithProject>,
         val projects: List<ProjectInfo>,
+        val knownDirectories: Set<String> = emptySet(),
         val fetchedAtMs: Long = System.currentTimeMillis(),
         val serverBaseUrl: String = ""
     )
@@ -126,6 +127,17 @@ class SessionDataCache(
     fun invalidate() {
         cachedResult = null
         scope.launch { persistToDisk(null) }
+    }
+
+    /**
+     * Update the knownDirectories set in the cache without changing sessions/projects.
+     * Called by SessionListViewModel after a successful load to register directories
+     * that should be queried on future fetches.
+     */
+    fun updateKnownDirectories(dirs: Set<String>) {
+        val current = cachedResult ?: return
+        cachedResult = current.copy(knownDirectories = dirs)
+        scope.launch { persistToDisk(cachedResult) }
     }
 
     /**
@@ -231,6 +243,7 @@ class SessionDataCache(
             }
         }
 
+        val projectWorktrees = projects.map { it.worktree }.toSet()
         val projectDeferreds = projects.map { project ->
             async {
                 val result = safeApiCall { api.listSessions(directory = project.worktree, roots = true, limit = 100) }
@@ -247,21 +260,49 @@ class SessionDataCache(
             }
         }
 
+        // Also query known directories that are NOT already project worktrees
+        // This discovers sessions in project directories the server doesn't list,
+        // e.g. sibling projects, custom workspaces, or unnamed project folders.
+        val previousKnownDirs = cachedResult?.knownDirectories ?: emptySet()
+        val extraDirs = previousKnownDirs - projectWorktrees - setOf("")
+        val extraDeferreds = extraDirs.map { dir ->
+            async {
+                val result = safeApiCall { api.listSessions(directory = dir, roots = true, limit = 100) }
+                when (result) {
+                    is ApiResult.Success -> result.data.map { dto ->
+                        SessionWithProject(session = SessionMapper.mapToDomain(dto))
+                    }
+                    is ApiResult.Error -> emptyList()
+                }
+            }
+        }
+
         val globalSessions = globalDeferred.await()
         val projectSessions = projectDeferreds.map { it.await() }.flatten()
+        val extraSessions = extraDeferreds.map { it.await() }.flatten()
         val projectIds = projectSessions.map { it.session.id }.toSet()
-        val uniqueGlobal = globalSessions.filter { it.session.id !in projectIds }
+        val extraIds = extraSessions.map { it.session.id }.toSet()
+        val uniqueGlobal = globalSessions.filter { it.session.id !in projectIds && it.session.id !in extraIds }
+        val uniqueExtra = extraSessions.filter { it.session.id !in projectIds }
+
+        // Collect directories for the registry — EVERY session's directory + every project worktree
+        val allSeenDirs = (projects.map { it.worktree } + (uniqueGlobal + uniqueExtra + projectSessions).map { it.session.directory })
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toSet()
+        val mergedDirs = previousKnownDirs + allSeenDirs
 
         // Keep custom-directory sessions (projectId==null) that the server never
         // returns in list queries — they're outside any known project worktree.
-        val previousIds = (uniqueGlobal + projectSessions).map { it.session.id }.toSet()
+        val previousIds = (uniqueGlobal + uniqueExtra + projectSessions).map { it.session.id }.toSet()
         val staleFallback = cachedResult?.sessions?.filter { swp ->
             swp.projectId == null && swp.session.id !in previousIds
         } ?: emptyList()
 
         CachedSessions(
-            sessions = (uniqueGlobal + staleFallback + projectSessions).sortedByDescending { it.session.updatedAt },
+            sessions = (uniqueGlobal + uniqueExtra + staleFallback + projectSessions).sortedByDescending { it.session.updatedAt },
             projects = projects.sortedByDescending { it.worktree },
+            knownDirectories = mergedDirs,
             serverBaseUrl = serverBaseUrl
         )
     }
