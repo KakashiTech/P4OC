@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.sp
 import dev.blazelight.p4oc.R
 import dev.blazelight.p4oc.domain.model.*
@@ -38,6 +39,8 @@ import androidx.compose.runtime.compositionLocalOf
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolGroupWidget
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenu
+import dev.blazelight.p4oc.ui.components.TuiTerminalMenuItem
 import kotlinx.coroutines.delay
 
 // CompositionLocal to communicate thinking-phase state from ChatScreen
@@ -56,13 +59,16 @@ fun ChatMessage(
     onToolAlways: (String) -> Unit,
     onOpenSubSession: ((String) -> Unit)? = null,
     defaultToolWidgetState: ToolWidgetState = ToolWidgetState.COMPACT,
-    pendingPermissionsByCallId: Map<String, Permission> = emptyMap(),
     onRevert: ((String) -> Unit)? = null,
     onFork: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     if (messageWithParts.message is Message.User) {
-        UserMessage(messageWithParts, modifier)
+        UserMessage(
+            messageWithParts = messageWithParts,
+            onRevert = onRevert,
+            modifier = modifier
+        )
     } else {
         AssistantMessage(
             messageWithParts = messageWithParts,
@@ -71,7 +77,6 @@ fun ChatMessage(
             onToolAlways = onToolAlways,
             onOpenSubSession = onOpenSubSession,
             defaultToolWidgetState = defaultToolWidgetState,
-            pendingPermissionsByCallId = pendingPermissionsByCallId,
             onRevert = onRevert,
             onFork = onFork,
             modifier = modifier
@@ -162,10 +167,16 @@ internal fun ReasoningGroupView(items: List<Part.Reasoning>) {
 // slight background tint on the whole line, no bubble or right-alignment.
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
-private fun UserMessage(messageWithParts: MessageWithParts, modifier: Modifier = Modifier) {
+private fun UserMessage(
+    messageWithParts: MessageWithParts,
+    onRevert: ((String) -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
     val theme     = LocalOpenCodeTheme.current
     val clipboard = LocalClipboardManager.current
     val haptic    = LocalHapticFeedback.current
+    var showMenu by remember { mutableStateOf(false) }
+    val messageId = (messageWithParts.message as? Message.User)?.id ?: ""
 
     val textParts = remember(messageWithParts.parts) {
         messageWithParts.parts
@@ -183,57 +194,85 @@ private fun UserMessage(messageWithParts: MessageWithParts, modifier: Modifier =
     val promptColor = theme.success // Green for dev elegance
     val textColor = theme.text
 
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                onClick = {},
-                onLongClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    clipboard.setText(AnnotatedString(text))
-                },
-                onLongClickLabel = "Copy"
-            )
-            .padding(horizontal = 4.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.Start,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Minimal elegant prompt - just the arrow
-        Text(
-            text = "➜ ",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = promptColor,
-        )
-        if (shouldVirtualizeUser) {
-            Box(modifier = Modifier.weight(1f)) {
-                val lines = remember(text) { text.split('\n') }
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 360.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    lines.forEach { line ->
-                        Text(
-                            text = line,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            color = textColor,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            }
-        } else {
+    Box {
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        showMenu = true
+                    },
+                    onLongClickLabel = "Actions"
+                )
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Minimal elegant prompt - just the arrow
             Text(
-                text = text,
+                text = "➜ ",
                 fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp,
-                color = textColor,
-                modifier = Modifier.weight(1f),
+                fontWeight = FontWeight.Medium,
+                color = promptColor,
             )
+            if (shouldVirtualizeUser) {
+                Box(modifier = Modifier.weight(1f)) {
+                    val lines = remember(text) { text.split('\n') }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        lines.forEach { line ->
+                            Text(
+                                text = line,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                color = textColor,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            } else {
+                Text(
+                    text = text,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    color = textColor,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        TuiTerminalMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false },
+            modifier = Modifier.align(Alignment.TopEnd),
+            offset = DpOffset(0.dp, 0.dp)
+        ) {
+            TuiTerminalMenuItem(
+                text = "Copy",
+                symbol = "⎘",
+                onClick = {
+                    showMenu = false
+                    clipboard.setText(AnnotatedString(text))
+                }
+            )
+            if (onRevert != null && messageId.isNotEmpty()) {
+                TuiTerminalMenuItem(
+                    text = "Revert",
+                    symbol = "↺",
+                    onClick = {
+                        showMenu = false
+                        onRevert(messageId)
+                    }
+                )
+            }
         }
     }
 }
@@ -260,7 +299,6 @@ private fun AssistantMessage(
     onToolAlways: (String) -> Unit,
     onOpenSubSession: ((String) -> Unit)? = null,
     defaultToolWidgetState: ToolWidgetState = ToolWidgetState.COMPACT,
-    pendingPermissionsByCallId: Map<String, Permission> = emptyMap(),
     onRevert: ((String) -> Unit)? = null,
     onFork: (() -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -346,18 +384,6 @@ private fun AssistantMessage(
                                 onToolDeny = onToolDeny,
                                 onOpenSubSession = onOpenSubSession
                             )
-                            group.tools.forEach { tool ->
-                                pendingPermissionsByCallId[tool.callID]?.let { perm ->
-                                    key(perm.id) {
-                                        InlinePermissionPrompt(
-                                            permission = perm,
-                                            onAllow  = { onToolApprove(perm.id) },
-                                            onAlways = { onToolAlways(perm.id) },
-                                            onReject = { onToolDeny(perm.id) }
-                                        )
-                                    }
-                                }
-                            }
                         }
                         is PartGroupItem.ReasoningGroup -> {
                             ReasoningGroupView(items = group.items)

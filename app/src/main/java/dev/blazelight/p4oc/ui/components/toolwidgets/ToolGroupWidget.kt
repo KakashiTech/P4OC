@@ -198,10 +198,7 @@ fun ToolGroupWidget(
                                 )
                             }
                             if (tool.state is ToolState.Pending) {
-                                PendingApprovalButtonsInline(
-                                    onApprove = { onToolApprove(tool.callID) },
-                                    onDeny = { onToolDeny(tool.callID) }
-                                )
+                                // No inline approve/deny — only ChatInputBar handles permissions
                             }
                         }
                         ToolWidgetState.EXPANDED -> {
@@ -219,21 +216,5 @@ fun ToolGroupWidget(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun PendingApprovalButtonsInline(
-    onApprove: () -> Unit,
-    onDeny: () -> Unit
-) {
-    val theme = LocalOpenCodeTheme.current
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(theme.backgroundPanel.copy(alpha = 0.6f))
-            .padding(horizontal = Spacing.md, vertical = Spacing.xs)
-    ) {
-        PendingApprovalButtons(onApprove = onApprove, onDeny = onDeny)
     }
 }

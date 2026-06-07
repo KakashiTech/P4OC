@@ -24,7 +24,9 @@ import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
  *   - a header row with status icon, title, badge, and loading indicator
  *   - an optional subtitle line
  *   - a content slot
- *   - an approval-button row when the tool is pending
+ *
+ * Note: Permission approval is handled by ChatInputBar only — individual
+ * tool widgets do NOT show approve/deny buttons.
  */
 @Composable
 fun ToolCard(
@@ -34,8 +36,6 @@ fun ToolCard(
     subtitle: String? = null,
     badge: String? = null,
     onClick: (() -> Unit)?,
-    onApprove: (() -> Unit)? = null,
-    onDeny: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit = {},
 ) {
@@ -107,19 +107,5 @@ fun ToolCard(
 
         // ── Content slot ──────────────────────────────────────────────
         content()
-
-        // ── Approval buttons (when pending) ───────────────────────────
-        if (state is ToolState.Pending && onApprove != null && onDeny != null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-            ) {
-                PendingApprovalButtons(
-                    onApprove = onApprove,
-                    onDeny = onDeny,
-                )
-            }
-        }
     }
 }

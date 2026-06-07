@@ -29,6 +29,7 @@ import dev.blazelight.p4oc.ui.components.chat.InterruptedTool
 import dev.blazelight.p4oc.ui.components.chat.SelectedFile
 import dev.blazelight.p4oc.ui.components.ContextUsage
 import dev.blazelight.p4oc.ui.navigation.Screen
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
@@ -36,6 +37,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArraySet
 
 /**
@@ -185,6 +187,18 @@ class ChatViewModel constructor(
     private companion object {
         const val TAG = "ChatViewModel"
 
+        // ── Tool call timeout constants ────────────────────────────────────
+        /** How long a normal tool call may stay in Running state without SSE updates before being marked stale. */
+        private const val TOOL_CALL_TIMEOUT_MS = 120_000L // 2 minutes
+        /** How long a task tool call (sub-agent) may stay Running — longer because sub-agents take more time. */
+        private const val TASK_TOOL_TIMEOUT_MS = 300_000L // 5 minutes
+        /** Error message used when a tool call times out (watchdog). */
+        private const val STALE_TOOL_MESSAGE = "Tool call timed out (stale) — connection was interrupted"
+        /** Error message used when tools are found stale after SSE reconnection. */
+        private const val RECONNECT_STALE_MESSAGE = "Tool state lost (stale) — connection was interrupted during execution"
+        /** How often the watchdog checks for stale tool calls. */
+        private const val WATCHDOG_POLL_INTERVAL_MS = 10_000L // every 10 seconds
+
         /**
          * Built-in OpenCode commands that aren't returned by the /command API endpoint.
          * These are hardcoded based on OpenCode documentation.
@@ -214,6 +228,9 @@ class ChatViewModel constructor(
 
     override fun onCleared() {
         super.onCleared()
+        watchdogJob?.cancel()
+        watchdogJob = null
+        runningToolCallTimestamps.clear()
         dialogManager.cleanup()
     }
 
@@ -300,6 +317,17 @@ class ChatViewModel constructor(
                     messageStore.loadInitial(mapped)
                     _uiState.update { it.copy(isLoading = false) }
 
+                    // Track any tool calls already in Running state from loaded messages
+                    viewModelScope.launch {
+                        val runningTools = messageStore.getRunningToolCalls()
+                        runningTools.forEach { (tool, _) ->
+                            trackRunningToolCall(tool.callID)
+                        }
+                        if (runningTools.isNotEmpty()) {
+                            AppLog.d(TAG, "Tracking ${runningTools.size} running tool calls from initial load")
+                        }
+                    }
+
                     // Background: fetch remaining messages for pagination
                     if (result.data.size == 25) {
                         launch {
@@ -356,6 +384,162 @@ class ChatViewModel constructor(
     private var suppressedInitMsgId: String? = null
     /** Watch for the first assistant message emitted after initSession. */
     private var watchForInitMsg = false
+
+    /**
+     * Ensures the session is ready to accept a new message.
+     *
+     * Phase 1 — Clean stale tools: if the local store has tool calls stuck in
+     *   Running state (e.g. from a previous failed send), abort them on the
+     *   server first so they don't block the new message.
+     *
+     * Phase 2 — Initialize: call POST /session/{id}/init.  If this blocks or
+     *   returns an error because the server itself has tool calls stuck in
+     *   "running" (the bug described in the report), we catch the timeout,
+     *   call abort, and retry once.
+     *
+     * @return true if the session is ready; false if unrecoverable
+     *   (caller should show an error and NOT attempt sendMessageAsync).
+     */
+    private suspend fun ensureSessionReady(api: dev.blazelight.p4oc.core.network.OpenCodeApi): Boolean {
+        // ── Phase 1: Clean local stale tools ──────────────────────────────
+        val runningTools = messageStore.getRunningToolCalls()
+        if (runningTools.isNotEmpty()) {
+            AppLog.w(TAG, "ensureSessionReady: ${runningTools.size} running tools — aborting first")
+            safeApiCall { api.abortSession(sessionId, getDirectory()) }
+            runningToolCallTimestamps.clear()
+            sessionInitialized = false
+            messageStore.markAllRunningToolsStale("Aborted — new message pending")
+        }
+
+        // ── Phase 2: Initialize (with timeout + abort-retry) ──────────────
+        var inited = safeInitSession()
+
+        if (!inited) {
+            AppLog.w(TAG, "ensureSessionReady: session init failed — aborting and retrying")
+            safeApiCall { api.abortSession(sessionId, getDirectory()) }
+            runningToolCallTimestamps.clear()
+            sessionInitialized = false
+            inited = safeInitSession()
+        }
+
+        return inited
+    }
+
+    /**
+     * Calls [initializeSession] with a short timeout so the caller doesn't
+     * block forever when the server is stuck on old tool calls.
+     */
+    private suspend fun safeInitSession(): Boolean {
+        return try {
+            withTimeout(10_000L) { initializeSession() }
+        } catch (_: TimeoutCancellationException) {
+            AppLog.w(TAG, "safeInitSession: timed out after 10s")
+            sessionInitialized = false
+            false
+        } catch (_: Exception) {
+            AppLog.w(TAG, "safeInitSession: unexpected error")
+            sessionInitialized = false
+            false
+        }
+    }
+
+    // ── Tool call watchdog ─────────────────────────────────────────────────
+    /**
+     * Tracks the last SSE update timestamp for each running tool call.
+     * Key: tool callID, Value: System.currentTimeMillis() of last update.
+     * Used by [startToolCallWatchdog] to detect stale tools.
+     */
+    private val runningToolCallTimestamps = ConcurrentHashMap<String, Long>()
+
+    /** The polling coroutine that periodically checks for stale tool calls. */
+    private var watchdogJob: Job? = null
+
+    /**
+     * Start or restart the tool call watchdog coroutine.
+     * Polls every [WATCHDOG_POLL_INTERVAL_MS] and marks any tool that has been
+     * in Running state longer than its timeout as stale — but ONLY when the
+     * session is NOT busy.  If the session is actively processing (isBusy == true)
+     * the tool may still be legitimately running; we never time out in that case.
+     *
+     * This avoids false positives for long-running tools (e.g. `bash` scripts
+     * that produce no intermediate output, or `task` sub-agents that run for
+     * several minutes).
+     */
+    private fun startToolCallWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = viewModelScope.launch(Dispatchers.Default) {
+            while (isActive) {
+                // Only check when the session is NOT busy — tools on a busy session
+                // may still be legitimately running without SSE updates.
+                val busy = _uiState.value.isBusy
+                if (!busy) {
+                    val now = System.currentTimeMillis()
+                    val staleEntries = runningToolCallTimestamps.entries
+                        .filter { (callID, lastUpdate) ->
+                            now - lastUpdate > getToolTimeout(callID)
+                        }
+                    for ((callID, _) in staleEntries) {
+                        runningToolCallTimestamps.remove(callID)
+                        val snapshot = messageStore.snapshotMessages()
+                        var found = false
+                        for (msg in snapshot) {
+                            val tool = msg.parts
+                                .filterIsInstance<Part.Tool>()
+                                .find { it.callID == callID && it.state is ToolState.Running }
+                            if (tool != null) {
+                                AppLog.w(TAG, "Watchdog: stale callID=$callID tool=${tool.toolName}")
+                                messageStore.markToolCallStale(callID, msg.message.id, STALE_TOOL_MESSAGE)
+                                found = true
+                                break
+                            }
+                        }
+                        if (!found) {
+                            AppLog.d(TAG, "Watchdog: stale callID=$callID already transitioned — skipping")
+                        }
+                    }
+                }
+                delay(WATCHDOG_POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    /**
+     * Start tracking a tool call that just entered [ToolState.Running].
+     * Starts the watchdog job if not already running.
+     */
+    private fun trackRunningToolCall(callID: String) {
+        runningToolCallTimestamps[callID] = System.currentTimeMillis()
+        if (watchdogJob?.isActive != true) {
+            startToolCallWatchdog()
+        }
+    }
+
+    /**
+     * Stop tracking a tool call that transitioned away from [ToolState.Running]
+     * (e.g., to Completed, Error, or cancelled).
+     */
+    private fun untrackRunningToolCall(callID: String) {
+        runningToolCallTimestamps.remove(callID)
+    }
+
+    /**
+     * Check if a tool call ID belongs to a "task" tool (sub-agent invocation),
+     * which has a longer timeout. Checks the actual stored tool name for accuracy.
+     */
+    private fun isTaskToolByName(callID: String): Boolean {
+        // Fast path: known naming convention from opencode
+        if (callID.startsWith("call_task_") || callID.startsWith("call_subtask_")) return true
+        // Slow path: look up the tool name from the message store
+        return false
+    }
+
+    /**
+     * Get the timeout for a tool call based on its callID.
+     * Task/sub-agent tools get the extended timeout; all others get the standard timeout.
+     */
+    private fun getToolTimeout(callID: String): Long {
+        return if (isTaskToolByName(callID)) TASK_TOOL_TIMEOUT_MS else TOOL_CALL_TIMEOUT_MS
+    }
 
     private suspend fun initializeSession(): Boolean {
         if (sessionInitialized) return true
@@ -422,6 +606,22 @@ class ChatViewModel constructor(
                         AppLog.w(TAG, "Suppressed init welcome message id=${event.message.id}")
                     } else if (suppressedInitMsgId != event.message.id) {
                         messageStore.upsertMessage(event.message)
+                        // If the assistant message has an error (e.g., usage limit),
+                        // the tool parts may never receive completed/error events.
+                        // Mark any tools in this message as stale immediately.
+                        if (event.message is Message.Assistant && event.message.error != null) {
+                            val errMsg = event.message.error
+                            viewModelScope.launch {
+                                val errorText = errMsg.message ?: errMsg.name
+                                val staleCount = messageStore.markToolsInMessageStale(
+                                    messageId = event.message.id,
+                                    staleMessage = "Provider error: $errorText"
+                                )
+                                if (staleCount > 0) {
+                                    AppLog.w(TAG, "Message error: marked $staleCount stale tools in msg ${event.message.id}")
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -429,6 +629,16 @@ class ChatViewModel constructor(
                 if (suppressedInitMsgId == event.part.messageID) return@handleEvent
                 if (event.part.sessionID == sessionId) {
                     messageStore.upsertPartBuffered(event.part, event.delta)
+
+                    // Track tool call state transitions for stale detection
+                    if (event.part is Part.Tool) {
+                        val tool = event.part
+                        when (tool.state) {
+                            is ToolState.Running -> trackRunningToolCall(tool.callID)
+                            is ToolState.Completed, is ToolState.Error -> untrackRunningToolCall(tool.callID)
+                            else -> untrackRunningToolCall(tool.callID) // Pending is terminal for the watchdog
+                        }
+                    }
                 }
             }
             is OpenCodeEvent.MessagePartDelta -> {
@@ -487,6 +697,18 @@ class ChatViewModel constructor(
                     if (wasBusy && !isBusy) {
                         viewModelScope.launch { messageStore.clearStreamingFlags() }
                         _hasUnreadResponse.value = true
+                        runningToolCallTimestamps.clear()
+                        // Session is idle on the server — any tools we still have in Running
+                        // are stale (the server never sent their completed/error events).
+                        // Mark them immediately so the user isn't stuck with infinite spinners.
+                        viewModelScope.launch {
+                            val staleCount = messageStore.markAllRunningToolsStale(
+                                "Session ended — ${RECONNECT_STALE_MESSAGE}"
+                            )
+                            if (staleCount > 0) {
+                                AppLog.w(TAG, "Session idle: marked $staleCount stale tools")
+                            }
+                        }
                     }
 
                     // Send queued message when session becomes idle
@@ -504,6 +726,16 @@ class ChatViewModel constructor(
                 if (event.sessionID == sessionId) {
                     AppLog.e(TAG, "Session error: ${event.error?.message}")
                     sessionInitialized = false
+                    runningToolCallTimestamps.clear()
+                    viewModelScope.launch {
+                        messageStore.clearStreamingFlags()
+                        val staleCount = messageStore.markAllRunningToolsStale(
+                            "Session error: ${event.error?.message ?: "Connection interrupted"}"
+                        )
+                        if (staleCount > 0) {
+                            AppLog.w(TAG, "Session error: marked $staleCount tools stale")
+                        }
+                    }
                     _uiState.update {
                         it.copy(
                             isBusy = false,
@@ -516,8 +748,17 @@ class ChatViewModel constructor(
             is OpenCodeEvent.SessionIdle -> {
                 if (event.sessionID == sessionId) {
                     AppLog.d(TAG, "Session became idle")
-                    viewModelScope.launch { messageStore.clearStreamingFlags() }
+                    viewModelScope.launch {
+                        messageStore.clearStreamingFlags()
+                        val staleCount = messageStore.markAllRunningToolsStale(
+                            "Session ended — $RECONNECT_STALE_MESSAGE"
+                        )
+                        if (staleCount > 0) {
+                            AppLog.w(TAG, "Session idle: marked $staleCount stale tools")
+                        }
+                    }
                     _uiState.update { it.copy(isBusy = false, isSending = false) }
+                    runningToolCallTimestamps.clear()
                     sendQueuedMessageIfAny()
                 }
             }
@@ -576,6 +817,32 @@ class ChatViewModel constructor(
                                         metadata = p.metadata, always = p.always
                                     )
                                 )
+                            }
+                        }
+
+                        // ── Tool state re-sync on reconnect ────────────────
+                        // If the session is idle but we have tool calls stuck in Running,
+                        // they are stale — the "completed" SSE events were lost during disconnect.
+                        // Mark them as Error so the UI doesn't show infinite spinners.
+                        if (!busy) {
+                            val runningTools = messageStore.getRunningToolCalls()
+                            if (runningTools.isNotEmpty()) {
+                                AppLog.w(TAG, "Reconnect: session idle but ${runningTools.size} tools still Running — marking stale")
+                                val staleCount = messageStore.markAllRunningToolsStale(RECONNECT_STALE_MESSAGE)
+                                if (staleCount > 0) {
+                                    AppLog.w(TAG, "Reconnect: marked $staleCount tools as stale")
+                                    // Clear our watchdog tracking for these tools too
+                                    runningTools.forEach { (tool, _) ->
+                                        untrackRunningToolCall(tool.callID)
+                                    }
+                                }
+                            }
+                        } else {
+                            // Session is busy — tools may still be legitimately running.
+                            // Ensure the watchdog is tracking them.
+                            val runningTools = messageStore.getRunningToolCalls()
+                            runningTools.forEach { (tool, _) ->
+                                trackRunningToolCall(tool.callID)
                             }
                         }
                     } catch (_: Exception) {
@@ -638,7 +905,13 @@ class ChatViewModel constructor(
                 return@launch
             }
 
-            initializeSession()
+            // Best-effort session readiness — auto-aborts stale tools, retries on timeout.
+            // If this fails we STILL send the message (the server's prompt_async may
+            // handle stuck tools implicitly, just like the opencode TUI does).
+            val sessionReady = ensureSessionReady(api)
+            if (!sessionReady) {
+                AppLog.w(TAG, "sendMessage: session not ready — sending anyway (server may reject)")
+            }
 
             val parts = buildPartInputs(text, attachedFiles)
             val reasoningEffort = settingsDataStore.reasoningEffort.first()
@@ -659,6 +932,7 @@ class ChatViewModel constructor(
                 }
                 is ApiResult.Error -> {
                     AppLog.w(TAG, "sendMessage: failed: ${result.message}")
+                    sessionInitialized = false
                     _uiState.update {
                         it.copy(
                             isSending = false,
@@ -714,7 +988,13 @@ class ChatViewModel constructor(
                 return@launch
             }
 
-            initializeSession()
+            // Best-effort session readiness — auto-aborts stale tools, retries on timeout.
+            // If this fails we STILL send the message (the server's prompt_async may
+            // handle stuck tools implicitly, just like the opencode TUI does).
+            val sessionReady = ensureSessionReady(api)
+            if (!sessionReady) {
+                AppLog.w(TAG, "sendQueuedMessageIfAny: session not ready — sending anyway")
+            }
 
             val parts = buildPartInputs(queued.text, queued.attachedFiles)
             val reasoningEffort = settingsDataStore.reasoningEffort.first()
@@ -735,6 +1015,7 @@ class ChatViewModel constructor(
                 }
                 is ApiResult.Error -> {
                     AppLog.w(TAG, "sendQueuedMessageIfAny: failed: ${result.message}")
+                    sessionInitialized = false
                     _uiState.update {
                         it.copy(
                             isSending = false,
@@ -825,6 +1106,11 @@ class ChatViewModel constructor(
                 _uiState.update { it.copy(isSending = false, error = "Not connected") }
                 return@launch
             }
+            // Best-effort session readiness — try to send even if init fails
+            val sessionReady = ensureSessionReady(api)
+            if (!sessionReady) {
+                AppLog.w(TAG, "executeCommand: session not ready — sending anyway")
+            }
             val request = ExecuteCommandRequest(
                 command = commandName,
                 arguments = arguments
@@ -835,6 +1121,7 @@ class ChatViewModel constructor(
                     _uiState.update { it.copy(isSending = false, isBusy = true) }
                 }
                 is ApiResult.Error -> {
+                    sessionInitialized = false
                     _uiState.update {
                         it.copy(isSending = false, error = "Failed to execute command: ${result.message}")
                     }

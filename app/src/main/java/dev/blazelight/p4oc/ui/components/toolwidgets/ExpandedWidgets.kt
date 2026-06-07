@@ -2,6 +2,8 @@ package dev.blazelight.p4oc.ui.components.toolwidgets
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.withInfiniteAnimationFrameMillis
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,6 +19,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -47,8 +50,6 @@ import kotlinx.serialization.json.*
 fun BashWidgetExpanded(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
-    onToolApprove: (String) -> Unit,
-    onToolDeny: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
@@ -147,20 +148,6 @@ fun BashWidgetExpanded(
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
                         .horizontalScroll(rememberScrollState()),
-                )
-            }
-        }
-
-        // ── Approval buttons (when pending) ─────────────────────────
-        if (state is ToolState.Pending) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-            ) {
-                PendingApprovalButtons(
-                    onApprove = { onToolApprove(tool.callID) },
-                    onDeny = { onToolDeny(tool.callID) },
                 )
             }
         }
@@ -377,6 +364,32 @@ fun EditWidgetExpanded(
         }
     }
 
+    // When pending, show just "- preparing writing..." — no card, no background
+    if (state is ToolState.Pending) {
+        val theme = LocalOpenCodeTheme.current
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 1.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "-",
+                fontFamily = FontFamily.Monospace,
+                fontSize = TuiCodeFontSize.md,
+                color = theme.textMuted,
+            )
+            Text(
+                text = "preparing writing...",
+                fontFamily = FontFamily.Monospace,
+                fontSize = TuiCodeFontSize.md,
+                color = theme.text,
+            )
+        }
+        return
+    }
+
     ToolCard(
         tool = tool,
         icon = when (state) {
@@ -429,8 +442,6 @@ fun EditWidgetExpanded(
 fun DefaultWidgetExpanded(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
-    onToolApprove: (String) -> Unit,
-    onToolDeny: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val theme = LocalOpenCodeTheme.current
@@ -458,8 +469,6 @@ fun DefaultWidgetExpanded(
         title = tool.toolName,
         subtitle = inputPreview.ifBlank { null },
         onClick = onClick,
-        onApprove = { onToolApprove(tool.callID) },
-        onDeny = { onToolDeny(tool.callID) },
         modifier = modifier,
     ) {
         if (!output.isNullOrBlank()) {
@@ -492,8 +501,60 @@ fun DefaultWidgetExpanded(
 }
 
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 //  TASK (sub-agent) — matches opencode TUI subagent style
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * Gray braille-dot spinner matching OpenCode CLI spinner style.
+ * Small, subtle, uses theme.textMuted for gray color.
+ */
+@Composable
+private fun GrayBrailleSpinner(
+    modifier: Modifier = Modifier,
+    size: Dp = 10.dp,
+    dotRadius: Dp = 1.2.dp
+) {
+    val theme = LocalOpenCodeTheme.current
+    val frames = remember {
+        listOf(
+            booleanArrayOf(true,  false, false, true,  true,  false),
+            booleanArrayOf(false, false, false, true,  true,  true),
+            booleanArrayOf(false, false, true,  false, true,  true),
+            booleanArrayOf(false, true,  true,  false, false, true),
+            booleanArrayOf(true,  true,  true,  false, false, false),
+            booleanArrayOf(true,  true,  false, true,  false, false),
+        )
+    }
+    var frameIndex by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            withInfiniteAnimationFrameMillis {
+                frameIndex = ((it / 111) % 6).toInt()
+            }
+        }
+    }
+
+    Canvas(modifier = modifier.size(size)) {
+        val dotR = dotRadius.toPx()
+        val spacingX = size.toPx() / 3f
+        val spacingY = size.toPx() / 2f
+        val activeDots = frames[frameIndex]
+        for (i in 0 until 6) {
+            val col = i % 3
+            val row = i / 3
+            drawCircle(
+                color = theme.textMuted.copy(alpha = if (activeDots[i]) 1f else 0.2f),
+                radius = dotR,
+                center = Offset(
+                    spacingX * (col + 0.5f),
+                    spacingY * (row + 0.5f)
+                )
+                )
+        }
+    }
+}
 
 private data class TaskToolInfo(
     val tool: String,
@@ -505,8 +566,6 @@ private data class TaskToolInfo(
 fun TaskWidgetExpanded(
     tool: Part.Tool,
     onClick: (() -> Unit)?,
-    onToolApprove: (String) -> Unit,
-    onToolDeny: (String) -> Unit,
     onOpenSubSession: ((String) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
@@ -516,7 +575,6 @@ fun TaskWidgetExpanded(
     val subagentType = remember(state.input) { extractJsonParam(state.input, "subagent_type") ?: "general" }
     val sessionId = extractSubSessionId(tool, state)
 
-    // Parse tool call summary from metadata (part-level or state-level) or output JSON
     val toolCalls = remember(tool, state) { parseTaskToolCalls(tool) }
     val completedCount = remember(toolCalls) { toolCalls.count { it.status != "pending" } }
     val totalCount = remember(toolCalls) { toolCalls.size }
@@ -525,7 +583,6 @@ fun TaskWidgetExpanded(
             toolCalls.lastOrNull { it.status == "running" || it.status == "streaming" }
                 ?: toolCalls.lastOrNull { it.status == "completed" }
                 ?: if (toolCalls.isEmpty()) {
-                    // Fallback: use state.title which may contain current tool description
                     val title = state.title?.trim()
                     if (!title.isNullOrBlank()) TaskToolInfo(tool = title)
                     else null
@@ -533,7 +590,6 @@ fun TaskWidgetExpanded(
         } else null
     }
 
-    // Duration
     val elapsedMs = remember(state) {
         when (state) {
             is ToolState.Completed -> state.endedAt - state.startedAt
@@ -547,32 +603,41 @@ fun TaskWidgetExpanded(
         else "${(secs / 60).toInt()}m ${(secs % 60).toInt()}s"
     }
 
-    val accentColor = theme.text
-
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .padding(vertical = Spacing.xxs)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier),
     ) {
-        // ── Title: "{Type} Task — {description}" ────────────────────
-        Text(
-            text = "${subagentType.replaceFirstChar { it.uppercase() }} Task — $description",
-            fontFamily = FontFamily.Monospace,
-            fontSize = TuiCodeFontSize.lg,
-            color = accentColor,
-            maxLines = 1,
-        )
+        // ── Title row with gray spinner ─────────────────────────
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (state is ToolState.Running) {
+                GrayBrailleSpinner()
+                Spacer(Modifier.width(Spacing.sm))
+            }
+            Text(
+                text = "${subagentType.replaceFirstChar { it.uppercase() }} Task — $description",
+                fontFamily = FontFamily.Monospace,
+                fontSize = TuiCodeFontSize.lg,
+                color = theme.text,
+                maxLines = 1,
+                modifier = Modifier.weight(1f)
+            )
+        }
 
         Spacer(Modifier.height(Spacing.xxs))
 
-        // ── Status line ─────────────────────────────────────────────
+        // ── Compact status line ─────────────────────────────────
         when (state) {
             is ToolState.Running -> {
-                if (currentTool != null) {
-                    val currentToolStr = currentTool.title
-                        ?: currentTool.tool
+                val runningStr = state.title?.trim()?.take(80)
+                    ?: currentTool?.let { it.title ?: it.tool }
+                if (runningStr != null) {
                     Text(
-                        text = "↳ $currentToolStr",
+                        text = "↳ $runningStr",
                         fontFamily = FontFamily.Monospace,
                         fontSize = TuiCodeFontSize.sm,
                         color = theme.textMuted,
@@ -605,39 +670,25 @@ fun TaskWidgetExpanded(
                 )
             }
             is ToolState.Pending -> {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "○",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.lg,
-                        color = theme.secondary,
-                    )
-                    Text(
-                        text = stringResource(R.string.allow),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.sm,
-                        color = theme.textMuted,
-                        modifier = Modifier
-                            .clickable(role = Role.Button) { onToolApprove(tool.callID) },
-                    )
-                    Text(
-                        text = stringResource(R.string.deny),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = TuiCodeFontSize.sm,
-                        color = theme.textMuted,
-                        modifier = Modifier
-                            .clickable(role = Role.Button) { onToolDeny(tool.callID) },
-                    )
+                var dotCount by remember { mutableIntStateOf(1) }
+                LaunchedEffect(Unit) {
+                    while (true) {
+                        delay(400)
+                        dotCount = (dotCount % 3) + 1
+                    }
                 }
+                Text(
+                    text = "delegating${".".repeat(dotCount)}",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = TuiCodeFontSize.sm,
+                    color = theme.secondary,
+                )
             }
         }
 
-        // ── Open sub-session link ───────────────────────────────────
+        // ── Open sub-session link ───────────────────────────────
         if (sessionId != null && onOpenSubSession != null) {
+            Spacer(Modifier.height(Spacing.xs))
             Row(
                 modifier = Modifier
                     .clickable(role = Role.Button) { onOpenSubSession(sessionId) },
@@ -798,19 +849,6 @@ fun TodoWriteWidgetExpanded(
                         )
                     }
                 }
-            }
-        } else if (output.isNotBlank()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-            ) {
-                Text(
-                    text = output.take(300),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = TuiCodeFontSize.sm,
-                    color = theme.textMuted,
-                )
             }
         }
     }
@@ -987,7 +1025,16 @@ fun getToolStateIcon(
     return when (state) {
         is ToolState.Running -> "◐" to theme.warning
         is ToolState.Pending -> "○" to theme.secondary
-        is ToolState.Error -> "✗" to theme.error
+        is ToolState.Error -> {
+            // Differentiate stale tools (connection lost) from real errors.
+            // Both STALE_TOOL_MESSAGE and RECONNECT_STALE_MESSAGE in ChatViewModel
+            // contain "(stale)" as a discriminating substring.
+            if (state.error.contains("(stale)")) {
+                "⚠" to theme.warning // Warning/amber — stale, not a real failure
+            } else {
+                "✗" to theme.error   // Red — real execution error
+            }
+        }
         is ToolState.Completed -> "✓" to theme.success
     }
 }

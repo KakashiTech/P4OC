@@ -33,7 +33,7 @@ class ConnectionManager constructor(
     private val context: Context,
     private val json: Json,
     private val eventMapper: EventMapper,
-    private val directoryManager: DirectoryManager
+    private val directoryManager: DirectoryManager,
 ) {
     companion object {
         private const val TAG = "ConnectionManager"

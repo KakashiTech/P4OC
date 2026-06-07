@@ -391,7 +391,7 @@ fun ChatScreen(
                             localInput = ""
                             focusTriggerCount++
                         },
-                        onCancelQueue = { /* TODO: Implementar cancelacion de mensaje encolado */ },
+                        onCancelQueue = { /* TODO */ },
                         queuedMessagePreview = queuedMessage?.text,
                         attachedFiles = attachedFiles,
                         onAttachClick = {
@@ -401,7 +401,16 @@ fun ChatScreen(
                         onRemoveAttachment = viewModel.filePickerManager::detachFile,
                         commands = commands,
                         onCommandSelected = { },
-                        requestFocus = isActiveTab
+                        requestFocus = isActiveTab,
+                        pendingPermissions = pendingPermissionsByCallId,
+                        pendingQuestion = pendingQuestion,
+                        onPermissionResponse = { permId, response ->
+                            viewModel.respondToPermission(permId, response)
+                        },
+                        onQuestionRespond = { id, answers ->
+                            viewModel.respondToQuestion(id, answers)
+                        },
+                        onQuestionDismiss = viewModel::dismissQuestion
                     )
                 }
             }
@@ -428,20 +437,16 @@ fun ChatScreen(
                     listState = listState,
                     flingBehavior = smoothFling,
                     flatItems = flatItems,
-                    pendingQuestion = pendingQuestion,
                     abortSummary = abortSummary,
                     hasMoreMessages = hasMoreMessages,
                     visibleMessageCount = visibleMessageCount,
                     totalMessageCount = totalMessageCount,
                     onLoadMore = { viewModel.loadOlderMessages() },
-                    onDismissQuestion = viewModel::dismissQuestion,
-                    onRespondQuestion = { id, r -> viewModel.respondToQuestion(id, r) },
                     onToolApprove = onToolApprove,
                     onToolDeny = onToolDeny,
                     onToolAlways = onToolAlways,
                     onOpenSubSession = onOpenSubSession,
                     defaultToolWidgetState = defaultToolWidgetState,
-                    pendingPermissionsByCallId = pendingPermissionsByCallId,
                     onRevert = onRevert,
                     onFork = onFork,
                     thinkingMessageIds = thinkingMessageIds,
@@ -1175,20 +1180,16 @@ private fun ChatMessageList(
     listState: LazyListState,
     flingBehavior: androidx.compose.foundation.gestures.FlingBehavior,
     flatItems: List<FlatChatItem>,
-    pendingQuestion: dev.blazelight.p4oc.domain.model.QuestionRequest?,
     abortSummary: dev.blazelight.p4oc.ui.components.chat.AbortSummary?,
     hasMoreMessages: Boolean,
     visibleMessageCount: Int,
     totalMessageCount: Int,
     onLoadMore: () -> Unit,
-    onDismissQuestion: () -> Unit,
-    onRespondQuestion: (String, List<List<String>>) -> Unit,
     onToolApprove: (String) -> Unit,
     onToolDeny: (String) -> Unit,
     onToolAlways: (String) -> Unit,
     onOpenSubSession: ((String) -> Unit)?,
     defaultToolWidgetState: ToolWidgetState,
-    pendingPermissionsByCallId: Map<String, dev.blazelight.p4oc.domain.model.Permission>,
     onRevert: (String) -> Unit,
     onFork: (String) -> Unit,
     thinkingMessageIds: Set<String> = emptySet(),
@@ -1212,16 +1213,6 @@ private fun ChatMessageList(
         flingBehavior = flingBehavior,
         contentPadding = PaddingValues(vertical = 2.dp),
     ) {
-        pendingQuestion?.let { q ->
-            item(key = "q_${q.id}", contentType = "question") {
-                dev.blazelight.p4oc.ui.components.question.InlineQuestionCard(
-                    questionData = dev.blazelight.p4oc.domain.model.QuestionData(q.questions),
-                    onDismiss = onDismissQuestion,
-                    onSubmit = { onRespondQuestion(q.id, it) },
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
-            }
-        }
         abortSummary?.let { s ->
             item(key = "abort_${s.abortedAt}", contentType = "abort") {
                 dev.blazelight.p4oc.ui.components.chat.AbortSummaryCard(
@@ -1263,7 +1254,6 @@ private fun ChatMessageList(
                         onToolAlways = onToolAlways,
                         onOpenSubSession = onOpenSubSession,
                         defaultToolWidgetState = defaultToolWidgetState,
-                        pendingPermissionsByCallId = pendingPermissionsByCallId,
                         onRevert = onRevert,
                         onFork = onFork
                     )

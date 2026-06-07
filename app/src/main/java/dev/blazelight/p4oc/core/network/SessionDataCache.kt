@@ -53,6 +53,15 @@ class SessionDataCache(
 
     init {
         restoreFromDisk()
+        // Auto-invalidate cache when connection drops,
+        // so stale sessions from a previous server never leak.
+        scope.launch {
+            connectionManager.connectionState.collect { state ->
+                if (state == ConnectionState.Disconnected) {
+                    cachedResult = null
+                }
+            }
+        }
     }
 
     @Serializable

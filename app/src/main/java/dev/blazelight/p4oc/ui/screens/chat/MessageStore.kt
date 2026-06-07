@@ -12,6 +12,7 @@ import dev.blazelight.p4oc.domain.model.Message
 import dev.blazelight.p4oc.domain.model.MessageWithParts
 import dev.blazelight.p4oc.domain.model.Part
 import dev.blazelight.p4oc.domain.model.TokenUsage
+import dev.blazelight.p4oc.domain.model.ToolState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -502,6 +503,149 @@ class MessageStore(
                     _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
                 }
             }
+        }
+    }
+
+    // ── Tool call staleness detection ───────────────────────────────────────
+
+    /**
+     * Find all tool parts currently in [ToolState.Running] state.
+     * Returns pairs of (tool part, messageId) for each running tool.
+     */
+    suspend fun getRunningToolCalls(): List<Pair<Part.Tool, String>> {
+        messagesMutex.withLock {
+            return _messagesMap.entries.flatMap { (messageId, msg) ->
+                msg.parts
+                    .filterIsInstance<Part.Tool>()
+                    .filter { it.state is ToolState.Running }
+                    .map { it to messageId }
+            }
+        }
+    }
+
+    /**
+     * Transition a specific tool call from [ToolState.Running] to [ToolState.Error].
+     * No-op if the tool is not in Running state or doesn't exist.
+     * Used by the watchdog when a tool call times out.
+     *
+     * @param callID the tool call's unique identifier
+     * @param messageId the message containing the tool call
+     * @param staleMessage error message describing why it was marked stale
+     */
+    suspend fun markToolCallStale(callID: String, messageId: String, staleMessage: String) {
+        messagesMutex.withLock {
+            val existing = _messagesMap[messageId] ?: return
+            val parts = existing.parts.toMutableList()
+            var changed = false
+            for (i in parts.indices) {
+                val p = parts[i]
+                if (p is Part.Tool && p.callID == callID && p.state is ToolState.Running) {
+                    val running = p.state
+                    parts[i] = p.copy(
+                        state = ToolState.Error(
+                            input = running.input,
+                            error = staleMessage,
+                            startedAt = running.startedAt,
+                            endedAt = System.currentTimeMillis(),
+                            metadata = running.metadata
+                        )
+                    )
+                    changed = true
+                    break
+                }
+            }
+            if (changed) {
+                withContext(Dispatchers.Main) {
+                    Snapshot.withMutableSnapshot {
+                        _messagesMap[messageId] = existing.copy(parts = parts)
+                        _messagesVersion.value++
+                        _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Transition all tool calls in a specific message from [ToolState.Running]
+     * to [ToolState.Error]. Used when the message arrives with an error
+     * (e.g., usage limit) without tool-level part updates.
+     *
+     * @return count of tools marked stale in that message
+     */
+    suspend fun markToolsInMessageStale(messageId: String, staleMessage: String): Int {
+        messagesMutex.withLock {
+            val existing = _messagesMap[messageId] ?: return 0
+            var staleCount = 0
+            val parts = existing.parts.map { p ->
+                if (p is Part.Tool && p.state is ToolState.Running) {
+                    val running = p.state
+                    staleCount++
+                    p.copy(
+                        state = ToolState.Error(
+                            input = running.input,
+                            error = staleMessage,
+                            startedAt = running.startedAt,
+                            endedAt = System.currentTimeMillis(),
+                            metadata = running.metadata
+                        )
+                    )
+                } else p
+            }
+            if (staleCount > 0) {
+                withContext(Dispatchers.Main) {
+                    Snapshot.withMutableSnapshot {
+                        _messagesMap[messageId] = existing.copy(parts = parts)
+                        _messagesVersion.value++
+                        _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
+                    }
+                }
+            }
+            return staleCount
+        }
+    }
+
+    /**
+     * Batch-transition ALL tool calls currently in [ToolState.Running] to
+     * [ToolState.Error] with the given [staleMessage]. Returns the count
+     * of tools that were marked stale.
+     *
+     * Called on SSE reconnection when the session reports idle but the client
+     * still has running tools (missed "completed" events during disconnect).
+     */
+    suspend fun markAllRunningToolsStale(staleMessage: String): Int {
+        messagesMutex.withLock {
+            var staleCount = 0
+            val updates = _messagesMap.entries.mapNotNull { (id, msg) ->
+                var msgChanged = false
+                val parts = msg.parts.map { p ->
+                    if (p is Part.Tool && p.state is ToolState.Running) {
+                        val running = p.state
+                        msgChanged = true
+                        staleCount++
+                        p.copy(
+                            state = ToolState.Error(
+                                input = running.input,
+                                error = staleMessage,
+                                startedAt = running.startedAt,
+                                endedAt = System.currentTimeMillis(),
+                                metadata = running.metadata
+                            )
+                        )
+                    } else p
+                }
+                if (msgChanged) id to msg.copy(parts = parts) else null
+            }
+            if (updates.isNotEmpty()) {
+                withContext(Dispatchers.Main) {
+                    Snapshot.withMutableSnapshot {
+                        updates.forEach { (id, msg) -> _messagesMap[id] = msg }
+                        _messagesVersion.value++
+                        _messages.value = messageOrder.mapNotNull { id -> _messagesMap[id] }
+                    }
+                }
+            }
+            return staleCount
         }
     }
 

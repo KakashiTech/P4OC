@@ -427,7 +427,6 @@ internal fun FlatChatItemView(
     onToolAlways: (String) -> Unit,
     onOpenSubSession: ((String) -> Unit)? = null,
     defaultToolWidgetState: ToolWidgetState = ToolWidgetState.COMPACT,
-    pendingPermissionsByCallId: Map<String, Permission> = emptyMap(),
     onRevert: ((String) -> Unit)? = null,
     onFork: ((String) -> Unit)? = null
 ) {
@@ -440,7 +439,6 @@ internal fun FlatChatItemView(
                 onToolAlways = onToolAlways,
                 onOpenSubSession = onOpenSubSession,
                 defaultToolWidgetState = defaultToolWidgetState,
-                pendingPermissionsByCallId = pendingPermissionsByCallId,
                 onRevert = onRevert,
                 onFork = null
             )
@@ -505,13 +503,6 @@ internal fun FlatChatItemView(
                     onToolDeny = onToolDeny,
                     onOpenSubSession = onOpenSubSession
                 )
-                item.tools.forEach { tool ->
-                    pendingPermissionsByCallId[tool.callID]?.let { perm ->
-                        dev.blazelight.p4oc.ui.components.chat.FlatInlinePermission(
-                            perm, onToolApprove, onToolAlways, onToolDeny
-                        )
-                    }
-                }
             }
         }
         is FlatChatItem.FilePart -> {
@@ -592,7 +583,6 @@ internal fun MessageBlockView(
     onToolAlways: (String) -> Unit,
     onOpenSubSession: ((String) -> Unit)? = null,
     defaultToolWidgetState: ToolWidgetState = ToolWidgetState.COMPACT,
-    pendingPermissionsByCallId: Map<String, Permission> = emptyMap(),
     onRevert: ((String) -> Unit)? = null,
     onFork: ((String) -> Unit)? = null
 ) {
@@ -605,7 +595,6 @@ internal fun MessageBlockView(
                 onToolAlways = onToolAlways,
                 onOpenSubSession = onOpenSubSession,
                 defaultToolWidgetState = defaultToolWidgetState,
-                pendingPermissionsByCallId = pendingPermissionsByCallId,
                 onRevert = onRevert,
                 onFork = null
             )
@@ -637,7 +626,6 @@ internal fun MessageBlockView(
                 onToolAlways = onToolAlways,
                 onOpenSubSession = onOpenSubSession,
                 defaultToolWidgetState = defaultToolWidgetState,
-                pendingPermissionsByCallId = pendingPermissionsByCallId,
                 onRevert = onRevert,
                 onFork = onFork?.let { cb -> { (mergedMessageWithParts.message as? Message.Assistant)?.id?.let(cb) } }
             )
