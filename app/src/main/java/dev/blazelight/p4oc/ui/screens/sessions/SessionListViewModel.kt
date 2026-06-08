@@ -396,6 +396,87 @@ class SessionListViewModel constructor(
         }
     }
 
+    /**
+     * Discover existing sessions in a directory that may not be registered as a project.
+     * Fetches sessions from the server for this directory and registers them in the UI
+     * + cache, so they appear in the session list and are auto-discovered on future loads.
+     */
+    fun discoverSessions(directory: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+
+            val api = connectionManager.getApi() ?: run {
+                _uiState.update { it.copy(isLoading = false) }
+                return@launch
+            }
+
+            AppLog.d("SessionListVM", "discoverSessions: scanning directory=$directory")
+
+            // Fetch projects to match project info
+            val projectsResult = safeApiCall { api.listProjects() }
+            val projects = when (projectsResult) {
+                is ApiResult.Success -> projectsResult.data.map { dto ->
+                    ProjectInfo(
+                        id = dto.id,
+                        worktree = dto.worktree,
+                        name = dto.worktree.substringAfterLast("/")
+                    )
+                }
+                is ApiResult.Error -> emptyList()
+            }
+
+            // Fetch sessions from the target directory
+            val result = safeApiCall { api.listSessions(directory = directory, roots = true, limit = 100) }
+            when (result) {
+                is ApiResult.Success -> {
+                    val discovered = result.data.map { dto ->
+                        val session = SessionMapper.mapToDomain(dto)
+                        val project = projects.find { it.worktree == session.directory }
+                        SessionWithProject(
+                            session = session,
+                            projectId = project?.id,
+                            projectName = project?.name
+                        )
+                    }
+
+                    if (discovered.isEmpty()) {
+                        _uiState.update { it.copy(isLoading = false, error = "No sessions found in $directory") }
+                        AppLog.d("SessionListVM", "discoverSessions: no sessions found in $directory")
+                        return@launch
+                    }
+
+                    AppLog.d("SessionListVM", "discoverSessions: found ${discovered.size} sessions in $directory")
+
+                    // Register directory in knownDirectories so future loads auto-discover
+                    val cached = sessionDataCache.peek()
+                    val mergedDirs = (cached?.knownDirectories ?: emptySet()) + directory
+                    sessionDataCache.updateKnownDirectories(mergedDirs)
+
+                    // Upsert each discovered session
+                    discovered.forEach { sessionDataCache.upsertSession(it) }
+
+                    // Merge into UI state (avoid duplicates by ID)
+                    _uiState.update { state ->
+                        val existingIds = state.sessions.map { it.session.id }.toSet()
+                        val newOnes = discovered.filter { it.session.id !in existingIds }
+                        state.copy(
+                            isLoading = false,
+                            sessions = (newOnes + state.sessions)
+                                .sortedByDescending { s -> s.session.updatedAt },
+                            error = null
+                        )
+                    }
+                }
+                is ApiResult.Error -> {
+                    AppLog.e("SessionListVM", "discoverSessions FAILED for directory=$directory: ${result.message}")
+                    _uiState.update {
+                        it.copy(isLoading = false, error = "Failed to scan directory: ${result.message}")
+                    }
+                }
+            }
+        }
+    }
+
     fun deleteSession(sessionId: String, directory: String? = null) {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: return@launch

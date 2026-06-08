@@ -122,6 +122,7 @@
     <string name="sessions_quick_global_desc">No project context</string>
     <string name="sessions_quick_custom">New with custom directory</string>
     <string name="sessions_quick_custom_desc">Specify a directory on the server</string>
+    <string name="sessions_scan">Scan directory</string>
     
     <!-- Chat Screen -->
     <string name="chat_empty_title">Start a conversation</string>

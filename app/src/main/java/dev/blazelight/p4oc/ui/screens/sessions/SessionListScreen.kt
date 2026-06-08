@@ -69,6 +69,7 @@ import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import dev.blazelight.p4oc.ui.theme.Spacing
+import dev.blazelight.p4oc.ui.theme.TuiCodeFontSize
 import dev.blazelight.p4oc.ui.components.TuiTopBar
 import dev.blazelight.p4oc.ui.theme.Sizing
 import dev.blazelight.p4oc.ui.components.TuiCard
@@ -321,6 +322,11 @@ fun SessionListScreen(
             },
             onCreate = { title, directory ->
                 viewModel.createSession(title, directory)
+                showNewSessionDialog = false
+                showNewSessionCustomDir = false
+            },
+            onScan = { directory ->
+                viewModel.discoverSessions(directory)
                 showNewSessionDialog = false
                 showNewSessionCustomDir = false
             }
@@ -1272,7 +1278,8 @@ private fun NewSessionDialog(
     defaultProjectId: String? = null,
     initialUseCustomDirectory: Boolean = false,
     onDismiss: () -> Unit,
-    onCreate: (String?, String?) -> Unit
+    onCreate: (String?, String?) -> Unit,
+    onScan: (String) -> Unit = {},
 ) {
     var title by remember { mutableStateOf("") }
     // Default to null (Global) unless a specific project is requested
@@ -1285,6 +1292,7 @@ private fun NewSessionDialog(
 
     val globalText = stringResource(R.string.sessions_global)
     val customText = stringResource(R.string.sessions_custom_directory)
+    val theme = LocalOpenCodeTheme.current
     
     // Resolve the effective directory for session creation
     val effectiveDirectory = when {
@@ -1303,8 +1311,20 @@ private fun NewSessionDialog(
             }
         },
         dismissButton = {
-            TuiTextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.button_cancel))
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                if (useCustomDirectory && customDirectory.isNotBlank()) {
+                    TuiButton(
+                        onClick = { onScan(customDirectory) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = theme.accent.copy(alpha = 0.2f)
+                        )
+                    ) {
+                        Text(stringResource(R.string.sessions_scan), fontSize = TuiCodeFontSize.sm)
+                    }
+                }
+                TuiTextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.button_cancel))
+                }
             }
         }
     ) {
@@ -1330,7 +1350,6 @@ private fun NewSessionDialog(
                 expanded = expanded,
                 onDismissRequest = { expanded = false }
             ) {
-                val theme = LocalOpenCodeTheme.current
                 // Global option first
                 DropdownMenuItem(
                     text = { 
