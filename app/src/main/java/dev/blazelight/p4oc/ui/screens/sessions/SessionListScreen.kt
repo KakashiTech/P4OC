@@ -1312,9 +1312,9 @@ private fun NewSessionDialog(
         },
         dismissButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if (useCustomDirectory && customDirectory.isNotBlank()) {
+                if (effectiveDirectory != null) {
                     TuiButton(
-                        onClick = { onScan(customDirectory) },
+                        onClick = { onScan(effectiveDirectory) },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = theme.accent.copy(alpha = 0.2f)
                         )
