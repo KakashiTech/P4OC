@@ -1155,6 +1155,30 @@ class ChatViewModel constructor(
     fun revertMessage(messageId: String) {
         viewModelScope.launch {
             val api = connectionManager.getApi() ?: return@launch
+
+            // --- Restore message text to input bar ---
+            val snapshot = messageStore.snapshotMessages()
+            val targetMsg = snapshot.find { it.message.id == messageId }
+            if (targetMsg != null) {
+                val textPart = targetMsg.parts.filterIsInstance<Part.Text>().firstOrNull()
+                val content = textPart?.text?.trim()
+                if (!content.isNullOrBlank()) {
+                    updateInput(content)
+                }
+            }
+
+            // --- Find the assistant response that follows this user message ---
+            val userIdx = snapshot.indexOfFirst { it.message.id == messageId }
+            if (userIdx >= 0 && userIdx + 1 < snapshot.size) {
+                val nextMsg = snapshot[userIdx + 1]
+                if (nextMsg.message is Message.Assistant) {
+                    messageStore.removeMessage(nextMsg.message.id)
+                }
+            }
+            // Remove the user message itself
+            messageStore.removeMessage(messageId)
+
+            // --- Server-side file revert ---
             val request = dev.blazelight.p4oc.data.remote.dto.RevertSessionRequest(messageID = messageId)
             val result = safeApiCall { api.revertSession(sessionId, request, getDirectory()) }
             when (result) {

@@ -106,6 +106,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import dev.blazelight.p4oc.ui.theme.Spacing
 import dev.blazelight.p4oc.ui.theme.Sizing
+import dev.blazelight.p4oc.ui.theme.TuiCodeFontSize
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.components.LocalAnimationsPaused
 
@@ -1307,39 +1308,40 @@ private fun RevertActiveBanner(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
-            .background(theme.warning.copy(alpha = 0.12f))
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .border(Sizing.strokeThin, theme.warning.copy(alpha = 0.5f), RectangleShape)
+            .background(theme.warning.copy(alpha = 0.08f))
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            Text(text = "↺", color = theme.warning, fontFamily = FontFamily.Monospace)
+            Text(
+                text = "↺",
+                fontFamily = FontFamily.Monospace,
+                fontSize = TuiCodeFontSize.lg,
+                color = theme.warning
+            )
             Text(
                 text = stringResource(R.string.revert_active_banner),
-                style = MaterialTheme.typography.labelMedium,
                 fontFamily = FontFamily.Monospace,
+                fontSize = TuiCodeFontSize.md,
                 color = theme.warning
             )
         }
-        Box(
+        Text(
+            text = stringResource(R.string.unrevert_all),
+            fontFamily = FontFamily.Monospace,
+            fontSize = TuiCodeFontSize.sm,
+            fontWeight = FontWeight.Medium,
+            color = theme.warning,
             modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .background(theme.warning.copy(alpha = 0.15f))
+                .border(Sizing.strokeThin, theme.warning.copy(alpha = 0.4f), RectangleShape)
                 .clickable(role = Role.Button) { onUnrevert() }
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-        ) {
-            Text(
-                text = stringResource(R.string.unrevert_all),
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium,
-                color = theme.warning
-            )
-        }
+                .padding(horizontal = Spacing.md, vertical = Spacing.xxs)
+        )
     }
 }
 

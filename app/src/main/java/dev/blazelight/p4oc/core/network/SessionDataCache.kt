@@ -123,10 +123,19 @@ class SessionDataCache(
         }
     }
 
-    /** Invalidate on disconnect so stale data is never shown after reconnect. */
+    /** Invalidate on disconnect so stale data is never shown after reconnect.
+     *  Preserves [knownDirectories] so the session directory registry survives
+     *  app restarts — without it, scanned directories are forgotten on reconnect. */
     fun invalidate() {
-        cachedResult = null
-        scope.launch { persistToDisk(null) }
+        val dirs = cachedResult?.knownDirectories ?: emptySet()
+        cachedResult = CachedSessions(
+            sessions = emptyList(),
+            projects = emptyList(),
+            knownDirectories = dirs,
+            fetchedAtMs = 0L,
+            serverBaseUrl = ""
+        )
+        scope.launch { persistToDisk(cachedResult) }
     }
 
     /**
