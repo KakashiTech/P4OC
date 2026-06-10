@@ -95,7 +95,5 @@ data class RevertSessionRequest(
 
 @Serializable
 data class InitSessionRequest(
-    @SerialName("messageID") val messageID: String,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("providerID") val providerID: String? = null,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("modelID") val modelID: String? = null
+    @SerialName("messageID") val messageID: String
 )

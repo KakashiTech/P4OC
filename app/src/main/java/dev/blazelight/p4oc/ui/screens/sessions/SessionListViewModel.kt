@@ -44,7 +44,7 @@ class SessionListViewModel constructor(
             // Branch-prediction hit: cache was pre-warmed by ServerViewModel after connect.
             // Paint the screen immediately with cached data, then refresh delta in background.
             AppLog.d("SessionListVM", "Cache hit: ${cached.sessions.size} sessions — instant paint")
-            _uiState.update { it.copy(sessions = cached.sessions, projects = cached.projects) }
+            _uiState.update { it.copy(sessions = cached.sessions, projects = cached.projects, workspaces = cached.sessions.computeWorkspaces()) }
             initialLoadDone = true
             viewModelScope.launch {
                 // Refresh the cache in background so it's never stale
@@ -57,6 +57,124 @@ class SessionListViewModel constructor(
                 loadSessionStatuses()
             }
         }
+    }
+
+    private fun List<SessionWithProject>.computeWorkspaces(): List<String> {
+        val workspaces = filter { !it.archived }.map { it.workspace }.distinct().sorted()
+        return if (workspaces.size <= 1) workspaces
+        else listOf("All") + workspaces
+    }
+
+    fun selectWorkspace(workspace: String?) {
+        _uiState.update { it.copy(selectedWorkspace = if (workspace == "All") null else workspace) }
+    }
+
+    fun overrideWorkspace(sessionId: String, workspace: String) {
+        _uiState.update { state ->
+            state.copy(
+                sessions = state.sessions.map { swp ->
+                    if (swp.session.id == sessionId) swp.copy(workspace = workspace) else swp
+                }
+            )
+        }
+        _uiState.update { it.copy(workspaces = it.sessions.computeWorkspaces()) }
+    }
+
+    // ── Selection mode ──
+
+    fun enterSelectionMode() {
+        _uiState.update { it.copy(isSelectionMode = true, selectedSessionIds = emptySet()) }
+    }
+
+    fun exitSelectionMode() {
+        _uiState.update { it.copy(isSelectionMode = false, selectedSessionIds = emptySet()) }
+    }
+
+    fun toggleSessionSelection(sessionId: String) {
+        _uiState.update { state ->
+            val updated = if (sessionId in state.selectedSessionIds) {
+                state.selectedSessionIds - sessionId
+            } else {
+                state.selectedSessionIds + sessionId
+            }
+            state.copy(selectedSessionIds = updated)
+        }
+    }
+
+    fun selectAllSessions() {
+        _uiState.update { state ->
+            val activeIds = state.sessions.filter { !it.archived }.map { it.session.id }.toSet()
+            state.copy(selectedSessionIds = activeIds)
+        }
+    }
+
+    // ── Archive / Unarchive ──
+
+    fun archiveSession(sessionId: String, directory: String? = null) {
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+            safeApiCall { api.updateSession(sessionId, UpdateSessionRequest(archived = true), directory ?: directoryManager.getDirectory()) }
+            _uiState.update { state ->
+                val updated = state.sessions.map { swp ->
+                    if (swp.session.id == sessionId) swp.copy(archived = true) else swp
+                }
+                state.copy(sessions = updated, workspaces = updated.computeWorkspaces())
+            }
+        }
+    }
+
+    fun archiveSelectedSessions() {
+        val selected = _uiState.value.selectedSessionIds.toList()
+        val sessions = _uiState.value.sessions
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+            selected.forEach { id ->
+                val swp = sessions.find { it.session.id == id } ?: return@forEach
+                safeApiCall { api.updateSession(id, UpdateSessionRequest(archived = true), swp.session.directory.takeIf { it.isNotBlank() }) }
+            }
+            _uiState.update { state ->
+                val updated = state.sessions.map { swp ->
+                    if (swp.session.id in selected) swp.copy(archived = true) else swp
+                }
+                state.copy(sessions = updated, selectedSessionIds = emptySet(), workspaces = updated.computeWorkspaces())
+            }
+        }
+    }
+
+    fun unarchiveSession(sessionId: String, directory: String? = null) {
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+            safeApiCall { api.updateSession(sessionId, UpdateSessionRequest(archived = false), directory ?: directoryManager.getDirectory()) }
+            _uiState.update { state ->
+                val updated = state.sessions.map { swp ->
+                    if (swp.session.id == sessionId) swp.copy(archived = false) else swp
+                }
+                state.copy(sessions = updated, workspaces = updated.computeWorkspaces())
+            }
+        }
+    }
+
+    fun deleteSelectedSessions() {
+        val selected = _uiState.value.selectedSessionIds.toList()
+        val sessions = _uiState.value.sessions
+        viewModelScope.launch {
+            val api = connectionManager.getApi() ?: return@launch
+            selected.forEach { id ->
+                val swp = sessions.find { it.session.id == id } ?: return@forEach
+                val result = safeApiCall { api.deleteSession(id, swp.session.directory.takeIf { it.isNotBlank() }) }
+                if (result is ApiResult.Success || (result is ApiResult.Error && result.message.contains("404"))) {
+                    sessionDataCache.removeSession(id)
+                }
+            }
+            _uiState.update { state ->
+                val remaining = state.sessions.filter { it.session.id !in selected }
+                state.copy(sessions = remaining, selectedSessionIds = emptySet(), isSelectionMode = false, workspaces = remaining.computeWorkspaces())
+            }
+        }
+    }
+
+    fun toggleShowArchived() {
+        _uiState.update { it.copy(showArchived = !it.showArchived, isSelectionMode = false, selectedSessionIds = emptySet()) }
     }
 
     private var refreshJob: kotlinx.coroutines.Job? = null
@@ -314,11 +432,13 @@ class SessionListViewModel constructor(
                     }
                 }
 
+                val merged = (localOnly + refreshedExtra + allSessionsWithProjects)
+                    .sortedByDescending { s -> s.session.updatedAt }
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        sessions = (localOnly + refreshedExtra + allSessionsWithProjects)
-                            .sortedByDescending { s -> s.session.updatedAt }
+                        sessions = merged,
+                        workspaces = merged.computeWorkspaces()
                     )
                 }
                 initialLoadDone = true
@@ -376,11 +496,12 @@ class SessionListViewModel constructor(
                     
                     // Keep the cache in sync so ViewModel re-creation doesn't lose it
                     sessionDataCache.upsertSession(sessionWithProject)
-                    
+                    val updatedSessions = listOf(sessionWithProject) + _uiState.value.sessions
                     _uiState.update { state ->
                         state.copy(
                             isLoading = false,
-                            sessions = listOf(sessionWithProject) + state.sessions,
+                            sessions = updatedSessions,
+                            workspaces = updatedSessions.computeWorkspaces(),
                             newSessionId = session.id,
                             newSessionDirectory = session.directory
                         )
@@ -459,10 +580,12 @@ class SessionListViewModel constructor(
                     _uiState.update { state ->
                         val existingIds = state.sessions.map { it.session.id }.toSet()
                         val newOnes = discovered.filter { it.session.id !in existingIds }
+                        val merged = (newOnes + state.sessions)
+                            .sortedByDescending { s -> s.session.updatedAt }
                         state.copy(
                             isLoading = false,
-                            sessions = (newOnes + state.sessions)
-                                .sortedByDescending { s -> s.session.updatedAt },
+                            sessions = merged,
+                            workspaces = merged.computeWorkspaces(),
                             error = null
                         )
                     }
@@ -486,7 +609,8 @@ class SessionListViewModel constructor(
                 is ApiResult.Success -> {
                     sessionDataCache.removeSession(sessionId)
                     _uiState.update { state ->
-                        state.copy(sessions = state.sessions.filter { it.session.id != sessionId })
+                        val filtered = state.sessions.filter { it.session.id != sessionId }
+                        state.copy(sessions = filtered, workspaces = filtered.computeWorkspaces())
                     }
                 }
                 is ApiResult.Error -> {
@@ -494,7 +618,8 @@ class SessionListViewModel constructor(
                     if (result.message.contains("404") || result.message.contains("not found")) {
                         sessionDataCache.removeSession(sessionId)
                         _uiState.update { state ->
-                            state.copy(sessions = state.sessions.filter { it.session.id != sessionId })
+                            val filtered = state.sessions.filter { it.session.id != sessionId }
+                            state.copy(sessions = filtered, workspaces = filtered.computeWorkspaces())
                         }
                     } else {
                         _uiState.update {
@@ -528,7 +653,7 @@ class SessionListViewModel constructor(
                                 uswp
                             } else swp
                         }
-                        state.copy(sessions = newSessions)
+                        state.copy(sessions = newSessions, workspaces = newSessions.computeWorkspaces())
                     }
                     updatedSwp?.let { sessionDataCache.upsertSession(it) }
                 }
@@ -616,7 +741,12 @@ data class SessionListUiState(
     val newSessionId: String? = null,
     val newSessionDirectory: String? = null,
     val shareUrl: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    val workspaces: List<String> = emptyList(),
+    val selectedWorkspace: String? = null,
+    val selectedSessionIds: Set<String> = emptySet(),
+    val isSelectionMode: Boolean = false,
+    val showArchived: Boolean = false
 )
 
 @Serializable
@@ -633,5 +763,23 @@ data class ProjectInfo(
 data class SessionWithProject(
     val session: Session,
     val projectId: String? = null,
-    val projectName: String? = null
-)
+    val projectName: String? = null,
+    val workspace: String = SessionWithProject.inferWorkspace(projectName, session.directory),
+    val archived: Boolean = false
+) {
+    companion object {
+        private val WORK_KEYWORDS = setOf("work", "job", "client", "company", "corp", "office", "lab")
+        private val PERSONAL_KEYWORDS = setOf("personal", "home", "private", "hobby", "play", "fun")
+
+        fun inferWorkspace(projectName: String?, directory: String): String {
+            val path = listOfNotNull(projectName, directory)
+                .flatMap { it.split("/", "\\", "-", "_", ".") }
+                .map { it.lowercase().trim() }
+            for (p in path) {
+                if (p in WORK_KEYWORDS) return "Work"
+                if (p in PERSONAL_KEYWORDS) return "Personal"
+            }
+            return projectName?.takeIf { it.isNotBlank() } ?: "Other"
+        }
+    }
+}

@@ -43,6 +43,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
@@ -53,6 +54,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -463,13 +465,22 @@ fun ChatScreen(
             }
 
             errorMsg?.let { error ->
+                val clipboardManager = LocalClipboardManager.current
                 TuiSnackbar(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(16.dp),
                     action = {
-                        TextButton(onClick = viewModel::clearError, shape = RoundedCornerShape(4.dp)) {
-                            Text(stringResource(R.string.dismiss), fontFamily = FontFamily.Monospace)
+                        Row {
+                            TextButton(
+                                onClick = { clipboardManager.setText(AnnotatedString(error)) },
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(stringResource(R.string.cd_copy_action), fontFamily = FontFamily.Monospace)
+                            }
+                            TextButton(onClick = viewModel::clearError, shape = RoundedCornerShape(4.dp)) {
+                                Text(stringResource(R.string.dismiss), fontFamily = FontFamily.Monospace)
+                            }
                         }
                     }
                 ) {

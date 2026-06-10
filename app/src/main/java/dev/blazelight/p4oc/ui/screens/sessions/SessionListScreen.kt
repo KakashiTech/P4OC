@@ -16,7 +16,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -45,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.unit.sp
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -114,11 +117,21 @@ fun SessionListScreen(
     var showRenameDialog by remember { mutableStateOf<Session?>(null) }
     val context = LocalContext.current
     
-    val displayedSessions = remember(uiState.sessions, filterProjectId) {
-        if (filterProjectId != null) {
+    val displayedSessions = remember(uiState.sessions, filterProjectId, uiState.selectedWorkspace, uiState.showArchived) {
+        val byProject = if (filterProjectId != null) {
             uiState.sessions.filter { it.projectId == filterProjectId || it.projectId == null }
         } else {
             uiState.sessions
+        }
+        val byArchive = if (uiState.showArchived) {
+            byProject.filter { it.archived }
+        } else {
+            byProject.filter { !it.archived }
+        }
+        if (uiState.selectedWorkspace != null) {
+            byArchive.filter { it.workspace == uiState.selectedWorkspace }
+        } else {
+            byArchive
         }
     }
     
@@ -171,25 +184,36 @@ fun SessionListScreen(
             if (showTopBar) {
                 SessionsTopBar(
                     projectName = projectName,
+                    isSelectionMode = uiState.isSelectionMode,
+                    selectedCount = uiState.selectedSessionIds.size,
+                    showArchived = uiState.showArchived,
+                    archivedCount = uiState.sessions.count { it.archived },
                     onNavigateBack = onNavigateBack,
                     onProjects = onProjects,
                     onRefresh = viewModel::refresh,
-                    onSettings = onSettings
+                    onSettings = onSettings,
+                    onSelectModeToggle = if (uiState.isSelectionMode) viewModel::exitSelectionMode else viewModel::enterSelectionMode,
+                    onSelectAll = viewModel::selectAllSessions,
+                    onArchiveSelected = viewModel::archiveSelectedSessions,
+                    onDeleteSelected = viewModel::deleteSelectedSessions,
+                    onArchiveToggle = viewModel::toggleShowArchived
                 )
             }
         },
         floatingActionButton = {
-            Text(
-                text = "+",
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold,
-                color = theme.accent,
-                modifier = Modifier
-                    .clickable { showNewSessionDialog = true }
-                    .testTag("fab_new_session")
-                    .padding(16.dp)
-            )
+            if (!uiState.isSelectionMode) {
+                Text(
+                    text = "+",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.headlineLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = theme.accent,
+                    modifier = Modifier
+                        .clickable { showNewSessionDialog = true }
+                        .testTag("fab_new_session")
+                        .padding(16.dp)
+                )
+            }
         }
     ) { padding ->
         Box(
@@ -216,6 +240,18 @@ fun SessionListScreen(
                     ) {
                         Box(modifier = Modifier) {
                             PocketCodeLogoHeader()
+                        }
+                    }
+
+                    // Workspace filter bar
+                    if (uiState.workspaces.size > 1 && filterProjectId == null) {
+                        item(key = "workspace_bar", contentType = "actions") {
+                            WorkspaceFilterBar(
+                                workspaces = uiState.workspaces,
+                                selectedWorkspace = uiState.selectedWorkspace,
+                                onSelectWorkspace = viewModel::selectWorkspace,
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
                     }
 
@@ -265,7 +301,11 @@ fun SessionListScreen(
                                 expandedSessions = expandedSessions,
                                 sessionStatuses = uiState.sessionStatuses,
                                 showProjectChip = filterProjectId == null,
+                                workspaces = uiState.workspaces,
+                                isSelectionMode = uiState.isSelectionMode,
+                                selectedIds = uiState.selectedSessionIds,
                                 onSessionClick = { session -> onSessionClick(session.id, session.directory) },
+                                onToggleSelection = viewModel::toggleSessionSelection,
                                 onDeleteSession = { showDeleteDialog = it },
                                 onRenameSession = { showRenameDialog = it },
                                 onShareSession = { session ->
@@ -280,6 +320,9 @@ fun SessionListScreen(
                                 },
                                 onSummarizeSession = { session ->
                                     viewModel.summarizeSession(session.id, session.directory)
+                                },
+                                onAssignWorkspace = { session, workspace ->
+                                    viewModel.overrideWorkspace(session.id, workspace)
                                 },
                                 onProjectClick = onProjectClick,
                                 onToggleExpand = { id ->
@@ -388,12 +431,17 @@ private fun SessionTreeNode(
     expandedSessions: MutableMap<String, Boolean>,
     sessionStatuses: Map<String, SessionStatus>,
     showProjectChip: Boolean,
+    workspaces: List<String>,
+    isSelectionMode: Boolean,
+    selectedIds: Set<String>,
     onSessionClick: (Session) -> Unit,
+    onToggleSelection: (String) -> Unit,
     onDeleteSession: (Session) -> Unit,
     onRenameSession: (Session) -> Unit,
     onShareSession: (Session) -> Unit,
     onViewChanges: (Session) -> Unit,
     onSummarizeSession: (Session) -> Unit,
+    onAssignWorkspace: (Session, String) -> Unit,
     onProjectClick: (String) -> Unit,
     onToggleExpand: (String) -> Unit
 ) {
@@ -411,6 +459,12 @@ private fun SessionTreeNode(
             showProjectChip = showProjectChip,
             status = sessionStatuses[session.id],
             isShared = session.shareUrl != null,
+            isSelectionMode = isSelectionMode,
+            isSelected = session.id in selectedIds,
+            onToggleSelection = { onToggleSelection(session.id) },
+            workspaces = workspaces,
+            workspace = swp.workspace,
+            onAssignWorkspace = { ws -> onAssignWorkspace(session, ws) },
             onClick = { onSessionClick(session) },
             onDelete = { onDeleteSession(session) },
             onRename = { onRenameSession(session) },
@@ -433,19 +487,24 @@ private fun SessionTreeNode(
                 modifier = Modifier.padding(top = 8.dp, start = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                node.children.forEach { child ->
+                    node.children.forEach { child ->
                     SessionTreeNode(
                         node = child,
                         depth = depth + 1,
                         expandedSessions = expandedSessions,
                         sessionStatuses = sessionStatuses,
                         showProjectChip = showProjectChip,
+                        workspaces = workspaces,
+                        isSelectionMode = isSelectionMode,
+                        selectedIds = selectedIds,
                         onSessionClick = onSessionClick,
+                        onToggleSelection = onToggleSelection,
                         onDeleteSession = onDeleteSession,
                         onRenameSession = onRenameSession,
                         onShareSession = onShareSession,
                         onViewChanges = onViewChanges,
                         onSummarizeSession = onSummarizeSession,
+                        onAssignWorkspace = onAssignWorkspace,
                         onProjectClick = onProjectClick,
                         onToggleExpand = onToggleExpand
                     )
@@ -464,12 +523,18 @@ private fun SessionCard(
     showProjectChip: Boolean,
     status: SessionStatus?,
     isShared: Boolean,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
     onClick: () -> Unit,
+    onToggleSelection: () -> Unit = {},
     onDelete: () -> Unit,
     onRename: () -> Unit,
     onShare: () -> Unit,
     onViewChanges: () -> Unit,
     onSummarize: () -> Unit,
+    workspaces: List<String>,
+    workspace: String,
+    onAssignWorkspace: (String) -> Unit,
     onProjectClick: (String) -> Unit,
     childCount: Int = 0,
     isExpanded: Boolean = false,
@@ -480,6 +545,7 @@ private fun SessionCard(
     val isBusy = status is SessionStatus.Busy
     val isRetrying = status is SessionStatus.Retry
     var showContextMenu by remember { mutableStateOf(false) }
+    var showWorkspaceDialog by remember { mutableStateOf(false) }
 
     val cardColor = when {
         isBusy    -> theme.accent.copy(alpha = 0.08f)
@@ -502,8 +568,8 @@ private fun SessionCard(
                 .fillMaxWidth()
                 .defaultMinSize(minHeight = 56.dp)
                 .combinedClickable(
-                    onClick = onClick,
-                    onLongClick = { showContextMenu = true },
+                    onClick = if (isSelectionMode) onToggleSelection else onClick,
+                    onLongClick = { if (!isSelectionMode) showContextMenu = true },
                     role = Role.Button
                 )
                 .drawBehind {
@@ -529,6 +595,17 @@ private fun SessionCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // Selection checkbox
+                if (isSelectionMode) {
+                    Text(
+                        text = if (isSelected) "[✓]" else "[ ]",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isSelected) theme.accent else theme.textMuted.copy(alpha = 0.5f),
+                        modifier = Modifier.clickable(role = Role.Button) { onToggleSelection() }
+                    )
+                }
+
                 // Status prefix icon
                 val statusChar = when {
                     isBusy -> "▶"
@@ -574,13 +651,15 @@ private fun SessionCard(
                 )
 
                 // Menu indicator
-                Text(
-                    text = "≡",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = theme.textMuted.copy(alpha = 0.5f),
-                    modifier = Modifier.clickable(role = Role.Button) { showContextMenu = true }
-                )
+                if (!isSelectionMode) {
+                    Text(
+                        text = "≡",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.textMuted.copy(alpha = 0.5f),
+                        modifier = Modifier.clickable(role = Role.Button) { showContextMenu = true }
+                    )
+                }
             }
 
             // Bottom info line
@@ -637,6 +716,8 @@ private fun SessionCard(
                     MetaBadge(text = stringResource(R.string.sessions_shared_badge), color = theme.info)
                 }
 
+                MetaBadge(text = workspace, color = theme.textMuted)
+
                 // Project chip on far right
                 if (showProjectChip && projectId != null && !projectName.isNullOrEmpty()) {
                     ProjectChip(
@@ -646,6 +727,36 @@ private fun SessionCard(
                     )
                 }
             }
+            }
+        }
+
+        // Workspace assignment dialog
+        if (showWorkspaceDialog) {
+            Dialog(onDismissRequest = { showWorkspaceDialog = false }) {
+                Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 4.dp) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Assign workspace",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        workspaces.forEach { ws ->
+                            TextButton(
+                                onClick = {
+                                    onAssignWorkspace(ws)
+                                    showWorkspaceDialog = false
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = if (ws == workspace) "● $ws" else "○ $ws",
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -684,6 +795,12 @@ private fun SessionCard(
                     onClick = { showContextMenu = false; onShare() }
                 )
             }
+            TuiTerminalMenuDivider()
+            TuiTerminalMenuItem(
+                text = "Workspace",
+                symbol = "⌗",
+                onClick = { showContextMenu = false; showWorkspaceDialog = true }
+            )
             TuiTerminalMenuDivider()
             TuiTerminalMenuItem(
                 text = "Delete",
@@ -1436,10 +1553,19 @@ private fun NewSessionDialog(
 @Composable
 private fun SessionsTopBar(
     projectName: String?,
+    isSelectionMode: Boolean,
+    selectedCount: Int,
+    showArchived: Boolean,
+    archivedCount: Int,
     onNavigateBack: (() -> Unit)?,
     onProjects: () -> Unit,
     onRefresh: () -> Unit,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    onSelectModeToggle: () -> Unit,
+    onSelectAll: () -> Unit,
+    onArchiveSelected: () -> Unit,
+    onDeleteSelected: () -> Unit,
+    onArchiveToggle: () -> Unit
 ) {
     val theme = LocalOpenCodeTheme.current
 
@@ -1577,50 +1703,154 @@ private fun SessionsTopBar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    // Projects button
-                    if (projectName.isNullOrEmpty()) {
+                    if (isSelectionMode) {
+                        // Selection mode actions
                         Text(
-                            text = "[P]",
+                            text = "[${selectedCount}]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.accent
+                        )
+                        Text(
+                            text = "│",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.border.copy(alpha = 0.3f)
+                        )
+                        Text(
+                            text = "[*]",
                             fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.labelSmall,
                             color = theme.textMuted,
-                            modifier = Modifier.clickable(role = Role.Button) { onProjects() }
+                            modifier = Modifier.clickable(role = Role.Button) { onSelectAll() }
+                        )
+                        Text(
+                            text = "│",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.border.copy(alpha = 0.3f)
+                        )
+                        Text(
+                            text = "[🗄]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.warning,
+                            modifier = Modifier.clickable(role = Role.Button) { onArchiveSelected() }
+                        )
+                        Text(
+                            text = "│",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.border.copy(alpha = 0.3f)
+                        )
+                        Text(
+                            text = "[×]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.error,
+                            modifier = Modifier.clickable(role = Role.Button) { onDeleteSelected() }
+                        )
+                        Text(
+                            text = "│",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.border.copy(alpha = 0.3f)
+                        )
+                        Text(
+                            text = "[esc]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.textMuted,
+                            modifier = Modifier.clickable(role = Role.Button) { onSelectModeToggle() }
+                        )
+                    } else {
+                        // Projects button
+                        if (projectName.isNullOrEmpty()) {
+                            Text(
+                                text = "[P]",
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = theme.textMuted,
+                                modifier = Modifier.clickable(role = Role.Button) { onProjects() }
+                            )
+                        }
+
+                        // Separator
+                        Text(
+                            text = "│",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.border.copy(alpha = 0.3f)
+                        )
+
+                        // Archived toggle
+                        Text(
+                            text = if (showArchived) "[✓]" else "[🗄]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (showArchived) theme.accent else theme.textMuted,
+                            modifier = Modifier.clickable(role = Role.Button) { onArchiveToggle() }
+                        )
+                        if (archivedCount > 0 && !showArchived) {
+                            Text(
+                                text = "$archivedCount",
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = theme.textMuted.copy(alpha = 0.5f)
+                            )
+                        }
+
+                        // Separator
+                        Text(
+                            text = "│",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.border.copy(alpha = 0.3f)
+                        )
+
+                        // Select mode toggle
+                        Text(
+                            text = "[☰]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.accent,
+                            modifier = Modifier.clickable(role = Role.Button) { onSelectModeToggle() }
+                        )
+
+                        // Separator
+                        Text(
+                            text = "│",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.border.copy(alpha = 0.3f)
+                        )
+
+                        // Refresh
+                        Text(
+                            text = "[↻]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.textMuted,
+                            modifier = Modifier.clickable(role = Role.Button) { onRefresh() }
+                        )
+
+                        // Separator
+                        Text(
+                            text = "│",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.border.copy(alpha = 0.3f)
+                        )
+
+                        // Settings with accent
+                        Text(
+                            text = "[⚙]",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.accent,
+                            modifier = Modifier.clickable(role = Role.Button) { onSettings() }
                         )
                     }
-
-                    // Separator
-                    Text(
-                        text = "│",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = theme.border.copy(alpha = 0.3f)
-                    )
-
-                    // Refresh
-                    Text(
-                        text = "[↻]",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = theme.textMuted,
-                        modifier = Modifier.clickable(role = Role.Button) { onRefresh() }
-                    )
-
-                    // Separator
-                    Text(
-                        text = "│",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = theme.border.copy(alpha = 0.3f)
-                    )
-
-                    // Settings with accent
-                    Text(
-                        text = "[⚙]",
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = theme.accent,
-                        modifier = Modifier.clickable(role = Role.Button) { onSettings() }
-                    )
                 }
             }
 
@@ -1673,6 +1903,41 @@ private fun SessionsTopBar(
                         .background(theme.border.copy(alpha = 0.3f))
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceFilterBar(
+    workspaces: List<String>,
+    selectedWorkspace: String?,
+    onSelectWorkspace: (String?) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val theme = LocalOpenCodeTheme.current
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        FilterChip(
+            selected = selectedWorkspace == null,
+            onClick = { onSelectWorkspace(null) },
+            label = { Text("All", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall) },
+            colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = theme.accent.copy(alpha = 0.15f),
+                selectedLabelColor = theme.accent
+            )
+        )
+        workspaces.forEach { ws ->
+            FilterChip(
+                selected = selectedWorkspace == ws,
+                onClick = { onSelectWorkspace(ws) },
+                label = { Text(ws, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = theme.accent.copy(alpha = 0.15f),
+                    selectedLabelColor = theme.accent
+                )
+            )
         }
     }
 }

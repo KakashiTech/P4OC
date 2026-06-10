@@ -545,12 +545,8 @@ class ChatViewModel constructor(
         if (sessionInitialized) return true
         val api = connectionManager.getApi() ?: return false
 
-        val lastMsgId = messageStore.messages.value.lastOrNull()?.message?.id
-        val request = InitSessionRequest(
-            messageID = lastMsgId ?: ""
-        )
+        val request = InitSessionRequest(messageID = "")
         val directory = getDirectory()
-        AppLog.w(TAG, "initSession: calling (msgId=${lastMsgId ?: "none"})")
         val result = safeApiCall { api.initSession(sessionId, request, directory) }
         return when (result) {
             is ApiResult.Success -> {
