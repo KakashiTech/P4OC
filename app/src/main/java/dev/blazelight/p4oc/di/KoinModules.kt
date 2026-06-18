@@ -3,6 +3,7 @@ package dev.blazelight.p4oc.di
 import dev.blazelight.p4oc.core.datastore.SettingsDataStore
 import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.security.CredentialStore
+import dev.blazelight.p4oc.core.update.UpdateManager
 import dev.blazelight.p4oc.core.network.DirectoryManager
 import dev.blazelight.p4oc.core.network.MdnsDiscoveryManager
 import dev.blazelight.p4oc.core.network.PtyWebSocketClient
@@ -57,6 +58,9 @@ val appModule = module {
 
     // Tab management (singleton for app lifetime)
     single { TabManager() }
+
+    // Auto-update
+    single { UpdateManager(androidContext()) }
 
 
 }

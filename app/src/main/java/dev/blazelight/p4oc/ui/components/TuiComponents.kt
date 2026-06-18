@@ -3,6 +3,8 @@ package dev.blazelight.p4oc.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
@@ -38,6 +40,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.VisualTransformation
@@ -774,10 +777,10 @@ fun TuiDropdownMenuItem(
 /**
  * Terminal-style popup menu with full ASCII box-drawing frame and smooth entrance.
  * Animates in from the top-right corner with scale+fade.
- * ┌─ menu ────────────┐
- * │  ▶ + Changes      │
- * │    / Commands      │
- * └────────────────────┘
+ * ╔══ session ═══════╗
+ * ║  ▶ ✎ Rename     ║
+ * ║    ± Changes     ║
+ * ╚══════════════════╝
  */
 @Composable
 fun TuiTerminalMenu(
@@ -785,6 +788,7 @@ fun TuiTerminalMenu(
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
     offset: DpOffset = DpOffset(0.dp, 0.dp),
+    title: String = "session",
     content: @Composable ColumnScope.() -> Unit
 ) {
     val theme = LocalOpenCodeTheme.current
@@ -822,58 +826,48 @@ fun TuiTerminalMenu(
                     animationSpec = tween(100)
                 ) + fadeOut(animationSpec = tween(80))
             ) {
-                Column(
-                    modifier = Modifier
-                        .widthIn(min = 80.dp, max = 120.dp)
-                        .shadow(12.dp, shape = RectangleShape)
-                        .background(theme.backgroundElement.copy(alpha = 0.97f))
-                ) {
-                    // Top border: ┌─ menu ────────┐
+                    val scrollState = rememberScrollState()
+                    Column(
+                        modifier = Modifier
+                            .widthIn(min = 80.dp, max = 200.dp)
+                            .heightIn(max = 360.dp)
+                            .shadow(16.dp, shape = RectangleShape)
+                            .background(theme.backgroundPanel.copy(alpha = 0.96f))
+                            .border(1.dp, theme.border.copy(alpha = 0.3f))
+                    ) {
+                    // Top border: ╔══ title ═══════════╗
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().background(theme.backgroundElement.copy(alpha = 0.3f)).padding(horizontal = 4.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("┌", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
-                        Box(
-                            modifier = Modifier
-                                .width(4.dp)
-                                .height(1.dp)
-                                .background(theme.border)
-                        )
-                        Text("─", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.border)
-                        Text("menu", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.textMuted)
-                        Text("─", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.border)
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(1.dp)
-                                .background(theme.border)
-                        )
-                        Text("┐", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                        Text("╔", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                        Box(Modifier.width(4.dp).height(1.dp).background(theme.accent.copy(alpha = 0.4f)))
+                        Text("═", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.accent.copy(alpha = 0.5f))
+                        Text(title, fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.accent)
+                        Text("═", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.accent.copy(alpha = 0.5f))
+                        Box(Modifier.weight(1f).height(1.dp).background(theme.accent.copy(alpha = 0.2f)))
+                        Text("╗", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
                     }
                     // Content with side borders
                     Row(modifier = Modifier.fillMaxWidth()) {
-                        Text("│", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                        Text("║", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
                         Column(
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).verticalScroll(scrollState)
                         ) {
                             content()
                         }
-                        Text("│", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                        Text("║", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
                     }
-                    // Bottom border: └────────────────┘
+                    // Bottom border: ╚══════════════════╝
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().background(theme.backgroundElement.copy(alpha = 0.15f)).padding(horizontal = 4.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("└", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                        Text("╚", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
                         Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(1.dp)
-                                .background(theme.border)
+                            modifier = Modifier.weight(1f).height(1.dp).background(theme.border)
                         )
-                        Text("┘", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                        Text("╝", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
                     }
                 }
             }
@@ -883,12 +877,10 @@ fun TuiTerminalMenu(
 
 
 /**
- * Terminal-style menu item with fixed-width symbol column.
- * Shows ▶ indicator on hover/active for keyboard navigation feel.
- * ┌────────────────┐
- * │ ▶ ± Changes    │
- * │   / Commands    │
- * └────────────────┘
+ * Terminal-style menu item with active indicator and symbol.
+ * Uses double-line borders from parent menu.
+ * ║  ▶ ✎ Rename     ║
+ * ║    ± Changes     ║
  */
 @Composable
 fun TuiTerminalMenuItem(
@@ -900,7 +892,7 @@ fun TuiTerminalMenuItem(
     isDestructive: Boolean = false
 ) {
     val theme = LocalOpenCodeTheme.current
-    var hovered by remember { mutableStateOf(false) }
+    var pressed by remember { mutableStateOf(false) }
 
     val textColor = when {
         !enabled -> theme.textMuted
@@ -909,12 +901,8 @@ fun TuiTerminalMenuItem(
     }
 
     val bgAlpha by animateFloatAsState(
-        targetValue = if (hovered) 0.10f else 0f,
-        animationSpec = tween(120)
-    )
-    val indicatorAlpha by animateFloatAsState(
-        targetValue = if (hovered) 1f else 0f,
-        animationSpec = tween(100)
+        targetValue = if (pressed) 0.15f else 0f,
+        animationSpec = tween(80)
     )
 
     Row(
@@ -925,26 +913,22 @@ fun TuiTerminalMenuItem(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 enabled = enabled,
-                onClick = onClick
+                onClick = {
+                    pressed = true
+                    onClick()
+                }
             )
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Active indicator ▶ (smooth fade on hover)
-        Text(
-            text = if (indicatorAlpha > 0f) "▶" else " ",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 9.sp,
-            color = theme.accent.copy(alpha = indicatorAlpha),
-            modifier = Modifier.width(10.dp)
-        )
-        // Symbol with fixed width for alignment
+        // Symbol column
         Text(
             text = symbol,
             fontFamily = FontFamily.Monospace,
-            fontSize = 10.sp,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
             color = if (isDestructive) theme.error else theme.textMuted,
-            modifier = Modifier.width(16.dp)
+            modifier = Modifier.width(18.dp)
         )
         // Label
         Text(
@@ -955,30 +939,30 @@ fun TuiTerminalMenuItem(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        Spacer(Modifier.weight(1f))
+        // Right-side arrow indicator
+        Text(
+            text = "▶",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 8.sp,
+            color = theme.accent.copy(alpha = if (enabled) 0.3f else 0f),
+        )
     }
 }
 
 /**
- * Horizontal divider for terminal menus using ASCII line.
+ * Horizontal divider for terminal menus using subtle line.
  */
 @Composable
 fun TuiTerminalMenuDivider() {
     val theme = LocalOpenCodeTheme.current
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text("├", fontFamily = FontFamily.Monospace, color = theme.border)
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .height(1.dp)
-                .background(theme.borderSubtle)
-        )
-        Text("┤", fontFamily = FontFamily.Monospace, color = theme.border)
-    }
+            .padding(vertical = 2.dp)
+            .height(1.dp)
+            .background(theme.borderSubtle.copy(alpha = 0.4f))
+    )
 }
 
 // =============================================================================

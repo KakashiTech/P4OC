@@ -13,10 +13,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -92,8 +94,7 @@ private data class SessionNode(
     val sessionWithProject: SessionWithProject,
     val children: List<SessionNode>
 ) {
-    val totalDescendants: Int
-        get() = children.size + children.sumOf { it.totalDescendants }
+    val totalDescendants: Int by lazy { children.size + children.sumOf { it.totalDescendants } }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -129,12 +130,15 @@ fun SessionListScreen(
             byProject.filter { !it.archived }
         }
         if (uiState.selectedWorkspace != null) {
-            byArchive.filter { it.workspace == uiState.selectedWorkspace }
+            when (uiState.selectedWorkspace) {
+                "Work" -> byArchive.filter { it.projectId != null }
+                else -> byArchive.filter { it.workspace == uiState.selectedWorkspace }
+            }
         } else {
             byArchive
         }
     }
-    
+
     val projectName = remember(uiState.projects, filterProjectId) {
         if (filterProjectId != null) {
             uiState.projects.find { it.id == filterProjectId }?.name
@@ -229,7 +233,12 @@ fun SessionListScreen(
                 // OPTIMIZED LazyColumn for smooth session scrolling
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().testTag("sessions_list"),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        top = 12.dp,
+                        end = 16.dp,
+                        bottom = if (uiState.isSelectionMode) 64.dp else 12.dp
+                    ),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     // Animated PocketCode Logo Header — isolated on its own GPU layer
@@ -306,6 +315,10 @@ fun SessionListScreen(
                                 selectedIds = uiState.selectedSessionIds,
                                 onSessionClick = { session -> onSessionClick(session.id, session.directory) },
                                 onToggleSelection = viewModel::toggleSessionSelection,
+                                onSelectSession = { session ->
+                                    viewModel.enterSelectionMode()
+                                    viewModel.toggleSessionSelection(session.id)
+                                },
                                 onDeleteSession = { showDeleteDialog = it },
                                 onRenameSession = { showRenameDialog = it },
                                 onShareSession = { session ->
@@ -330,6 +343,85 @@ fun SessionListScreen(
                                 }
                             )
                         }
+                    }
+                }
+            }
+
+            // Selection mode bottom bar — terminal-style
+            if (uiState.isSelectionMode) {
+                val selectedColor = theme.accent
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .background(theme.backgroundPanel.copy(alpha = 0.92f))
+                ) {
+                    // Top border: └─ SELECT ──────────────┘
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("└", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                        Box(Modifier.width(6.dp).height(1.dp).background(theme.border))
+                        Text("─", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.border)
+                        Text("SELECT", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = selectedColor)
+                        Text("─", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.border)
+                        Box(Modifier.weight(1f).height(1.dp).background(theme.border))
+                        Text(
+                            text = "${uiState.selectedSessionIds.size}",
+                            fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = selectedColor
+                        )
+                        Text("─", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = theme.border)
+                        Box(Modifier.width(6.dp).height(1.dp).background(theme.border))
+                        Text("┘", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                    }
+                    // Action buttons row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        // Count label
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text("│", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = theme.border)
+                            val noun = if (uiState.selectedSessionIds.size == 1) "session" else "sessions"
+                            Text(
+                                text = "${uiState.selectedSessionIds.size} $noun",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                color = theme.textMuted
+                            )
+                        }
+
+                        // Archive button
+                        TuiBottomBarButton(
+                            symbol = "🖫",
+                            label = "archive",
+                            color = theme.warning,
+                            onClick = { viewModel.archiveSelectedSessions() }
+                        )
+
+                        // Delete button
+                        TuiBottomBarButton(
+                            symbol = "✗",
+                            label = "delete",
+                            color = theme.error,
+                            onClick = { viewModel.deleteSelectedSessions() }
+                        )
+
+                        // Cancel button
+                        TuiBottomBarButton(
+                            symbol = "esc",
+                            label = "cancel",
+                            color = theme.textMuted,
+                            onClick = { viewModel.exitSelectionMode() }
+                        )
                     }
                 }
             }
@@ -436,6 +528,7 @@ private fun SessionTreeNode(
     selectedIds: Set<String>,
     onSessionClick: (Session) -> Unit,
     onToggleSelection: (String) -> Unit,
+    onSelectSession: (Session) -> Unit,
     onDeleteSession: (Session) -> Unit,
     onRenameSession: (Session) -> Unit,
     onShareSession: (Session) -> Unit,
@@ -452,6 +545,20 @@ private fun SessionTreeNode(
     val indentPadding: Dp = Sizing.treeIndent * depth
     
     Column(modifier = Modifier.padding(start = indentPadding)) {
+        // Memoize all lambdas so SessionCard gets stable references and can skip recomposition
+        // Prefix with _ to avoid shadowing the parent function parameter names
+        val _onClick = remember(session, onSessionClick) { { onSessionClick(session) } }
+        val _onDelete = remember(session, onDeleteSession) { { onDeleteSession(session) } }
+        val _onRename = remember(session, onRenameSession) { { onRenameSession(session) } }
+        val _onShare = remember(session, onShareSession) { { onShareSession(session) } }
+        val _onViewChanges = remember(session, onViewChanges) { { onViewChanges(session) } }
+        val _onSummarize = remember(session, onSummarizeSession) { { onSummarizeSession(session) } }
+        val _onToggleSel = remember(session, onToggleSelection) { { onToggleSelection(session.id) } }
+        val _onSelect = remember(session, onSelectSession) { { onSelectSession(session) } }
+        val _onAssign = remember(session, onAssignWorkspace) { { ws: String -> onAssignWorkspace(session, ws) } }
+        val _onExpand = remember(session, onToggleExpand) {
+            if (hasChildren) { { onToggleExpand(session.id) } } else null
+        }
         SessionCard(
             session = session,
             projectId = swp.projectId,
@@ -461,20 +568,21 @@ private fun SessionTreeNode(
             isShared = session.shareUrl != null,
             isSelectionMode = isSelectionMode,
             isSelected = session.id in selectedIds,
-            onToggleSelection = { onToggleSelection(session.id) },
+            onToggleSelection = _onToggleSel,
+            onSelectSession = _onSelect,
             workspaces = workspaces,
             workspace = swp.workspace,
-            onAssignWorkspace = { ws -> onAssignWorkspace(session, ws) },
-            onClick = { onSessionClick(session) },
-            onDelete = { onDeleteSession(session) },
-            onRename = { onRenameSession(session) },
-            onShare = { onShareSession(session) },
-            onViewChanges = { onViewChanges(session) },
-            onSummarize = { onSummarizeSession(session) },
+            onAssignWorkspace = _onAssign,
+            onClick = _onClick,
+            onDelete = _onDelete,
+            onRename = _onRename,
+            onShare = _onShare,
+            onViewChanges = _onViewChanges,
+            onSummarize = _onSummarize,
             onProjectClick = onProjectClick,
             childCount = node.totalDescendants,
             isExpanded = isExpanded,
-            onExpandToggle = if (hasChildren) { { onToggleExpand(session.id) } } else null,
+            onExpandToggle = _onExpand,
             isSubAgent = depth > 0
         )
         
@@ -499,6 +607,7 @@ private fun SessionTreeNode(
                         selectedIds = selectedIds,
                         onSessionClick = onSessionClick,
                         onToggleSelection = onToggleSelection,
+                        onSelectSession = onSelectSession,
                         onDeleteSession = onDeleteSession,
                         onRenameSession = onRenameSession,
                         onShareSession = onShareSession,
@@ -527,6 +636,7 @@ private fun SessionCard(
     isSelected: Boolean = false,
     onClick: () -> Unit,
     onToggleSelection: () -> Unit = {},
+    onSelectSession: () -> Unit = {},
     onDelete: () -> Unit,
     onRename: () -> Unit,
     onShare: () -> Unit,
@@ -547,16 +657,26 @@ private fun SessionCard(
     var showContextMenu by remember { mutableStateOf(false) }
     var showWorkspaceDialog by remember { mutableStateOf(false) }
 
-    val cardColor = when {
-        isBusy    -> theme.accent.copy(alpha = 0.08f)
-        isRetrying -> theme.error.copy(alpha = 0.08f)
-        isSubAgent -> theme.backgroundElement.copy(alpha = 0.6f)
-        else      -> theme.backgroundElement
+    val cardColor by remember(isSelectionMode, isSelected, isBusy, isRetrying, isSubAgent, theme) {
+        derivedStateOf {
+            when {
+                isSelectionMode && isSelected -> theme.accent.copy(alpha = 0.18f)
+                isBusy    -> theme.accent.copy(alpha = 0.08f)
+                isRetrying -> theme.error.copy(alpha = 0.08f)
+                isSubAgent -> theme.backgroundElement.copy(alpha = 0.6f)
+                else      -> theme.backgroundElement
+            }
+        }
     }
-    val indicatorColor = when {
-        isBusy    -> theme.accent
-        isRetrying -> theme.error
-        else      -> theme.success
+    val indicatorColor by remember(isSelectionMode, isSelected, isBusy, isRetrying, theme) {
+        derivedStateOf {
+            when {
+                isSelectionMode && isSelected -> theme.accent
+                isBusy    -> theme.accent
+                isRetrying -> theme.error
+                else      -> theme.success
+            }
+        }
     }
 
     // Terminal TUI style with left accent bar - wrapped in Box for menu positioning
@@ -643,8 +763,12 @@ private fun SessionCard(
                     text = session.title,
                     style = MaterialTheme.typography.bodyMedium,
                     fontFamily = FontFamily.Monospace,
-                    fontWeight = if (isBusy) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isBusy) theme.accent else theme.text,
+                    fontWeight = if (isBusy || (isSelectionMode && isSelected)) FontWeight.Bold else FontWeight.Normal,
+                    color = when {
+                        isBusy -> theme.accent
+                        isSelectionMode && isSelected -> theme.accent
+                        else -> theme.text
+                    },
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -765,7 +889,8 @@ private fun SessionCard(
             expanded = showContextMenu,
             onDismissRequest = { showContextMenu = false },
             modifier = Modifier.align(Alignment.TopEnd),
-            offset = DpOffset((-4).dp, 4.dp)
+            offset = DpOffset((-4).dp, 4.dp),
+            title = session.title.take(16)
         ) {
             TuiTerminalMenuItem(
                 text = "Rename",
@@ -795,6 +920,12 @@ private fun SessionCard(
                     onClick = { showContextMenu = false; onShare() }
                 )
             }
+            TuiTerminalMenuDivider()
+            TuiTerminalMenuItem(
+                text = "Select",
+                symbol = "☰",
+                onClick = { showContextMenu = false; onSelectSession() }
+            )
             TuiTerminalMenuDivider()
             TuiTerminalMenuItem(
                 text = "Workspace",
@@ -1677,8 +1808,8 @@ private fun SessionsTopBar(
                     )
 
                     // Current location
-                    val locationText = projectName ?: "sessions"
-                    val subText = if (projectName != null) "project" else "all"
+                    val locationText = if (isSelectionMode) "SELECT" else (projectName ?: "sessions")
+                    val subText = if (isSelectionMode) "$selectedCount selected" else if (projectName != null) "project" else "all"
 
                     Column {
                         Text(
@@ -1687,13 +1818,13 @@ private fun SessionsTopBar(
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontWeight = FontWeight.SemiBold
                             ),
-                            color = theme.text
+                            color = if (isSelectionMode) theme.accent else theme.text
                         )
                         Text(
                             text = subText,
                             fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.labelSmall,
-                            color = theme.textMuted.copy(alpha = 0.7f)
+                            color = if (isSelectionMode) theme.accent.copy(alpha = 0.7f) else theme.textMuted.copy(alpha = 0.7f)
                         )
                     }
                 }
@@ -1914,31 +2045,85 @@ private fun WorkspaceFilterBar(
     onSelectWorkspace: (String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val theme = LocalOpenCodeTheme.current
     Row(
         modifier = modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        FilterChip(
+        TuiFilterChip(
+            label = "All",
             selected = selectedWorkspace == null,
-            onClick = { onSelectWorkspace(null) },
-            label = { Text("All", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall) },
-            colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = theme.accent.copy(alpha = 0.15f),
-                selectedLabelColor = theme.accent
-            )
+            onClick = { onSelectWorkspace(null) }
         )
         workspaces.forEach { ws ->
-            FilterChip(
+            TuiFilterChip(
+                label = ws,
                 selected = selectedWorkspace == ws,
-                onClick = { onSelectWorkspace(ws) },
-                label = { Text(ws, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = theme.accent.copy(alpha = 0.15f),
-                    selectedLabelColor = theme.accent
-                )
+                onClick = { onSelectWorkspace(ws) }
             )
         }
+    }
+}
+
+@Composable
+private fun TuiFilterChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val theme = LocalOpenCodeTheme.current
+    val borderColor = if (selected) theme.accent.copy(alpha = 0.5f) else Color.Transparent
+    val bgColor = if (selected) theme.accent.copy(alpha = 0.12f) else Color.Transparent
+    val textColor = if (selected) theme.accent else theme.textMuted
+
+    Surface(
+        onClick = onClick,
+        shape = RectangleShape,
+        color = bgColor,
+        border = BorderStroke(Sizing.strokeMd, borderColor)
+    ) {
+        Text(
+            text = label,
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xxs)
+        )
+    }
+}
+
+@Composable
+private fun TuiBottomBarButton(
+    symbol: String,
+    label: String,
+    color: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            )
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = symbol,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            color = color,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = label,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 9.sp,
+            color = color.copy(alpha = 0.8f)
+        )
     }
 }
 

@@ -23,6 +23,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.serialization.Serializable
+import androidx.compose.runtime.Stable
 
 
 class SessionListViewModel constructor(
@@ -60,13 +61,11 @@ class SessionListViewModel constructor(
     }
 
     private fun List<SessionWithProject>.computeWorkspaces(): List<String> {
-        val workspaces = filter { !it.archived }.map { it.workspace }.distinct().sorted()
-        return if (workspaces.size <= 1) workspaces
-        else listOf("All") + workspaces
+        return listOf("Work", "Personal", "Other")
     }
 
     fun selectWorkspace(workspace: String?) {
-        _uiState.update { it.copy(selectedWorkspace = if (workspace == "All") null else workspace) }
+        _uiState.update { it.copy(selectedWorkspace = workspace) }
     }
 
     fun overrideWorkspace(sessionId: String, workspace: String) {
@@ -387,15 +386,17 @@ class SessionListViewModel constructor(
                     // Await all and merge
                     val globalSessions = globalDeferred.await()
                     val projectSessions = projectDeferreds.awaitAll().flatten()
+                        .distinctBy { it.session.id }
                     val extraSessions = extraDeferreds.awaitAll().flatten()
-                    
-                    // Deduplicate: project sessions take priority over global
+
+                    // Deduplicate: project sessions take priority over global/extra
                     val projectSessionIds = projectSessions.map { it.session.id }.toSet()
                     val extraSessionIds = extraSessions.map { it.session.id }.toSet()
                     val uniqueGlobalSessions = globalSessions.filter { it.session.id !in projectSessionIds && it.session.id !in extraSessionIds }
                     val uniqueExtraSessions = extraSessions.filter { it.session.id !in projectSessionIds }
-                    
-                    uniqueGlobalSessions + uniqueExtraSessions + projectSessions
+
+                    // Project sessions first so distinctBy keeps the project-enriched version
+                    projectSessions + uniqueExtraSessions + uniqueGlobalSessions
                 }
 
                 AppLog.d("SessionListVM", "loadSessions: aggregated ${allSessionsWithProjects.size} total sessions")
@@ -433,6 +434,7 @@ class SessionListViewModel constructor(
                 }
 
                 val merged = (localOnly + refreshedExtra + allSessionsWithProjects)
+                    .distinctBy { it.session.id }
                     .sortedByDescending { s -> s.session.updatedAt }
                 _uiState.update {
                     it.copy(
@@ -759,6 +761,7 @@ data class ProjectInfo(
 /**
  * Session with optional project metadata for unified sessions view.
  */
+@Stable
 @Serializable
 data class SessionWithProject(
     val session: Session,

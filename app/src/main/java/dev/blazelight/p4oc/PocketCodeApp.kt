@@ -4,6 +4,7 @@ import android.app.Application
 
 import dev.blazelight.p4oc.core.debug.CrashReporter
 import dev.blazelight.p4oc.core.notification.NotificationEventObserver
+import dev.blazelight.p4oc.core.update.UpdateManager
 import dev.blazelight.p4oc.di.allModules
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -18,12 +19,14 @@ import dev.blazelight.p4oc.core.network.NativeMdnsSupport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class PocketCodeApp : Application() {
     
     private val notificationEventObserver: NotificationEventObserver by inject()
     private val credentialStoreForWarmup: CredentialStore by inject()
+    private val updateManager: UpdateManager by inject()
     @Volatile
     private var notificationsStarted = false
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -41,6 +44,25 @@ class PocketCodeApp : Application() {
             try {
                 credentialStoreForWarmup.warmup()
                 NativeMdnsSupport.warmup()
+            } catch (_: Throwable) { }
+        }
+
+        // Periodic update check (runs once per day max)
+        appScope.launch(Dispatchers.IO) {
+            try {
+                val settingsDataStore: dev.blazelight.p4oc.core.datastore.SettingsDataStore by inject()
+                val enabled = settingsDataStore.autoUpdateEnabled.first()
+                if (!enabled) return@launch
+                val lastCheck = settingsDataStore.lastUpdateCheck.first()
+                val oneDayMs = 24 * 60 * 60 * 1000L
+                if (System.currentTimeMillis() - lastCheck < oneDayMs) return@launch
+                val result = updateManager.checkForUpdate()
+                if (result is dev.blazelight.p4oc.core.update.UpdateCheckResult.Available) {
+                    updateManager.showUpdateNotification(result.info)
+                    settingsDataStore.setLastUpdateCheck(System.currentTimeMillis())
+                } else if (result is dev.blazelight.p4oc.core.update.UpdateCheckResult.UpToDate) {
+                    settingsDataStore.setLastUpdateCheck(System.currentTimeMillis())
+                }
             } catch (_: Throwable) { }
         }
 

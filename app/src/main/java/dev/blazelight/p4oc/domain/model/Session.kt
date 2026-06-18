@@ -1,5 +1,6 @@
 package dev.blazelight.p4oc.domain.model
 
+import androidx.compose.runtime.Stable
 import kotlinx.serialization.Serializable
 
 // ============================================================================
@@ -41,6 +42,7 @@ data class PathInfo(
 // Session
 // ============================================================================
 
+@Stable
 @Serializable
 data class Session(
     val id: String,

@@ -139,6 +139,10 @@ class VisualSettingsViewModel constructor(
     fun updateFontSize(size: Int) {
         persistSettings(_settings.value.copy(fontSize = size.coerceIn(10, 24)))
     }
+
+    fun updateTabSize(size: Int) {
+        persistSettings(_settings.value.copy(tabSize = size.coerceIn(20, 44)))
+    }
     
     fun updateCodeBlockFontSize(size: Int) {
         persistSettings(_settings.value.copy(codeBlockFontSize = size.coerceIn(8, 20)))
@@ -225,6 +229,13 @@ fun VisualSettingsScreen(
                     value = settings.codeBlockFontSize,
                     onValueChange = viewModel::updateCodeBlockFontSize,
                     range = 8..20
+                )
+
+                FontSizeSlider(
+                    label = stringResource(R.string.visual_settings_tab_size),
+                    value = settings.tabSize,
+                    onValueChange = viewModel::updateTabSize,
+                    range = 20..44
                 )
             }
             

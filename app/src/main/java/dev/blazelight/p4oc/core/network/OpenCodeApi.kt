@@ -22,13 +22,14 @@ interface OpenCodeApi {
         @Query("directory") directory: String? = null
     ): VcsInfoDto
 
-    @GET("session")
+    @GET("experimental/session")
     suspend fun listSessions(
         @Query("directory") directory: String? = null,
         @Query("roots") roots: Boolean? = null,
         @Query("start") start: Long? = null,
         @Query("search") search: String? = null,
-        @Query("limit") limit: Int? = null
+        @Query("limit") limit: Int? = null,
+        @Query("archived") archived: Boolean? = null
     ): List<SessionDto>
 
     @POST("session")

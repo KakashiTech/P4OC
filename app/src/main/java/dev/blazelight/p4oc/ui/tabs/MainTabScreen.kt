@@ -57,6 +57,7 @@ import dev.blazelight.p4oc.data.remote.dto.CreatePtyRequest
 import dev.blazelight.p4oc.domain.model.SessionConnectionState
 import dev.blazelight.p4oc.core.datastore.ConnectionSettings
 import dev.blazelight.p4oc.core.datastore.SettingsDataStore
+import dev.blazelight.p4oc.core.datastore.VisualSettings
 import dev.blazelight.p4oc.ui.navigation.Screen
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import kotlinx.coroutines.delay
@@ -80,6 +81,7 @@ private fun UnifiedTopBar(
     onAddClick: () -> Unit,
     onSettings: () -> Unit,
     onProjects: () -> Unit = {},
+    tabSize: Int = 28,
     modifier: Modifier = Modifier
 ) {
     val connectionManager: ConnectionManager = koinInject()
@@ -161,12 +163,13 @@ private fun UnifiedTopBar(
         }
 
         // Browser-style tabs container
+        val tabVerticalPad = ((tabSize - 20) / 4).coerceIn(2, 8).dp
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .border(1.dp, theme.border.copy(alpha = 0.4f))
                 .background(theme.backgroundElement.copy(alpha = 0.08f))
-                .padding(horizontal = 4.dp, vertical = 4.dp),
+                .padding(horizontal = 4.dp, vertical = tabVerticalPad),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // OPTIMIZED Browser-style tabs row with smooth scrolling
@@ -193,14 +196,16 @@ private fun UnifiedTopBar(
                         connectionState = connectionState,
                         isActive = isActive,
                         onClick = { onTabClick(tab.id) },
-                        onClose = { onTabClose(tab.id) }
+                        onClose = { onTabClose(tab.id) },
+                        tabSize = tabSize
                     )
                 }
                 
                 // +new tab integrated as a tab
                 item {
                     BrowserNewTabIndicator(
-                        onClick = onAddClick
+                        onClick = onAddClick,
+                        tabSize = tabSize
                     )
                 }
             }
@@ -415,6 +420,7 @@ fun MainTabScreen(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val connSettings by settingsDataStore.connectionSettings.collectAsState(initial = ConnectionSettings())
+    val visualSettings by settingsDataStore.visualSettings.collectAsState(initial = VisualSettings())
     val lifecycleOwner = LocalLifecycleOwner.current
     
     val tabs by tabManager.tabs.collectAsState()
@@ -560,11 +566,11 @@ fun MainTabScreen(
                 onTabClose = closeTab,
                 onAddClick = { tabManager.createTab(focus = true) },
                 onSettings = {
-                    // Navigate to settings using the active tab's navController
                     activeTabId?.let { tabId ->
                         tabNavControllers[tabId]?.navigate(Screen.Settings.route)
                     }
-                }
+                },
+                tabSize = visualSettings.tabSize
             )
             
             // Pager state for swipe between tabs
@@ -692,7 +698,8 @@ private fun BrowserTabIndicator(
     connectionState: SessionConnectionState?,
     isActive: Boolean,
     onClick: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    tabSize: Int = 28
 ) {
     val theme = LocalOpenCodeTheme.current
     
@@ -717,6 +724,7 @@ private fun BrowserTabIndicator(
         label = "tabBorderWidth"
     )
     
+    val tabVerticalPad = ((tabSize - 20) / 4).coerceIn(1, 6)
     Row(
         modifier = Modifier
             .border(
@@ -725,7 +733,7 @@ private fun BrowserTabIndicator(
             )
             .background(color = bgColor)
             .clickable(role = Role.Tab, onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .padding(horizontal = 6.dp, vertical = tabVerticalPad.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp)
     ) {
@@ -774,34 +782,31 @@ private fun BrowserTabIndicator(
  */
 @Composable
 private fun BrowserNewTabIndicator(
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    tabSize: Int = 28
 ) {
     val theme = LocalOpenCodeTheme.current
     
+    val tabVerticalPad = ((tabSize - 20) / 4).coerceIn(1, 6)
     Box(
         modifier = Modifier
             .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 2.dp)
-    ) {
-        // Background layer that appears behind
-        Box(
-            modifier = Modifier
-                .offset(x = (-2).dp, y = 0.dp) // Offset to appear behind
-                .border(
-                    width = Spacing.hairline,
-                    color = theme.border.copy(alpha = 0.2f)
-                )
-                .background(
-                    color = theme.backgroundElement.copy(alpha = 0.03f)
-                )
-                .padding(horizontal = 6.dp, vertical = 2.dp)
-        ) {
-            Text(
-                text = "+",
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.labelSmall,
-                color = theme.textMuted.copy(alpha = 0.6f)
+            .padding(horizontal = 4.dp)
+            .offset(x = (-2).dp, y = 0.dp)
+            .border(
+                width = Spacing.hairline,
+                color = theme.border.copy(alpha = 0.2f)
             )
-        }
+            .background(
+                color = theme.backgroundElement.copy(alpha = 0.03f)
+            )
+            .padding(horizontal = 6.dp, vertical = tabVerticalPad.dp)
+    ) {
+        Text(
+            text = "+",
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.labelSmall,
+            color = theme.textMuted.copy(alpha = 0.6f)
+        )
     }
 }

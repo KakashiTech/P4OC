@@ -189,9 +189,9 @@ class ChatViewModel constructor(
 
         // ── Tool call timeout constants ────────────────────────────────────
         /** How long a normal tool call may stay in Running state without SSE updates before being marked stale. */
-        private const val TOOL_CALL_TIMEOUT_MS = 120_000L // 2 minutes
+        private const val TOOL_CALL_TIMEOUT_MS = 600_000L // 10 minutes
         /** How long a task tool call (sub-agent) may stay Running — longer because sub-agents take more time. */
-        private const val TASK_TOOL_TIMEOUT_MS = 300_000L // 5 minutes
+        private const val TASK_TOOL_TIMEOUT_MS = 1_800_000L // 30 minutes
         /** Error message used when a tool call times out (watchdog). */
         private const val STALE_TOOL_MESSAGE = "Tool call timed out (stale) — connection was interrupted"
         /** Error message used when tools are found stale after SSE reconnection. */
@@ -276,7 +276,9 @@ class ChatViewModel constructor(
                 _uiState.update { it.copy(error = "Not connected") }
                 return@launch
             }
-            val result = safeApiCall { api.getSession(sessionId, sessionDirectory ?: directoryManager.getDirectory()) }
+            val resolvedDir = sessionDirectory?.takeIf { it.isNotBlank() } ?: directoryManager.getDirectory()
+            AppLog.d(TAG, "loadSession: sessionId=$sessionId directory=$sessionDirectory resolvedDir=$resolvedDir")
+            val result = safeApiCall { api.getSession(sessionId, resolvedDir) }
             when (result) {
                 is ApiResult.Success -> {
                     val session = SessionMapper.mapToDomain(result.data)
@@ -289,7 +291,8 @@ class ChatViewModel constructor(
                     loadTodos()
                 }
                 is ApiResult.Error -> {
-                    _uiState.update { it.copy(error = "Failed to load session") }
+                    AppLog.e(TAG, "loadSession FAILED: sessionId=$sessionId directory=$sessionDirectory code=${result.code} msg=${result.message} throwable=${result.throwable?.message}")
+                    _uiState.update { it.copy(error = "Failed to load session: ${result.message}") }
                 }
             }
         }
@@ -328,10 +331,10 @@ class ChatViewModel constructor(
                         }
                     }
 
-                    // Background: fetch remaining messages for pagination
+                    // Background: fetch remaining messages for pagination (capped at 500)
                     if (result.data.size == 25) {
                         launch {
-                            val fullResult = safeApiCall { api.getMessages(sessionId, limit = null, directory = directory) }
+                            val fullResult = safeApiCall { api.getMessages(sessionId, limit = 500, directory = directory) }
                             if (fullResult is ApiResult.Success && fullResult.data.size > 25) {
                                 val fullMapped = withContext(Dispatchers.Default) {
                                     fullResult.data.map { dto -> messageMapper.mapWrapperToDomain(dto) }

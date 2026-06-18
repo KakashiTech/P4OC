@@ -164,7 +164,7 @@ val TuiShapes = Shapes(
 
 @Composable
 fun PocketCodeTheme(
-    themeName: String = "dracula",
+    themeName: String = "vesper",
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {

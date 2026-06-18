@@ -37,6 +37,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blazelight.p4oc.BuildConfig
 import dev.blazelight.p4oc.R
+import dev.blazelight.p4oc.core.update.UpdateCheckResult
 import dev.blazelight.p4oc.ui.components.TuiConfirmDialog
 import dev.blazelight.p4oc.ui.theme.LocalOpenCodeTheme
 import dev.blazelight.p4oc.ui.theme.Sizing
@@ -168,6 +169,15 @@ fun SettingsScreen(
                 onClick = onConnectionSettings,
                 showChevron = true,
                 testTag = "settings_connection_item"
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // ── Auto-update Section ──
+            AutoUpdateSection(
+                viewModel = viewModel,
+                scope = scope,
+                context = context
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -619,5 +629,149 @@ private fun LogsDialog(
         },
         containerColor = theme.background,
         shape = RoundedCornerShape(16.dp)
+    )
+}
+
+@Composable
+private fun AutoUpdateSection(
+    viewModel: SettingsViewModel,
+    scope: kotlinx.coroutines.CoroutineScope,
+    context: android.content.Context
+) {
+    val theme = LocalOpenCodeTheme.current
+    val autoUpdateEnabled by viewModel.autoUpdateEnabled.collectAsStateWithLifecycle()
+    val updateResult by viewModel.updateResult.collectAsStateWithLifecycle()
+    val isChecking by viewModel.isCheckingUpdate.collectAsStateWithLifecycle()
+
+    SettingsSectionHeader(
+        title = "Updates",
+        icon = Icons.Default.Update
+    )
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column {
+            Text(
+                text = "Auto-check for updates",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp,
+                color = theme.text
+            )
+            Text(
+                text = "Check GitHub for new releases periodically",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = theme.textMuted
+            )
+        }
+        Switch(
+            checked = autoUpdateEnabled,
+            onCheckedChange = { viewModel.toggleAutoUpdate() },
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = theme.accent,
+                checkedTrackColor = theme.accent.copy(alpha = 0.3f)
+            )
+        )
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Button(
+        onClick = { viewModel.checkForUpdate() },
+        enabled = !isChecking,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = theme.accent),
+        shape = RectangleShape
+    ) {
+        if (isChecking) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                color = theme.background,
+                strokeWidth = 2.dp
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+        Text(
+            text = if (isChecking) "Checking..." else "Check for Update",
+            fontFamily = FontFamily.Monospace
+        )
+    }
+
+    updateResult?.let { result ->
+        Spacer(modifier = Modifier.height(8.dp))
+        when (result) {
+            is UpdateCheckResult.UpToDate -> {
+                SettingsInfo(text = "✓ App is up to date (${BuildConfig.VERSION_NAME})", color = theme.success)
+            }
+            is UpdateCheckResult.Available -> {
+                SettingsInfo(text = "Update ${result.info.latestVersion} available", color = theme.accent)
+                if (!result.info.releaseNotes.isNullOrBlank()) {
+                    Text(
+                        text = result.info.releaseNotes,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = theme.textMuted,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        maxLines = 5,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                val isDownloading by viewModel.isDownloading.collectAsStateWithLifecycle()
+                val downloadProgress by viewModel.downloadProgress.collectAsStateWithLifecycle()
+                Button(
+                    onClick = { viewModel.downloadAndInstall() },
+                    enabled = !isDownloading,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = theme.success),
+                    shape = RectangleShape
+                ) {
+                    if (isDownloading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = theme.background,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "${(downloadProgress * 100).toInt()}%",
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.background
+                        )
+                    } else {
+                        Text(
+                            text = "Download & Install",
+                            fontFamily = FontFamily.Monospace,
+                            color = theme.background
+                        )
+                    }
+                }
+            }
+            is UpdateCheckResult.Error -> {
+                SettingsInfo(text = "✗ ${result.message}", color = theme.error)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsInfo(text: String, color: androidx.compose.ui.graphics.Color) {
+    val theme = LocalOpenCodeTheme.current
+    Text(
+        text = text,
+        color = color,
+        fontFamily = FontFamily.Monospace,
+        fontSize = 12.sp,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
     )
 }

@@ -1,5 +1,5 @@
 # Project-wide Gradle settings.
-org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8 -XX:+UseParallelGC -XX:MaxMetaspaceSize=512m -Djava.rmi.server.hostname=127.0.0.1
+org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8 -XX:+UseParallelGC -XX:MaxMetaspaceSize=512m
 org.gradle.parallel=true
 org.gradle.configuration-cache=true
 org.gradle.caching=true
@@ -14,3 +14,4 @@ kotlin.code.style=official
 android.nonTransitiveRClass=true
 
 # BuildConfig is now enabled per-module in build.gradle.kts
+org.gradle.internal.network.noWildcard=true

@@ -38,7 +38,7 @@ class SettingsDataStore constructor(
         private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
         private val KEY_THEME_NAME = stringPreferencesKey("theme_name")
         
-        const val DEFAULT_THEME_NAME = "dracula"
+        const val DEFAULT_THEME_NAME = "vesper"
         private val KEY_ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
         private val KEY_LAST_SESSION_ID = stringPreferencesKey("last_session_id")
         private val KEY_RECENT_SERVERS = stringPreferencesKey("recent_servers")
@@ -57,7 +57,8 @@ class SettingsDataStore constructor(
 
         private val KEY_TOOL_WIDGET_DEFAULT_STATE = stringPreferencesKey("tool_widget_default_state")
         private val KEY_OPEN_SUB_AGENT_NEW_TAB = booleanPreferencesKey("open_sub_agent_new_tab")
-        
+        private val KEY_TAB_SIZE = intPreferencesKey("tab_size")
+
         // Model favorites and recents
         private val KEY_FAVORITE_MODELS = stringSetPreferencesKey("favorite_models")
         private val KEY_RECENT_MODELS = stringPreferencesKey("recent_models")
@@ -77,6 +78,10 @@ class SettingsDataStore constructor(
 
         // Reasoning effort
         private val KEY_REASONING_EFFORT = stringPreferencesKey("reasoning_effort")
+
+        // Auto-update
+        private val KEY_AUTO_UPDATE_ENABLED = booleanPreferencesKey("auto_update_enabled")
+        private val KEY_LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
 
         const val DEFAULT_LOCAL_URL = "http://localhost:4096"
         const val THEME_SYSTEM = "system"
@@ -359,8 +364,9 @@ class SettingsDataStore constructor(
             messageSpacing = prefs[KEY_MESSAGE_SPACING] ?: 8,
             highContrastMode = prefs[KEY_HIGH_CONTRAST_MODE] ?: false,
             reasoningExpandedByDefault = prefs[KEY_REASONING_EXPANDED] ?: false,
-            toolWidgetDefaultState = prefs[KEY_TOOL_WIDGET_DEFAULT_STATE] ?: "compact",
-            openSubAgentInNewTab = prefs[KEY_OPEN_SUB_AGENT_NEW_TAB] ?: true
+            toolWidgetDefaultState = prefs[KEY_TOOL_WIDGET_DEFAULT_STATE] ?: "expanded",
+            openSubAgentInNewTab = prefs[KEY_OPEN_SUB_AGENT_NEW_TAB] ?: true,
+            tabSize = prefs[KEY_TAB_SIZE] ?: 28
         )
     }
 
@@ -378,6 +384,7 @@ class SettingsDataStore constructor(
             prefs[KEY_REASONING_EXPANDED] = settings.reasoningExpandedByDefault
             prefs[KEY_TOOL_WIDGET_DEFAULT_STATE] = settings.toolWidgetDefaultState
             prefs[KEY_OPEN_SUB_AGENT_NEW_TAB] = settings.openSubAgentInNewTab
+            prefs[KEY_TAB_SIZE] = settings.tabSize
         }
     }
 
@@ -412,6 +419,28 @@ class SettingsDataStore constructor(
         context.dataStore.edit { prefs ->
             prefs[KEY_AUTO_RECONNECT] = settings.autoReconnect
             prefs[KEY_RECONNECT_TIMEOUT_SECONDS] = settings.reconnectTimeoutSeconds
+        }
+    }
+
+    // ── Auto-update settings ──
+
+    val autoUpdateEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_AUTO_UPDATE_ENABLED] ?: true
+    }
+
+    suspend fun setAutoUpdateEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_AUTO_UPDATE_ENABLED] = enabled
+        }
+    }
+
+    val lastUpdateCheck: Flow<Long> = context.dataStore.data.map { prefs ->
+        prefs[KEY_LAST_UPDATE_CHECK] ?: 0L
+    }
+
+    suspend fun setLastUpdateCheck(timestamp: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_LAST_UPDATE_CHECK] = timestamp
         }
     }
 
@@ -544,8 +573,9 @@ data class VisualSettings(
     val messageSpacing: Int = 8,
     val highContrastMode: Boolean = false,
     val reasoningExpandedByDefault: Boolean = false,
-    val toolWidgetDefaultState: String = "compact", // "oneline", "compact", or "expanded"
-    val openSubAgentInNewTab: Boolean = true
+    val toolWidgetDefaultState: String = "expanded", // "oneline", "compact", or "expanded"
+    val openSubAgentInNewTab: Boolean = true,
+    val tabSize: Int = 28
 )
 
 data class NotificationSettings(
