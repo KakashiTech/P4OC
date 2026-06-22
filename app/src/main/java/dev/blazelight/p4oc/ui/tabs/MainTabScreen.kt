@@ -430,7 +430,7 @@ fun MainTabScreen(
     
     var wasEverConnected by remember { mutableStateOf(false) }
 
-    // Navegar fuera cuando el core escale a Disconnected tras agotar reintentos
+    // Al detectar Disconnected, intentar reconexión ligera SSE antes de navegar fuera
     LaunchedEffect(connectionState) {
         if (connectionState is ConnectionState.Connected) {
             wasEverConnected = true
@@ -438,8 +438,11 @@ fun MainTabScreen(
         }
         if (!wasEverConnected) return@LaunchedEffect
         if (connectionState is ConnectionState.Disconnected) {
-            connectionManager.disconnect()
-            onDisconnect()
+            val ok = connectionManager.reconnectSse("auto-resume")
+            if (!ok) {
+                connectionManager.disconnect()
+                onDisconnect()
+            }
         }
     }
     
@@ -553,8 +556,6 @@ fun MainTabScreen(
                 .consumeWindowInsets(WindowInsets.statusBars)
         ) {
             // Track whether the last tab change was from a click (not a swipe)
-            var isTabClick by remember { mutableStateOf(false) }
-
             // Unified top bar: tabs + path + controls in one compact terminal-style header
             UnifiedTopBar(
                 tabs = tabs,
@@ -562,7 +563,7 @@ fun MainTabScreen(
                 tabTitles = tabTitles,
                 tabIcons = tabIcons,
                 tabConnectionStates = tabConnectionStates,
-                onTabClick = { tabId -> isTabClick = true; tabManager.focusTab(tabId) },
+                onTabClick = { tabId -> tabManager.focusTab(tabId) },
                 onTabClose = closeTab,
                 onAddClick = { tabManager.createTab(focus = true) },
                 onSettings = {
@@ -583,12 +584,7 @@ fun MainTabScreen(
             LaunchedEffect(activeTabId, tabs.size) {
                 val index = tabs.indexOfFirst { it.id == activeTabId }
                 if (index >= 0 && pagerState.currentPage != index) {
-                    delay(16)
-                    pagerState.animateScrollToPage(
-                        page = index,
-                        animationSpec = tween(durationMillis = 200)
-                    )
-                    isTabClick = false
+                    pagerState.scrollToPage(index)
                 }
             }
             

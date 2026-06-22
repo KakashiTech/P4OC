@@ -3,6 +3,7 @@ package dev.blazelight.p4oc
 import android.app.Application
 
 import dev.blazelight.p4oc.core.debug.CrashReporter
+import dev.blazelight.p4oc.core.network.ConnectionManager
 import dev.blazelight.p4oc.core.notification.NotificationEventObserver
 import dev.blazelight.p4oc.core.update.UpdateManager
 import dev.blazelight.p4oc.di.allModules
@@ -27,6 +28,7 @@ class PocketCodeApp : Application() {
     private val notificationEventObserver: NotificationEventObserver by inject()
     private val credentialStoreForWarmup: CredentialStore by inject()
     private val updateManager: UpdateManager by inject()
+    private val connectionManager: ConnectionManager by inject()
     @Volatile
     private var notificationsStarted = false
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -67,12 +69,15 @@ class PocketCodeApp : Application() {
         }
 
         // Lazy init: start notifications only when app enters foreground the first time
+        // Also recover SSE + WebSocket connections on foreground resume
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 if (!notificationsStarted) {
                     notificationsStarted = true
                     notificationEventObserver.start()
                 }
+                // Recover dropped SSE connection on foreground resume
+                connectionManager.reconnectSse("foreground-resume")
             }
         })
     }

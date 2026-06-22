@@ -199,27 +199,16 @@ class SessionListViewModel constructor(
             val api = connectionManager.getApi() ?: return@launch
             val projects = _uiState.value.projects
 
-            val netSemaphore = Semaphore(3)
             val allStatuses = mutableMapOf<String, SessionStatus>()
 
             coroutineScope {
                 val globalDeferred = async {
-                    netSemaphore.acquire()
-                    try {
-                        safeApiCall { api.getSessionStatuses(directory = null) }
-                    } finally {
-                        netSemaphore.release()
-                    }
+                    safeApiCall { api.getSessionStatuses(directory = null) }
                 }
 
                 val projectDeferreds = projects.map { project ->
                     async {
-                        netSemaphore.acquire()
-                        try {
-                            safeApiCall { api.getSessionStatuses(directory = project.worktree) }
-                        } finally {
-                            netSemaphore.release()
-                        }
+                        safeApiCall { api.getSessionStatuses(directory = project.worktree) }
                     }
                 }
 
@@ -238,22 +227,22 @@ class SessionListViewModel constructor(
                     }
                 }
 
-                // Fetch statuses for custom directory sessions (outside any known project).
-                // The global query only returns statuses for directory=null sessions, and
-                // per-project queries only cover known project worktrees — custom sessions
-                // would otherwise never show their busy/idle indicator.
+                // Custom directory sessions
                 val knownDirs = (setOf(null) + projects.map { it.worktree }).toSet()
                 val customDirs = _uiState.value.sessions
                     .map { it.session.directory }
                     .filter { it.isNotBlank() && it !in knownDirs }
                     .distinct()
-                customDirs.forEach { dir ->
-                    val result = safeApiCall { api.getSessionStatuses(directory = dir) }
-                    if (result is ApiResult.Success) {
-                        result.data.forEach { (sessionId, dto) ->
-                            allStatuses[sessionId] = mapStatusDto(dto)
+                if (customDirs.isNotEmpty()) {
+                    customDirs.map { dir -> async { safeApiCall { api.getSessionStatuses(directory = dir) } } }
+                        .awaitAll()
+                        .forEach { result ->
+                            if (result is ApiResult.Success) {
+                                result.data.forEach { (sessionId, dto) ->
+                                    allStatuses[sessionId] = mapStatusDto(dto)
+                                }
+                            }
                         }
-                    }
                 }
             }
 

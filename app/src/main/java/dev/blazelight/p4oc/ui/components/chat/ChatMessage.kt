@@ -38,6 +38,9 @@ import dev.blazelight.p4oc.ui.theme.Spacing
 import androidx.compose.runtime.compositionLocalOf
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolGroupWidget
 import dev.blazelight.p4oc.ui.components.toolwidgets.ToolWidgetState
+import dev.blazelight.p4oc.core.datastore.SettingsDataStore
+import dev.blazelight.p4oc.core.datastore.VisualSettings
+import org.koin.compose.koinInject
 import dev.blazelight.p4oc.ui.components.TuiLoadingIndicator
 import dev.blazelight.p4oc.ui.components.TuiTerminalMenu
 import dev.blazelight.p4oc.ui.components.TuiTerminalMenuItem
@@ -107,7 +110,9 @@ private fun chunkMarkdown(text: String, maxChars: Int): List<String> {
 @Composable
 internal fun ReasoningGroupView(items: List<Part.Reasoning>) {
     val theme = LocalOpenCodeTheme.current
-    var expanded by remember(items) { mutableStateOf(false) }
+    val settingsDataStore: SettingsDataStore = koinInject()
+    val visualSettings by settingsDataStore.visualSettings.collectAsState(initial = VisualSettings())
+    var expanded by remember(items, visualSettings.reasoningExpandedByDefault) { mutableStateOf(visualSettings.reasoningExpandedByDefault) }
     val totalDuration = remember(items) {
         val ms = items.sumOf { r ->
             val t = r.time
@@ -506,7 +511,9 @@ private fun ReasoningPart(part: Part.Reasoning) {
     val haptic    = LocalHapticFeedback.current
 
     // Keyed on part.id so state survives item recycling in LazyColumn
-    var expanded by remember(part.id) { mutableStateOf(false) }
+    val settingsDataStore: SettingsDataStore = koinInject()
+    val visualSettings by settingsDataStore.visualSettings.collectAsState(initial = VisualSettings())
+    var expanded by remember(part.id, visualSettings.reasoningExpandedByDefault) { mutableStateOf(visualSettings.reasoningExpandedByDefault) }
 
     val isThinking = part.time?.end == null
 
